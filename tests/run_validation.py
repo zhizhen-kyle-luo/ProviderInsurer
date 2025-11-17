@@ -57,8 +57,8 @@ def run_validation():
         print(f"WARNING: Results will be marked as INCOMPLETE VALIDATION")
     print()
 
-    # initialize simulation
-    sim = UtilizationReviewSimulation(azure_config=azure_config)
+    # initialize simulation with master_seed for reproducibility
+    sim = UtilizationReviewSimulation(azure_config=azure_config, master_seed=42)
 
     # run all cases and collect results
     encounter_states = []

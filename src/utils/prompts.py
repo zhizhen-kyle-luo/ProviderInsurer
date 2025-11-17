@@ -1,6 +1,7 @@
 # simulation configuration
 MAX_ITERATIONS = 10
 CONFIDENCE_THRESHOLD = 0.9
+NOISE_PROBABILITY = 0.15
 
 # confidence score guidelines for provider agent
 CONFIDENCE_GUIDELINES = """
@@ -240,10 +241,6 @@ MEDICATION REQUEST:
 STEP THERAPY HISTORY:
 {chr(10).join(f"- {therapy}" for therapy in med_request.get('prior_therapies_failed', []))}
 
-AVAILABLE CLINICAL DATA:
-Labs: {json.dumps(case.get('available_test_results', {}).get('labs', {}), indent=2)}
-Imaging: {json.dumps(case.get('available_test_results', {}).get('imaging', {}), indent=2)}
-
 INSURANCE REQUIREMENTS:
 - Step therapy documentation required
 - Medical necessity must be justified with objective data
@@ -332,9 +329,6 @@ MEDICATION REQUESTED:
 - Drug: {med_request.get('medication_name')}
 - Clinical Rationale: {med_request.get('clinical_rationale')}
 
-AVAILABLE EVIDENCE:
-{json.dumps(case.get('available_test_results', {}), indent=2)}
-
 Your task: Submit PA appeal with additional clinical evidence.
 
 RESPONSE FORMAT (JSON):
@@ -405,9 +399,6 @@ PATIENT INFORMATION:
 - Chief Complaint: {state.clinical_presentation.chief_complaint}
 - Medical History: {', '.join(state.clinical_presentation.medical_history)}
 - Current Diagnoses: {', '.join(state.admission.preliminary_diagnoses)}
-
-AVAILABLE CLINICAL DATA:
-{json.dumps(case.get('available_test_results', {}), indent=2)}
 
 MEDICATION REQUEST (if applicable):
 {json.dumps(case.get('medication_request', {}), indent=2) if case.get('medication_request') else 'No medication specified yet'}
@@ -514,9 +505,6 @@ PA APPROVAL RATIONALE (from Phase 2):
 
 CLINICAL DOCUMENTATION:
 {med_request.get('clinical_rationale')}
-
-LAB DATA:
-{__import__('json').dumps(case.get('available_test_results', {}).get('labs', {}), indent=2)}
 
 Your task: Review claim and decide to approve/deny PAYMENT.
 
