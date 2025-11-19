@@ -236,7 +236,10 @@ Test result for {test_name}:"""
         state = self._phase_2_unified_pa(state, case)
 
         # phase 3: claims adjudication (if treatment was approved and delivered)
-        if state.medication_authorization and state.medication_authorization.authorization_status == "approved":
+        # only run for medication cases, not procedures
+        if (state.medication_authorization and
+            state.medication_authorization.authorization_status == "approved" and
+            pa_type == PAType.SPECIALTY_MEDICATION):
             state = self._phase_3_medication_claims(state, case)
 
         # phase 4: financial settlement
@@ -281,6 +284,7 @@ Test result for {test_name}:"""
 
         prior_iterations = []
         treatment_approved = False
+        approved_provider_request = None
 
         for iteration_num in range(1, self.max_iterations + 1):
             # provider generates request based on confidence
@@ -387,6 +391,7 @@ Test result for {test_name}:"""
                 if request_type == "treatment":
                     # treatment approved - DONE
                     treatment_approved = True
+                    approved_provider_request = provider_request  # save for phase 3
                     state.medication_authorization = MedicationAuthorizationDecision(
                         reviewer_type=payor_decision.get("reviewer_type", "AI algorithm"),
                         authorization_status="approved",
@@ -404,6 +409,8 @@ Test result for {test_name}:"""
                     if test_name:
                         test_result = self._generate_test_result(test_name, case)
                         iteration_record["test_results"] = {test_name: test_result["value"]}
+                    else:
+                        iteration_record["test_results"] = {}
 
             elif payor_decision["authorization_status"] == "denied":
                 # request denied - provider will address in next iteration
@@ -425,7 +432,147 @@ Test result for {test_name}:"""
             )
             state.denial_occurred = True
 
+        # collect all evidence from phase 2 for phase 3
+        accumulated_test_results = {}
+        for iteration in prior_iterations:
+            if "test_results" in iteration:
+                accumulated_test_results.update(iteration["test_results"])
+
+        state._phase_2_evidence = {
+            "approved_request": approved_provider_request,
+            "test_results": accumulated_test_results,
+            "iterations": prior_iterations
+        }
+
         return state
+
+    def _generate_test_result_from_environment(
+        self,
+        test_name: str,
+        environment_data: Dict[str, Any],
+        pa_type: str
+    ) -> Dict[str, Any]:
+        """
+        generate realistic test results based on environment_hidden_data
+        uses ground truth to simulate what test would actually find
+        """
+        true_diagnosis = environment_data.get("true_diagnosis", "").lower()
+        disease_severity = environment_data.get("disease_severity", "").lower()
+        clinical_context = environment_data.get("clinical_context", "")
+
+        test_name_lower = test_name.lower()
+
+        # resting ecg/ekg
+        if "ecg" in test_name_lower or "ekg" in test_name_lower:
+            if "stress" not in test_name_lower and "exercise" not in test_name_lower:
+                # resting ecg only
+                if "coronary" in true_diagnosis or "cad" in true_diagnosis or "ischemia" in true_diagnosis:
+                    if "severe" in true_diagnosis or "critical" in disease_severity:
+                        return {
+                            "test_name": test_name,
+                            "status": "completed",
+                            "finding": "Resting ECG shows T-wave inversions in leads V2-V4. ST segment abnormalities present. Concerning for significant coronary ischemia. Recommend urgent functional cardiac testing (stress test or coronary angiography)."
+                        }
+                    else:
+                        return {
+                            "test_name": test_name,
+                            "status": "completed",
+                            "finding": "Resting ECG shows nonspecific ST-T wave changes. Consider stress testing for further evaluation."
+                        }
+                else:
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "Normal sinus rhythm. No acute ST changes or ischemic findings."
+                    }
+
+        # cardiac/stress testing results
+        if "stress" in test_name_lower or "exercise" in test_name_lower or "echo" in test_name_lower:
+            if "coronary" in true_diagnosis or "cad" in true_diagnosis or "ischemia" in true_diagnosis:
+                if "severe" in true_diagnosis or "critical" in disease_severity or "occlusion" in disease_severity:
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "ABNORMAL - Significant ST depression in leads V2-V4 at 5 minutes. Test terminated at 7 METS due to chest pain and ECG changes. Strongly positive for inducible ischemia. Immediate cardiology referral recommended."
+                    }
+                else:
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "ABNORMAL - Mild ST depression in inferior leads. Positive for inducible ischemia. Further workup recommended."
+                    }
+            else:
+                return {
+                    "test_name": test_name,
+                    "status": "completed",
+                    "finding": "Normal exercise tolerance. No ST changes or arrhythmias. Negative for inducible ischemia."
+                }
+
+        # inflammatory markers (crohn's, IBD)
+        elif "calprotectin" in test_name_lower or "fecal" in test_name_lower:
+            if "crohn" in true_diagnosis or "ibd" in true_diagnosis or "colitis" in true_diagnosis:
+                if "severe" in disease_severity or "active" in clinical_context.lower():
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "Fecal calprotectin: 850 mcg/g (severely elevated, ref <50). CRP: 45 mg/L (elevated). Consistent with active inflammatory bowel disease."
+                    }
+                else:
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "Fecal calprotectin: 220 mcg/g (elevated, ref <50). Suggests active inflammation."
+                    }
+
+        # colonoscopy/endoscopy
+        elif "colonoscopy" in test_name_lower or "endoscopy" in test_name_lower:
+            if "crohn" in true_diagnosis:
+                return {
+                    "test_name": test_name,
+                    "status": "completed",
+                    "finding": "Colonoscopy shows deep ulcerations in terminal ileum and cecum with cobblestoning. Biopsies confirm transmural inflammation consistent with Crohn's disease. Stenosis noted at ileocecal valve."
+                }
+
+        # cardiac catheterization/angiography
+        elif "catheter" in test_name_lower or "angio" in test_name_lower or "cath" in test_name_lower:
+            if "coronary" in true_diagnosis:
+                if "severe" in true_diagnosis or "99%" in disease_severity:
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "Coronary angiography: 99% stenosis of proximal LAD. 70% stenosis of RCA. High-grade multivessel disease requiring intervention."
+                    }
+
+        # ct/mri imaging
+        elif "ct" in test_name_lower or "mri" in test_name_lower:
+            if "crohn" in true_diagnosis:
+                return {
+                    "test_name": test_name,
+                    "status": "completed",
+                    "finding": "CT enterography shows thickened ileal wall (8mm) with surrounding fat stranding. Active inflammation and possible stricture."
+                }
+            elif "coronary" in true_diagnosis:
+                return {
+                    "test_name": test_name,
+                    "status": "completed",
+                    "finding": "Coronary CT angiography shows calcified plaque in LAD with significant stenosis. Recommend functional stress testing."
+                }
+
+        # blood tests (CBC, metabolic)
+        elif "cbc" in test_name_lower or "complete blood" in test_name_lower:
+            if "crohn" in true_diagnosis or "anemia" in clinical_context.lower():
+                return {
+                    "test_name": test_name,
+                    "status": "completed",
+                    "finding": "CBC: Hgb 9.2 g/dL (low), MCV 76 fL (microcytic). WBC 12.5k (elevated). Consistent with anemia of chronic disease and active inflammation."
+                }
+
+        # generic fallback for unknown tests
+        return {
+            "test_name": test_name,
+            "status": "completed",
+            "finding": f"Test completed. Findings consistent with {environment_data.get('true_diagnosis', 'clinical presentation')}."
+        }
 
     def run_multiple_cases(self, cases: list[Dict[str, Any]]) -> list[EncounterState]:
         """run multiple cases sequentially"""
@@ -460,8 +607,11 @@ Test result for {test_name}:"""
         claim_date = claim_date + timedelta(days=7)  # treatment + claim submission
 
         # payer reviews claim (AFTER treatment delivered)
+        phase_2_evidence = getattr(state, '_phase_2_evidence', {})
         payor_claim_system_prompt = create_payor_prompt()
-        payor_claim_user_prompt = create_claim_adjudication_prompt(state, med_request, cost_ref, case)
+        payor_claim_user_prompt = create_claim_adjudication_prompt(
+            state, med_request, cost_ref, case, phase_2_evidence
+        )
 
         full_prompt = f"{payor_claim_system_prompt}\n\n{payor_claim_user_prompt}"
         messages = [HumanMessage(content=full_prompt)]
