@@ -16,7 +16,7 @@ INFLIXIMAB_CASE = {
     "case_id": "infliximab_crohns_2015",
     "pa_type": "specialty_medication",
 
-    "patient_presentation": {
+    "patient_visible_data": {
         "patient_id": "PT-2015-002",
         "age": 60,
         "sex": "F",
@@ -43,6 +43,12 @@ INFLIXIMAB_CASE = {
         ],
 
         "presenting_symptoms": "Patient with confirmed Crohn's disease presenting with intestinal stenosis, persistent abdominal pain, and watery diarrhea 3-4 times daily despite mesalazine therapy. Disease activity documented by colonoscopy and biopsy."
+    },
+
+    "environment_hidden_data": {
+        "true_diagnosis": "Moderate-to-severe Crohn's disease with small intestinal stenosis",
+        "disease_severity": "Moderate-to-severe",
+        "clinical_context": "Active inflammation refractory to conventional 5-ASA therapy, requiring biologic escalation"
     },
 
     "available_test_results": {

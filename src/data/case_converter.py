@@ -10,6 +10,7 @@ from src.models.schemas import (
     LabResult,
     ImagingResult,
     MedicationRequest,
+    ProcedureRequest,
     PAType
 )
 
@@ -21,9 +22,14 @@ def convert_case_to_models(case_dict):
     This allows cases to be stored as simple dicts but converted to
     Pydantic models when needed by the simulation.
 
-    handles both inpatient admission and specialty medication pa types.
+    handles inpatient admission, specialty medication, and cardiac testing pa types.
+    supports both old (patient_presentation) and new (patient_visible_data) naming.
     """
-    patient_pres = case_dict["patient_presentation"]
+    # support both old and new naming conventions
+    patient_pres = case_dict.get("patient_visible_data") or case_dict.get("patient_presentation")
+    if not patient_pres:
+        raise ValueError("case must have either 'patient_visible_data' or 'patient_presentation'")
+
     insurance = case_dict["insurance_info"]
     pa_type = case_dict.get("pa_type", PAType.INPATIENT_ADMISSION)
 
@@ -83,5 +89,16 @@ def convert_case_to_models(case_dict):
             step_therapy_completed=med_req.get("step_therapy_completed", False)
         )
         case_dict["medication_request_model"] = medication_request
+
+    # convert procedure-specific data if present
+    if pa_type == PAType.CARDIAC_TESTING and "procedure_request" in case_dict:
+        proc_req = case_dict["procedure_request"]
+        procedure_request = ProcedureRequest(
+            procedure_name=proc_req["procedure_name"],
+            cpt_code=proc_req.get("cpt_code"),
+            clinical_indication=proc_req["clinical_indication"],
+            icd10_codes=proc_req.get("icd10_codes", [])
+        )
+        case_dict["procedure_request_model"] = procedure_request
 
     return case_dict
