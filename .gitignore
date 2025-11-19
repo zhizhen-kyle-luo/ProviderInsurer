@@ -17,6 +17,9 @@ ENV/
 *.mmd
 simulation_output.mmd
 
+# WORM cache files
+.worm_cache/
+
 # Data files (too large / may contain PHI)
 data/mimic_raw.json
 
