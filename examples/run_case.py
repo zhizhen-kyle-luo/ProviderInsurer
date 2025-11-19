@@ -1,0 +1,147 @@
+"""
+run utilization review simulation for any case study
+
+usage:
+  python examples/run_case.py infliximab_crohns_2015
+  python examples/run_case.py --all
+  python examples/run_case.py infliximab_crohns_case_b chest_pain_stress_test_001
+"""
+import sys
+import os
+import argparse
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.simulation.game_runner import UtilizationReviewSimulation
+from src.data.case_registry import get_case, list_cases
+from src.data.case_converter import convert_case_to_models
+from src.utils.mermaid_audit_generator import MermaidAuditGenerator
+
+
+def print_results(result):
+    """print simulation results"""
+    print("\n" + "=" * 80)
+    print("SIMULATION RESULTS")
+    print("=" * 80)
+
+    print("\nphase 1: patient presentation")
+    print(f"patient: {result.admission.patient_demographics.age}yo {result.admission.patient_demographics.sex}")
+    if result.clinical_presentation.medical_history:
+        print(f"history: {', '.join(result.clinical_presentation.medical_history[:2])}")
+    print(f"insurance: {result.admission.insurance.payer_name}")
+
+    print("\nphase 2: prior authorization")
+    if result.medication_request:
+        print(f"request: {result.medication_request.medication_name}")
+        print(f"dosage: {result.medication_request.dosage}")
+    elif result.procedure_request:
+        print(f"request: {result.procedure_request.procedure_name}")
+        if result.procedure_request.cpt_code:
+            print(f"cpt: {result.procedure_request.cpt_code}")
+
+    if result.medication_authorization:
+        status = result.medication_authorization.authorization_status
+        print(f"pa status: {status.upper()}")
+        print(f"reviewer: {result.medication_authorization.reviewer_type}")
+        if result.medication_authorization.denial_reason:
+            print(f"denial: {result.medication_authorization.denial_reason[:80]}...")
+
+    print("\nphase 3: claims adjudication")
+    if result.medication_authorization and result.medication_authorization.authorization_status == "approved":
+        print("claim submitted and processed")
+    else:
+        print("no claim (pa denied)")
+
+    print("\nphase 4: financial settlement")
+    if result.medication_financial:
+        fin = result.medication_financial
+        print(f"total billed: ${fin.total_billed:,.2f}")
+        print(f"payer payment: ${fin.payer_payment:,.2f}")
+        print(f"patient copay: ${fin.patient_copay:,.2f}")
+        print(f"admin cost: ${fin.total_administrative_cost:,.2f}")
+    elif result.financial_settlement:
+        fin = result.financial_settlement
+        print(f"total billed: ${fin.total_billed_charges:,.2f}")
+        print(f"payer payment: ${fin.payer_payment:,.2f}")
+        print(f"patient responsibility: ${fin.patient_responsibility:,.2f}")
+
+
+def save_outputs(result, output_dir="outputs"):
+    """save audit log and mermaid diagram"""
+    if not result.audit_log:
+        print("\nno audit log generated")
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    audit_path = f"{output_dir}/{result.audit_log.case_id}_audit_log.md"
+    result.audit_log.save_to_markdown(audit_path)
+    print(f"\naudit log: {audit_path}")
+
+    mermaid_path = f"{output_dir}/{result.audit_log.case_id}_workflow.mmd"
+    MermaidAuditGenerator.save_from_state(result, mermaid_path)
+    print(f"mermaid: {mermaid_path}")
+
+
+def run_case(case_id: str, azure_config: dict):
+    """run simulation for a single case"""
+    print("=" * 80)
+    print(f"case: {case_id}")
+    print("=" * 80)
+
+    case = get_case(case_id)
+    print(f"patient: {case['patient_visible_data']['age']}yo {case['patient_visible_data']['sex']}")
+    print(f"complaint: {case['patient_visible_data']['chief_complaint']}")
+    print(f"pa type: {case['pa_type']}")
+
+    case = convert_case_to_models(case)
+
+    sim = UtilizationReviewSimulation(azure_config=azure_config)
+    result = sim.run_case(case)
+
+    print_results(result)
+    save_outputs(result)
+
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description='run utilization review simulation')
+    parser.add_argument('cases', nargs='*', help='case ids to run')
+    parser.add_argument('--all', action='store_true', help='run all registered cases')
+    parser.add_argument('--output-dir', default='outputs', help='output directory')
+    args = parser.parse_args()
+
+    azure_config = {
+        "endpoint": "https://azure-ai.hms.edu",
+        "key": "59352b8b5029493a861f26c74ef46cfe",
+        "deployment_name": "gpt-4o-1120"
+    }
+
+    if args.all:
+        case_ids = list_cases()
+        print(f"\nrunning all {len(case_ids)} registered cases\n")
+    elif args.cases:
+        case_ids = args.cases
+    else:
+        print("error: specify case ids or use --all")
+        print(f"\navailable cases: {', '.join(list_cases())}")
+        sys.exit(1)
+
+    results = []
+    for case_id in case_ids:
+        try:
+            result = run_case(case_id, azure_config)
+            results.append(result)
+            print("\n")
+        except Exception as e:
+            print(f"error running {case_id}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    print("=" * 80)
+    print(f"completed {len(results)}/{len(case_ids)} cases")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    main()
