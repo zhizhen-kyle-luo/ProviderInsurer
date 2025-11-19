@@ -1,5 +1,8 @@
 from typing import Dict, Any
 from datetime import date, timedelta
+import time
+import random
+import json
 from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import HumanMessage
 from src.models.schemas import (
@@ -34,7 +37,8 @@ from src.utils.prompts import (
     DEFAULT_PROVIDER_PARAMS,
     DEFAULT_PAYOR_PARAMS,
     MAX_ITERATIONS,
-    CONFIDENCE_THRESHOLD
+    CONFIDENCE_THRESHOLD,
+    NOISE_PROBABILITY
 )
 
 
@@ -53,12 +57,15 @@ class UtilizationReviewSimulation:
         self,
         provider_llm: str = "gpt-4",
         payor_llm: str = "gpt-4",
+        master_seed: int = None,
         confidence_threshold: float = None,
         max_iterations: int = None,
         azure_config: Dict[str, Any] = None,
         cache_dir: str = ".worm_cache",
         enable_cache: bool = True
     ):
+        self.master_seed = master_seed if master_seed is not None else int(time.time())
+        self.rng = random.Random(self.master_seed)
         self.confidence_threshold = confidence_threshold if confidence_threshold is not None else CONFIDENCE_THRESHOLD
         self.max_iterations = max_iterations if max_iterations is not None else MAX_ITERATIONS
 
@@ -70,23 +77,130 @@ class UtilizationReviewSimulation:
         if self.cache:
             provider_model = CachedLLM(provider_model, self.cache, agent_name="provider")
             payor_model = CachedLLM(payor_model, self.cache, agent_name="payor")
+        # create deterministic LLM for test result generation (temperature=0)
+        self.test_result_llm = self._create_llm(provider_llm, azure_config, temperature=0)
 
         self.provider = ProviderAgent(provider_model)
         self.payor = PayorAgent(payor_model)
         self.cost_calculator = CPTCostCalculator()
+        self.test_result_cache = {}
 
-    def _create_llm(self, model_name: str, azure_config: Dict[str, Any] = None):
+    def _create_llm(self, model_name: str, azure_config: Dict[str, Any] = None, temperature: float = 0.7):
         if azure_config:
             return AzureChatOpenAI(
                 azure_endpoint=azure_config["endpoint"],
                 api_key=azure_config["key"],
                 azure_deployment=azure_config["deployment_name"],
                 api_version="2024-08-01-preview",
-                temperature=0.7
+                temperature=temperature
             )
         else:
             from langchain_openai import ChatOpenAI
-            return ChatOpenAI(model=model_name, temperature=0.7)
+            return ChatOpenAI(model=model_name, temperature=temperature)
+
+    def _introduce_noise(self, case: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        introduce environmental noise to patient_visible_data based on NOISE_PROBABILITY
+
+        deterministically applies one of three noise types using self.rng
+        """
+        import copy
+
+        if self.rng.random() > NOISE_PROBABILITY:
+            return case
+
+        noisy_case = copy.deepcopy(case)
+        patient_data = noisy_case.get("patient_visible_data", {})
+
+        noise_type = self.rng.choice(["age", "medication", "diagnosis"])
+
+        if noise_type == "age":
+            # age error: ±3-7 years
+            age_offset = self.rng.randint(3, 7) * self.rng.choice([-1, 1])
+            original_age = patient_data.get("age", 60)
+            patient_data["age"] = max(18, original_age + age_offset)
+
+        elif noise_type == "medication":
+            # wrong medication name in history
+            medications = patient_data.get("medications", [])
+            if medications:
+                wrong_meds = [
+                    "Aspirin 81mg daily",
+                    "Metformin 500mg twice daily",
+                    "Lisinopril 10mg daily",
+                    "Atorvastatin 20mg daily"
+                ]
+                idx = self.rng.randint(0, len(medications) - 1)
+                medications[idx] = self.rng.choice(wrong_meds)
+
+        elif noise_type == "diagnosis":
+            # remove key diagnosis from medical history
+            medical_history = patient_data.get("medical_history", [])
+            if medical_history and len(medical_history) > 1:
+                idx = self.rng.randint(0, len(medical_history) - 1)
+                medical_history.pop(idx)
+
+        return noisy_case
+
+    def _generate_test_result(self, test_name: str, case: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        generate deterministic test result using LLM + master_seed
+
+        uses environment_hidden_data as ground truth context
+        caches results to avoid regenerating same test multiple times
+        """
+        cache_key = f"{case['case_id']}_{test_name}"
+
+        if cache_key in self.test_result_cache:
+            return self.test_result_cache[cache_key]
+
+        # check if test result is pre-defined in test_result_templates
+        test_templates = case.get("test_result_templates", {})
+        if test_name in test_templates:
+            result = {
+                "test_name": test_name,
+                "value": test_templates[test_name],
+                "generated": False
+            }
+            self.test_result_cache[cache_key] = result
+            return result
+
+        # generate test result using LLM with environment_hidden_data
+        hidden_data = case.get("environment_hidden_data", {})
+        patient_data = case.get("patient_visible_data", {})
+
+        prompt = f"""Generate realistic {test_name} test result for this patient.
+
+PATIENT CONTEXT (ground truth):
+- True diagnosis: {hidden_data.get('true_diagnosis', 'Unknown')}
+- Disease severity: {hidden_data.get('disease_severity', 'Unknown')}
+- Clinical context: {hidden_data.get('clinical_context', 'Unknown')}
+
+PATIENT DEMOGRAPHICS:
+- Age: {patient_data.get('age')}
+- Sex: {patient_data.get('sex')}
+- Chief complaint: {patient_data.get('chief_complaint')}
+
+Generate ONLY the test result value with units and interpretation. Format as a single-line string.
+Example: "827 µg/g (critically elevated - normal <50 µg/g)"
+
+Test result for {test_name}:"""
+
+        messages = [HumanMessage(content=prompt)]
+
+        # use deterministic LLM with temperature=0 for reproducibility
+        response = self.test_result_llm.invoke(messages)
+        result_text = response.content.strip()
+
+        # create structured result
+        result = {
+            "test_name": test_name,
+            "value": result_text,
+            "generated": True
+        }
+
+        self.test_result_cache[cache_key] = result
+        return result
 
     def run_case(self, case: Dict[str, Any]) -> EncounterState:
         """
@@ -99,6 +213,12 @@ class UtilizationReviewSimulation:
 
         routes to appropriate workflow based on pa_type
         """
+        # apply environmental noise deterministically
+        case = self._introduce_noise(case)
+
+        # clear test result cache for new case
+        self.test_result_cache = {}
+
         pa_type = case.get("pa_type", PAType.INPATIENT_ADMISSION)
 
         state = EncounterState(
@@ -135,6 +255,7 @@ class UtilizationReviewSimulation:
             "provider": DEFAULT_PROVIDER_PARAMS,
             "payor": DEFAULT_PAYOR_PARAMS
         }
+        summary["master_seed"] = self.master_seed
         self.audit_logger.finalize(summary)
         state.audit_log = self.audit_logger.get_audit_log()
 
@@ -278,10 +399,11 @@ class UtilizationReviewSimulation:
                     )
                     break
                 elif request_type == "diagnostic_test":
-                    # diagnostic test approved - simulate running test and getting results
+                    # diagnostic test approved - generate test result using environment agent
                     test_name = provider_request.get("request_details", {}).get("test_name")
-                    test_results = case.get("available_test_results", {}).get("labs", {}).get(test_name, {})
-                    iteration_record["test_results"] = test_results
+                    if test_name:
+                        test_result = self._generate_test_result(test_name, case)
+                        iteration_record["test_results"] = {test_name: test_result["value"]}
 
             elif payor_decision["authorization_status"] == "denied":
                 # request denied - provider will address in next iteration

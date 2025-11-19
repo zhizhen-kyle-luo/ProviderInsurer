@@ -23,7 +23,7 @@ def convert_case_to_models(case_dict):
 
     handles both inpatient admission and specialty medication pa types.
     """
-    patient_pres = case_dict["patient_presentation"]
+    patient_pres = case_dict["patient_visible_data"]
     insurance = case_dict["insurance_info"]
     pa_type = case_dict.get("pa_type", PAType.INPATIENT_ADMISSION)
 
