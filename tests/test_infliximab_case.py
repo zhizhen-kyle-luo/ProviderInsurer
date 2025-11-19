@@ -20,8 +20,8 @@ def test_infliximab_simulation():
     print("RUNNING INFLIXIMAB SPECIALTY MEDICATION CASE SIMULATION")
     print("=" * 80)
     print(f"Case ID: {case['case_id']}")
-    print(f"Patient: {case['patient_presentation']['age']}yo {case['patient_presentation']['sex']}")
-    print(f"Chief Complaint: {case['patient_presentation']['chief_complaint']}")
+    print(f"Patient: {case['patient_visible_data']['age']}yo {case['patient_visible_data']['sex']}")
+    print(f"Chief Complaint: {case['patient_visible_data']['chief_complaint']}")
     print(f"PA Type: {case['pa_type']}")
     print()
 
@@ -33,7 +33,7 @@ def test_infliximab_simulation():
         "deployment_name": "gpt-4o-1120"
     }
 
-    sim = UtilizationReviewSimulation(azure_config=azure_config)
+    sim = UtilizationReviewSimulation(azure_config=azure_config, master_seed=42)
 
     print("running 4-phase medication pa simulation...")
     result = sim.run_case(case)

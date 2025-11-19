@@ -77,11 +77,18 @@ INFLIXIMAB_CASE = {
             }
         },
 
-        "imaging": {
-            "colonoscopy": "Secondary intestinal stenosis visualized",
-            "3d_ct": "Confirmed Crohn's disease with small bowel involvement",
-            "biopsy": "Positive for Crohn's disease pathology"
-        }
+    "test_result_templates": {
+        "fecal_calprotectin": "827.162 mcg/g (critically elevated - normal <50 mcg/g)",
+        "albumin": "36.1 g/L (low - normal 40-55 g/L)",
+        "leukocytes": "3.2 x 10^9/L (low-normal)",
+        "platelets": "123 x 10^9/L (low - normal 125-350)",
+        "calcium": "2.18 mmol/L (low - normal 2.25-2.75)",
+        "magnesium": "0.82 mmol/L (normal 0.7-1.0)",
+        "cholesterol": "3.35 mmol/L (elevated - normal 1.89-3.1)",
+        "t_spot_tb": "Negative",
+        "colonoscopy": "Secondary intestinal stenosis visualized",
+        "ct_abdomen": "Confirmed Crohn's disease with small bowel involvement",
+        "biopsy": "Positive for Crohn's disease pathology"
     },
 
     "medication_request": {
