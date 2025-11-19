@@ -502,9 +502,64 @@ RESPONSE FORMAT (JSON):
     "reviewer_type": "AI algorithm" or "Nurse reviewer" or "Medical director"
 }}"""
 
-def create_claim_adjudication_prompt(state, med_request, cost_ref, case):
+def create_claim_adjudication_prompt(state, med_request, cost_ref, case, phase_2_evidence=None):
     """create task prompt for claim review"""
+    import json
+
     total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+
+    # build comprehensive clinical documentation from phase 2 evidence
+    clinical_doc_parts = []
+
+    # initial clinical presentation
+    if state.clinical_presentation:
+        clinical_doc_parts.append("INITIAL PRESENTATION:")
+        clinical_doc_parts.append(f"Chief Complaint: {state.clinical_presentation.chief_complaint}")
+        if state.clinical_presentation.history_of_present_illness:
+            clinical_doc_parts.append(f"History: {state.clinical_presentation.history_of_present_illness}")
+        if state.clinical_presentation.physical_exam_findings:
+            clinical_doc_parts.append(f"Physical Exam: {state.clinical_presentation.physical_exam_findings}")
+        clinical_doc_parts.append("")
+
+    # test results from phase 2
+    if phase_2_evidence and phase_2_evidence.get('test_results'):
+        clinical_doc_parts.append("DIAGNOSTIC WORKUP COMPLETED IN PHASE 2:")
+        for test_name, test_data in phase_2_evidence['test_results'].items():
+            finding = test_data.get('finding', 'completed')
+            clinical_doc_parts.append(f"- {test_name}: {finding}")
+        clinical_doc_parts.append("")
+
+    # approved treatment request rationale from phase 2
+    if phase_2_evidence and phase_2_evidence.get('approved_request'):
+        approved_req = phase_2_evidence['approved_request']
+        clinical_doc_parts.append("PROVIDER TREATMENT JUSTIFICATION (from approved PA request):")
+        clinical_doc_parts.append(f"Diagnostic Confidence: {approved_req.get('confidence', 'N/A')}")
+        clinical_doc_parts.append(f"Rationale: {approved_req.get('confidence_rationale', 'N/A')}")
+        if approved_req.get('differential_diagnoses'):
+            clinical_doc_parts.append(f"Differential Diagnoses: {', '.join(approved_req['differential_diagnoses'])}")
+
+        req_details = approved_req.get('request_details', {})
+        if req_details.get('treatment_justification'):
+            clinical_doc_parts.append(f"Treatment Justification: {req_details['treatment_justification']}")
+        if req_details.get('clinical_evidence'):
+            clinical_doc_parts.append(f"Clinical Evidence: {req_details['clinical_evidence']}")
+        if req_details.get('guideline_references'):
+            clinical_doc_parts.append(f"Guidelines Cited: {', '.join(req_details['guideline_references'])}")
+        clinical_doc_parts.append("")
+
+    # medication request rationale
+    if med_request.get('clinical_rationale'):
+        clinical_doc_parts.append("MEDICATION REQUEST RATIONALE:")
+        clinical_doc_parts.append(med_request['clinical_rationale'])
+        clinical_doc_parts.append("")
+
+    # static lab data if available
+    static_labs = case.get('available_test_results', {}).get('labs', {})
+    if static_labs:
+        clinical_doc_parts.append("STATIC LAB DATA:")
+        clinical_doc_parts.append(json.dumps(static_labs, indent=2))
+
+    combined_clinical_doc = "\n".join(clinical_doc_parts) if clinical_doc_parts else "No documentation provided"
 
     return f"""TASK: Review CLAIM for specialty medication (Phase 3)
 
@@ -524,10 +579,7 @@ PA APPROVAL RATIONALE (from Phase 2):
 {state.medication_authorization.criteria_used if state.medication_authorization else 'PA approved'}
 
 CLINICAL DOCUMENTATION:
-{med_request.get('clinical_rationale')}
-
-LAB DATA:
-{__import__('json').dumps(case.get('available_test_results', {}).get('labs', {}), indent=2)}
+{combined_clinical_doc}
 
 Your task: Review claim and decide to approve/deny PAYMENT.
 

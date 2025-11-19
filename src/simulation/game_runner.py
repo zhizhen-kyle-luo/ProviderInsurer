@@ -116,7 +116,10 @@ class UtilizationReviewSimulation:
         state = self._phase_2_unified_pa(state, case)
 
         # phase 3: claims adjudication (if treatment was approved and delivered)
-        if state.medication_authorization and state.medication_authorization.authorization_status == "approved":
+        # only run for medication cases, not procedures
+        if (state.medication_authorization and
+            state.medication_authorization.authorization_status == "approved" and
+            pa_type == PAType.SPECIALTY_MEDICATION):
             state = self._phase_3_medication_claims(state, case)
 
         # phase 4: financial settlement
@@ -160,6 +163,7 @@ class UtilizationReviewSimulation:
 
         prior_iterations = []
         treatment_approved = False
+        approved_provider_request = None
 
         for iteration_num in range(1, self.max_iterations + 1):
             # provider generates request based on confidence
@@ -266,6 +270,7 @@ class UtilizationReviewSimulation:
                 if request_type == "treatment":
                     # treatment approved - DONE
                     treatment_approved = True
+                    approved_provider_request = provider_request  # save for phase 3
                     state.medication_authorization = MedicationAuthorizationDecision(
                         reviewer_type=payor_decision.get("reviewer_type", "AI algorithm"),
                         authorization_status="approved",
@@ -313,6 +318,18 @@ class UtilizationReviewSimulation:
                 requires_peer_to_peer=False
             )
             state.denial_occurred = True
+
+        # collect all evidence from phase 2 for phase 3
+        accumulated_test_results = {}
+        for iteration in prior_iterations:
+            if "test_results" in iteration:
+                accumulated_test_results.update(iteration["test_results"])
+
+        state._phase_2_evidence = {
+            "approved_request": approved_provider_request,
+            "test_results": accumulated_test_results,
+            "iterations": prior_iterations
+        }
 
         return state
 
@@ -477,8 +494,11 @@ class UtilizationReviewSimulation:
         claim_date = claim_date + timedelta(days=7)  # treatment + claim submission
 
         # payer reviews claim (AFTER treatment delivered)
+        phase_2_evidence = getattr(state, '_phase_2_evidence', {})
         payor_claim_system_prompt = create_payor_prompt()
-        payor_claim_user_prompt = create_claim_adjudication_prompt(state, med_request, cost_ref, case)
+        payor_claim_user_prompt = create_claim_adjudication_prompt(
+            state, med_request, cost_ref, case, phase_2_evidence
+        )
 
         full_prompt = f"{payor_claim_system_prompt}\n\n{payor_claim_user_prompt}"
         messages = [HumanMessage(content=full_prompt)]
