@@ -281,15 +281,15 @@ class UtilizationReviewSimulation:
                     # diagnostic test approved - generate test result
                     test_name = provider_request.get("request_details", {}).get("test_name")
                     if test_name:
-                        # try static results first, fall back to placeholder
+                        # try static results first, fall back to environment-based generation
                         test_results = case.get("available_test_results", {}).get("labs", {}).get(test_name)
                         if not test_results:
-                            # generate placeholder result for dynamic tests
-                            test_results = {
-                                "test_name": test_name,
-                                "status": "completed",
-                                "finding": "results available for provider review"
-                            }
+                            # generate realistic result based on environment_hidden_data
+                            test_results = self._generate_test_result_from_environment(
+                                test_name=test_name,
+                                environment_data=case.get("environment_hidden_data", {}),
+                                pa_type=case.get("pa_type")
+                            )
                         iteration_record["test_results"] = {test_name: test_results}
                     else:
                         iteration_record["test_results"] = {}
@@ -315,6 +315,134 @@ class UtilizationReviewSimulation:
             state.denial_occurred = True
 
         return state
+
+    def _generate_test_result_from_environment(
+        self,
+        test_name: str,
+        environment_data: Dict[str, Any],
+        pa_type: str
+    ) -> Dict[str, Any]:
+        """
+        generate realistic test results based on environment_hidden_data
+        uses ground truth to simulate what test would actually find
+        """
+        true_diagnosis = environment_data.get("true_diagnosis", "").lower()
+        disease_severity = environment_data.get("disease_severity", "").lower()
+        clinical_context = environment_data.get("clinical_context", "")
+
+        test_name_lower = test_name.lower()
+
+        # resting ecg/ekg
+        if "ecg" in test_name_lower or "ekg" in test_name_lower:
+            if "stress" not in test_name_lower and "exercise" not in test_name_lower:
+                # resting ecg only
+                if "coronary" in true_diagnosis or "cad" in true_diagnosis or "ischemia" in true_diagnosis:
+                    if "severe" in true_diagnosis or "critical" in disease_severity:
+                        return {
+                            "test_name": test_name,
+                            "status": "completed",
+                            "finding": "Resting ECG shows T-wave inversions in leads V2-V4. ST segment abnormalities present. Concerning for significant coronary ischemia. Recommend urgent functional cardiac testing (stress test or coronary angiography)."
+                        }
+                    else:
+                        return {
+                            "test_name": test_name,
+                            "status": "completed",
+                            "finding": "Resting ECG shows nonspecific ST-T wave changes. Consider stress testing for further evaluation."
+                        }
+                else:
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "Normal sinus rhythm. No acute ST changes or ischemic findings."
+                    }
+
+        # cardiac/stress testing results
+        if "stress" in test_name_lower or "exercise" in test_name_lower or "echo" in test_name_lower:
+            if "coronary" in true_diagnosis or "cad" in true_diagnosis or "ischemia" in true_diagnosis:
+                if "severe" in true_diagnosis or "critical" in disease_severity or "occlusion" in disease_severity:
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "ABNORMAL - Significant ST depression in leads V2-V4 at 5 minutes. Test terminated at 7 METS due to chest pain and ECG changes. Strongly positive for inducible ischemia. Immediate cardiology referral recommended."
+                    }
+                else:
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "ABNORMAL - Mild ST depression in inferior leads. Positive for inducible ischemia. Further workup recommended."
+                    }
+            else:
+                return {
+                    "test_name": test_name,
+                    "status": "completed",
+                    "finding": "Normal exercise tolerance. No ST changes or arrhythmias. Negative for inducible ischemia."
+                }
+
+        # inflammatory markers (crohn's, IBD)
+        elif "calprotectin" in test_name_lower or "fecal" in test_name_lower:
+            if "crohn" in true_diagnosis or "ibd" in true_diagnosis or "colitis" in true_diagnosis:
+                if "severe" in disease_severity or "active" in clinical_context.lower():
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "Fecal calprotectin: 850 mcg/g (severely elevated, ref <50). CRP: 45 mg/L (elevated). Consistent with active inflammatory bowel disease."
+                    }
+                else:
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "Fecal calprotectin: 220 mcg/g (elevated, ref <50). Suggests active inflammation."
+                    }
+
+        # colonoscopy/endoscopy
+        elif "colonoscopy" in test_name_lower or "endoscopy" in test_name_lower:
+            if "crohn" in true_diagnosis:
+                return {
+                    "test_name": test_name,
+                    "status": "completed",
+                    "finding": "Colonoscopy shows deep ulcerations in terminal ileum and cecum with cobblestoning. Biopsies confirm transmural inflammation consistent with Crohn's disease. Stenosis noted at ileocecal valve."
+                }
+
+        # cardiac catheterization/angiography
+        elif "catheter" in test_name_lower or "angio" in test_name_lower or "cath" in test_name_lower:
+            if "coronary" in true_diagnosis:
+                if "severe" in true_diagnosis or "99%" in disease_severity:
+                    return {
+                        "test_name": test_name,
+                        "status": "completed",
+                        "finding": "Coronary angiography: 99% stenosis of proximal LAD. 70% stenosis of RCA. High-grade multivessel disease requiring intervention."
+                    }
+
+        # ct/mri imaging
+        elif "ct" in test_name_lower or "mri" in test_name_lower:
+            if "crohn" in true_diagnosis:
+                return {
+                    "test_name": test_name,
+                    "status": "completed",
+                    "finding": "CT enterography shows thickened ileal wall (8mm) with surrounding fat stranding. Active inflammation and possible stricture."
+                }
+            elif "coronary" in true_diagnosis:
+                return {
+                    "test_name": test_name,
+                    "status": "completed",
+                    "finding": "Coronary CT angiography shows calcified plaque in LAD with significant stenosis. Recommend functional stress testing."
+                }
+
+        # blood tests (CBC, metabolic)
+        elif "cbc" in test_name_lower or "complete blood" in test_name_lower:
+            if "crohn" in true_diagnosis or "anemia" in clinical_context.lower():
+                return {
+                    "test_name": test_name,
+                    "status": "completed",
+                    "finding": "CBC: Hgb 9.2 g/dL (low), MCV 76 fL (microcytic). WBC 12.5k (elevated). Consistent with anemia of chronic disease and active inflammation."
+                }
+
+        # generic fallback for unknown tests
+        return {
+            "test_name": test_name,
+            "status": "completed",
+            "finding": f"Test completed. Findings consistent with {environment_data.get('true_diagnosis', 'clinical presentation')}."
+        }
 
     def run_multiple_cases(self, cases: list[Dict[str, Any]]) -> list[EncounterState]:
         """run multiple cases sequentially"""
