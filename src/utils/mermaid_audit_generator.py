@@ -56,11 +56,13 @@ class MermaidAuditGenerator:
             return "sequenceDiagram\n    Note over Provider,Payor: No audit log available"
 
         lines = ["sequenceDiagram"]
-        lines.append("    participant Provider as Provider Agent")
-        lines.append("    participant Payor as Payor Agent")
+        lines.append("    autonumber")
+        lines.append("    participant Provider")
+        lines.append("    participant Payor")
         lines.append("")
 
         # phase 1: patient presentation
+        lines.append("    rect rgb(220, 240, 255)")
         lines.append("    Note over Provider,Payor: PHASE 1: Patient Presentation")
         lines.append("")
 
@@ -71,37 +73,56 @@ class MermaidAuditGenerator:
 
         if state.clinical_presentation:
             diagnosis = state.clinical_presentation.medical_history[0] if state.clinical_presentation.medical_history else "Unknown"
-            lines.append(f"    Note right of Provider: Diagnosis: {diagnosis}")
+            diag_short = diagnosis[:60] + "..." if len(diagnosis) > 60 else diagnosis
+            lines.append(f"    Note right of Provider: {diag_short}")
 
         if state.admission:
             lines.append(f"    Note right of Provider: Insurance: {insurance.payer_name}")
 
+        lines.append("    end")
         lines.append("")
 
         # phase 2-3: llm interactions from audit log
         current_phase = None
+        phase_colors = {
+            "phase_2_pa": "rgb(255, 240, 220)",
+            "phase_2_pa_appeal": "rgb(255, 220, 220)",
+            "phase_3_claims": "rgb(240, 255, 220)"
+        }
+
         for interaction in state.audit_log.interactions:
             if interaction.phase != current_phase:
+                if current_phase:
+                    lines.append("    end")
+                    lines.append("")
+
                 current_phase = interaction.phase
                 phase_name = MermaidAuditGenerator._format_phase_name(interaction.phase)
+                color = phase_colors.get(interaction.phase, "rgb(240, 240, 240)")
+                lines.append(f"    rect {color}")
                 lines.append(f"    Note over Provider,Payor: {phase_name}")
                 lines.append("")
 
             if interaction.agent == "provider":
                 action_label = MermaidAuditGenerator._format_action(interaction.action, interaction.parsed_output)
-                lines.append(f"    Provider->>Payor: {action_label}")
+                lines.append(f"    activate Provider")
+                lines.append(f"    Provider->>+Payor: {action_label}")
+                lines.append(f"    deactivate Provider")
             elif interaction.agent == "payor":
                 action_label = MermaidAuditGenerator._format_action(interaction.action, interaction.parsed_output)
-                lines.append(f"    Payor-->>Provider: {action_label}")
+                lines.append(f"    Payor-->>-Provider: {action_label}")
 
             if interaction.metadata:
                 metadata_str = MermaidAuditGenerator._format_metadata(interaction.metadata)
                 if metadata_str:
                     lines.append(f"    Note over {interaction.agent.capitalize()}: {metadata_str}")
 
+        if current_phase:
+            lines.append("    end")
             lines.append("")
 
         # phase 4: financial settlement
+        lines.append("    rect rgb(220, 255, 240)")
         lines.append("    Note over Provider,Payor: PHASE 4: Financial Settlement")
         lines.append("")
 
@@ -119,6 +140,7 @@ class MermaidAuditGenerator:
             lines.append(f"    Note right of Payor: Patient Responsibility: ${fin.patient_responsibility:,.2f}")
             lines.append(f"    Note right of Payor: Hospital Revenue: ${fin.total_hospital_revenue:,.2f}")
 
+        lines.append("    end")
         lines.append("")
 
         return "\n".join(lines)
