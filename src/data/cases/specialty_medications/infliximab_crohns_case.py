@@ -16,7 +16,7 @@ INFLIXIMAB_CASE = {
     "case_id": "infliximab_crohns_2015",
     "pa_type": "specialty_medication",
 
-    "patient_presentation": {
+    "patient_visible_data": {
         "patient_id": "PT-2015-002",
         "age": 60,
         "sex": "F",
@@ -45,37 +45,24 @@ INFLIXIMAB_CASE = {
         "presenting_symptoms": "Patient with confirmed Crohn's disease presenting with intestinal stenosis, persistent abdominal pain, and watery diarrhea 3-4 times daily despite mesalazine therapy. Disease activity documented by colonoscopy and biopsy."
     },
 
-    "available_test_results": {
-        "labs": {
-            "inflammatory_markers": {
-                "fecal_calprotectin": "827.162 µg/g (CRITICALLY ELEVATED - normal <50 µg/g)",
-                "indication": "Severe active intestinal inflammation"
-            },
-            "nutritional_status": {
-                "albumin": "36.1 g/L (LOW - normal 40-55 g/L)",
-                "indication": "Hypoalbuminemia reflects disease severity and malnutrition"
-            },
-            "hematology": {
-                "leukocytes": "3.2 × 10⁹/L (low-normal)",
-                "platelets": "123 × 10⁹/L (low - normal 125-350)",
-                "indication": "Mild cytopenias consistent with chronic inflammation"
-            },
-            "chemistry": {
-                "calcium": "2.18 mmol/L (LOW - normal 2.25-2.75)",
-                "magnesium": "0.82 mmol/L (normal 0.7-1.0)",
-                "cholesterol": "3.35 mmol/L (elevated - normal 1.89-3.1)"
-            },
-            "tb_screening": {
-                "t_spot_tb": "Negative",
-                "indication": "Required before initiating anti-TNF therapy"
-            }
-        },
+    "environment_hidden_data": {
+        "true_diagnosis": "Crohn's disease with small intestinal stenosis",
+        "disease_severity": "moderate-to-severe active inflammation",
+        "clinical_context": "Active Crohn's disease with fecal calprotectin >800 mcg/g, hypoalbuminemia, failed mesalazine therapy, persistent symptoms requiring biologic therapy escalation"
+    },
 
-        "imaging": {
-            "colonoscopy": "Secondary intestinal stenosis visualized",
-            "3d_ct": "Confirmed Crohn's disease with small bowel involvement",
-            "biopsy": "Positive for Crohn's disease pathology"
-        }
+    "test_result_templates": {
+        "fecal_calprotectin": "827.162 mcg/g (critically elevated - normal <50 mcg/g)",
+        "albumin": "36.1 g/L (low - normal 40-55 g/L)",
+        "leukocytes": "3.2 x 10^9/L (low-normal)",
+        "platelets": "123 x 10^9/L (low - normal 125-350)",
+        "calcium": "2.18 mmol/L (low - normal 2.25-2.75)",
+        "magnesium": "0.82 mmol/L (normal 0.7-1.0)",
+        "cholesterol": "3.35 mmol/L (elevated - normal 1.89-3.1)",
+        "t_spot_tb": "Negative",
+        "colonoscopy": "Secondary intestinal stenosis visualized",
+        "ct_abdomen": "Confirmed Crohn's disease with small bowel involvement",
+        "biopsy": "Positive for Crohn's disease pathology"
     },
 
     "medication_request": {

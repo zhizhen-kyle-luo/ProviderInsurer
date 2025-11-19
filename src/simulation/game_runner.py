@@ -1,5 +1,8 @@
 from typing import Dict, Any
 from datetime import date, timedelta
+import time
+import random
+import json
 from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import HumanMessage
 from src.models.schemas import (
@@ -36,7 +39,8 @@ from src.utils.prompts import (
     DEFAULT_PROVIDER_PARAMS,
     DEFAULT_PAYOR_PARAMS,
     MAX_ITERATIONS,
-    CONFIDENCE_THRESHOLD
+    CONFIDENCE_THRESHOLD,
+    NOISE_PROBABILITY
 )
 
 
@@ -55,32 +59,143 @@ class UtilizationReviewSimulation:
         self,
         provider_llm: str = "gpt-4",
         payor_llm: str = "gpt-4",
+        master_seed: int = None,
         confidence_threshold: float = None,
         max_iterations: int = None,
         azure_config: Dict[str, Any] = None
     ):
+        self.master_seed = master_seed if master_seed is not None else int(time.time())
+        self.rng = random.Random(self.master_seed)
         self.confidence_threshold = confidence_threshold if confidence_threshold is not None else CONFIDENCE_THRESHOLD
         self.max_iterations = max_iterations if max_iterations is not None else MAX_ITERATIONS
 
         provider_model = self._create_llm(provider_llm, azure_config)
         payor_model = self._create_llm(payor_llm, azure_config)
 
+        # create deterministic LLM for test result generation (temperature=0)
+        self.test_result_llm = self._create_llm(provider_llm, azure_config, temperature=0)
+
         self.provider = ProviderAgent(provider_model)
         self.payor = PayorAgent(payor_model)
         self.cost_calculator = CPTCostCalculator()
+        self.test_result_cache = {}
 
-    def _create_llm(self, model_name: str, azure_config: Dict[str, Any] = None):
+    def _create_llm(self, model_name: str, azure_config: Dict[str, Any] = None, temperature: float = 0.7):
         if azure_config:
             return AzureChatOpenAI(
                 azure_endpoint=azure_config["endpoint"],
                 api_key=azure_config["key"],
                 azure_deployment=azure_config["deployment_name"],
                 api_version="2024-08-01-preview",
-                temperature=0.7
+                temperature=temperature
             )
         else:
             from langchain_openai import ChatOpenAI
-            return ChatOpenAI(model=model_name, temperature=0.7)
+            return ChatOpenAI(model=model_name, temperature=temperature)
+
+    def _introduce_noise(self, case: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        introduce environmental noise to patient_visible_data based on NOISE_PROBABILITY
+
+        deterministically applies one of three noise types using self.rng
+        """
+        import copy
+
+        if self.rng.random() > NOISE_PROBABILITY:
+            return case
+
+        noisy_case = copy.deepcopy(case)
+        patient_data = noisy_case.get("patient_visible_data", {})
+
+        noise_type = self.rng.choice(["age", "medication", "diagnosis"])
+
+        if noise_type == "age":
+            # age error: ±3-7 years
+            age_offset = self.rng.randint(3, 7) * self.rng.choice([-1, 1])
+            original_age = patient_data.get("age", 60)
+            patient_data["age"] = max(18, original_age + age_offset)
+
+        elif noise_type == "medication":
+            # wrong medication name in history
+            medications = patient_data.get("medications", [])
+            if medications:
+                wrong_meds = [
+                    "Aspirin 81mg daily",
+                    "Metformin 500mg twice daily",
+                    "Lisinopril 10mg daily",
+                    "Atorvastatin 20mg daily"
+                ]
+                idx = self.rng.randint(0, len(medications) - 1)
+                medications[idx] = self.rng.choice(wrong_meds)
+
+        elif noise_type == "diagnosis":
+            # remove key diagnosis from medical history
+            medical_history = patient_data.get("medical_history", [])
+            if medical_history and len(medical_history) > 1:
+                idx = self.rng.randint(0, len(medical_history) - 1)
+                medical_history.pop(idx)
+
+        return noisy_case
+
+    def _generate_test_result(self, test_name: str, case: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        generate deterministic test result using LLM + master_seed
+
+        uses environment_hidden_data as ground truth context
+        caches results to avoid regenerating same test multiple times
+        """
+        cache_key = f"{case['case_id']}_{test_name}"
+
+        if cache_key in self.test_result_cache:
+            return self.test_result_cache[cache_key]
+
+        # check if test result is pre-defined in test_result_templates
+        test_templates = case.get("test_result_templates", {})
+        if test_name in test_templates:
+            result = {
+                "test_name": test_name,
+                "value": test_templates[test_name],
+                "generated": False
+            }
+            self.test_result_cache[cache_key] = result
+            return result
+
+        # generate test result using LLM with environment_hidden_data
+        hidden_data = case.get("environment_hidden_data", {})
+        patient_data = case.get("patient_visible_data", {})
+
+        prompt = f"""Generate realistic {test_name} test result for this patient.
+
+PATIENT CONTEXT (ground truth):
+- True diagnosis: {hidden_data.get('true_diagnosis', 'Unknown')}
+- Disease severity: {hidden_data.get('disease_severity', 'Unknown')}
+- Clinical context: {hidden_data.get('clinical_context', 'Unknown')}
+
+PATIENT DEMOGRAPHICS:
+- Age: {patient_data.get('age')}
+- Sex: {patient_data.get('sex')}
+- Chief complaint: {patient_data.get('chief_complaint')}
+
+Generate ONLY the test result value with units and interpretation. Format as a single-line string.
+Example: "827 µg/g (critically elevated - normal <50 µg/g)"
+
+Test result for {test_name}:"""
+
+        messages = [HumanMessage(content=prompt)]
+
+        # use deterministic LLM with temperature=0 for reproducibility
+        response = self.test_result_llm.invoke(messages)
+        result_text = response.content.strip()
+
+        # create structured result
+        result = {
+            "test_name": test_name,
+            "value": result_text,
+            "generated": True
+        }
+
+        self.test_result_cache[cache_key] = result
+        return result
 
     def run_case(self, case: Dict[str, Any]) -> EncounterState:
         """
@@ -93,6 +208,12 @@ class UtilizationReviewSimulation:
 
         routes to appropriate workflow based on pa_type
         """
+        # apply environmental noise deterministically
+        case = self._introduce_noise(case)
+
+        # clear test result cache for new case
+        self.test_result_cache = {}
+
         pa_type = case.get("pa_type", PAType.INPATIENT_ADMISSION)
 
         state = EncounterState(
@@ -129,6 +250,7 @@ class UtilizationReviewSimulation:
             "provider": DEFAULT_PROVIDER_PARAMS,
             "payor": DEFAULT_PAYOR_PARAMS
         }
+        summary["master_seed"] = self.master_seed
         self.audit_logger.finalize(summary)
         state.audit_log = self.audit_logger.get_audit_log()
 
@@ -268,10 +390,11 @@ class UtilizationReviewSimulation:
                     )
                     break
                 elif request_type == "diagnostic_test":
-                    # diagnostic test approved - simulate running test and getting results
+                    # diagnostic test approved - generate test result using environment agent
                     test_name = provider_request.get("request_details", {}).get("test_name")
-                    test_results = case.get("available_test_results", {}).get("labs", {}).get(test_name, {})
-                    iteration_record["test_results"] = test_results
+                    if test_name:
+                        test_result = self._generate_test_result(test_name, case)
+                        iteration_record["test_results"] = {test_name: test_result["value"]}
 
             elif payor_decision["authorization_status"] == "denied":
                 # request denied - provider will address in next iteration
@@ -298,222 +421,6 @@ class UtilizationReviewSimulation:
     def run_multiple_cases(self, cases: list[Dict[str, Any]]) -> list[EncounterState]:
         """run multiple cases sequentially"""
         return [self.run_case(case) for case in cases]
-
-    def _phase_3_medication_claims(
-        self,
-        state: EncounterState,
-        case: Dict[str, Any]
-    ) -> EncounterState:
-        """
-        phase 2: prior authorization review (BEFORE treatment)
-
-        provider submits pa request → payer evaluates → approve/deny
-        if denied → provider appeals pa → payer reconsiders
-
-        KEY: this is permission to treat, NOT payment guarantee
-        """
-        import json
-
-        state.review_date = state.admission_date
-
-        med_request = case.get("medication_request", {})
-
-        # step 1: provider generates pa request
-        provider_system_prompt = create_provider_prompt()
-        provider_user_prompt = create_pa_request_generation_prompt(state, med_request, case)
-
-        full_prompt = f"{provider_system_prompt}\n\n{provider_user_prompt}"
-        messages = [HumanMessage(content=full_prompt)]
-        response = self.provider.llm.invoke(messages)
-        provider_response_text = response.content
-
-        try:
-            clean_response = provider_response_text
-            if "```json" in clean_response:
-                clean_response = clean_response.split("```json")[1].split("```")[0].strip()
-            elif "```" in clean_response:
-                clean_response = clean_response.split("```")[1].split("```")[0].strip()
-
-            provider_pa_request = json.loads(clean_response)
-        except:
-            provider_pa_request = {
-                "pa_request_letter": "Unable to generate PA request",
-                "step_therapy_documentation": "Error parsing response",
-                "objective_findings": "None",
-                "guideline_references": [],
-                "medical_necessity_summary": "Error generating summary"
-            }
-
-        # log provider pa generation
-        self.audit_logger.log_interaction(
-            phase="phase_2_pa",
-            agent="provider",
-            action="pa_request_generation",
-            system_prompt=provider_system_prompt,
-            user_prompt=provider_user_prompt,
-            llm_response=provider_response_text,
-            parsed_output=provider_pa_request,
-            metadata={"medication": med_request.get('medication_name')}
-        )
-
-        # step 2: payer reviews provider's generated pa request
-        payor_system_prompt = create_payor_prompt()
-        payor_user_prompt = create_pa_decision_prompt(state, provider_pa_request)
-
-        full_prompt = f"{payor_system_prompt}\n\n{payor_user_prompt}"
-        messages = [HumanMessage(content=full_prompt)]
-        response = self.payor.llm.invoke(messages)
-        response_text = response.content
-
-        try:
-            clean_response = response_text
-            if "```json" in clean_response:
-                clean_response = clean_response.split("```json")[1].split("```")[0].strip()
-            elif "```" in clean_response:
-                clean_response = clean_response.split("```")[1].split("```")[0].strip()
-
-            payor_decision = json.loads(clean_response)
-        except:
-            payor_decision = {
-                "authorization_status": "denied",
-                "denial_reason": "Unable to parse authorization response",
-                "criteria_used": "Unknown",
-                "reviewer_type": "AI algorithm"
-            }
-
-        # log payor decision
-        self.audit_logger.log_interaction(
-            phase="phase_2_pa",
-            agent="payor",
-            action="pa_decision",
-            system_prompt=payor_system_prompt,
-            user_prompt=payor_user_prompt,
-            llm_response=response_text,
-            parsed_output=payor_decision,
-            metadata={"medication": med_request.get('medication_name')}
-        )
-
-        state.medication_authorization = MedicationAuthorizationDecision(
-            reviewer_type=payor_decision.get("reviewer_type", "AI algorithm"),
-            authorization_status=payor_decision["authorization_status"],
-            denial_reason=payor_decision.get("denial_reason"),
-            criteria_used=payor_decision.get("criteria_used", "Formulary guidelines"),
-            step_therapy_required=payor_decision.get("step_therapy_required", False),
-            missing_documentation=payor_decision.get("missing_documentation", []),
-            approved_duration_days=payor_decision.get("approved_duration_days"),
-            requires_peer_to_peer=payor_decision.get("requires_peer_to_peer", False)
-        )
-
-        # if pa denied, provider appeals within phase 2
-        if state.medication_authorization.authorization_status == "denied":
-            state.denial_occurred = True
-            state.appeal_date = state.review_date + timedelta(days=2)
-            state.appeal_filed = True
-
-            # provider creates pa appeal
-            provider_system_prompt = create_provider_prompt()
-            provider_user_prompt = create_pa_appeal_submission_prompt(state, med_request, case)
-
-            full_prompt = f"{provider_system_prompt}\n\n{provider_user_prompt}"
-            messages = [HumanMessage(content=full_prompt)]
-            response = self.provider.llm.invoke(messages)
-            response_text = response.content
-
-            try:
-                clean_response = response_text
-                if "```json" in clean_response:
-                    clean_response = clean_response.split("```json")[1].split("```")[0].strip()
-                elif "```" in clean_response:
-                    clean_response = clean_response.split("```")[1].split("```")[0].strip()
-                provider_appeal = json.loads(clean_response)
-            except:
-                provider_appeal = {
-                    "appeal_type": "written_appeal",
-                    "additional_evidence": "Clinical evidence submitted",
-                    "severity_documentation": "Disease severity documented",
-                    "guideline_references": []
-                }
-
-            # log provider appeal submission with properly separated prompts
-            self.audit_logger.log_interaction(
-                phase="phase_2_pa_appeal",
-                agent="provider",
-                action="pa_appeal_submission",
-                system_prompt=provider_system_prompt,
-                user_prompt=provider_user_prompt,
-                llm_response=response_text,
-                parsed_output=provider_appeal,
-                metadata={"denial_reason": state.medication_authorization.denial_reason}
-            )
-
-            appeal_submission = AppealSubmission(
-                appeal_type=provider_appeal.get("appeal_type", "peer_to_peer"),
-                additional_clinical_evidence=provider_appeal.get("additional_evidence", ""),
-                severity_documentation=provider_appeal.get("severity_documentation", ""),
-                guideline_references=provider_appeal.get("guideline_references", [])
-            )
-
-            # payer reviews pa appeal
-            payor_appeal_system_prompt = create_payor_prompt()
-            payor_appeal_user_prompt = create_pa_appeal_decision_prompt(state, provider_appeal)
-
-            full_prompt = f"{payor_appeal_system_prompt}\n\n{payor_appeal_user_prompt}"
-            messages = [HumanMessage(content=full_prompt)]
-            response = self.payor.llm.invoke(messages)
-            response_text = response.content
-
-            try:
-                clean_response = response_text
-                if "```json" in clean_response:
-                    clean_response = clean_response.split("```json")[1].split("```")[0].strip()
-                elif "```" in clean_response:
-                    clean_response = clean_response.split("```")[1].split("```")[0].strip()
-                appeal_decision_data = json.loads(clean_response)
-            except:
-                appeal_decision_data = {
-                    "appeal_outcome": "upheld_denial",
-                    "decision_rationale": "Unable to parse appeal response",
-                    "criteria_applied": "Formulary guidelines",
-                    "reviewer_credentials": "Medical Director"
-                }
-
-            # log payor appeal decision with properly separated prompts
-            self.audit_logger.log_interaction(
-                phase="phase_2_pa_appeal",
-                agent="payor",
-                action="pa_appeal_decision",
-                system_prompt=payor_appeal_system_prompt,
-                user_prompt=payor_appeal_user_prompt,
-                llm_response=response_text,
-                parsed_output=appeal_decision_data,
-                metadata={"appeal_type": provider_appeal.get("appeal_type")}
-            )
-
-            appeal_decision = AppealDecision(
-                reviewer_credentials=appeal_decision_data.get("reviewer_credentials", "Medical Director"),
-                appeal_outcome=appeal_decision_data["appeal_outcome"],
-                final_authorized_level="approved" if appeal_decision_data["appeal_outcome"] == "approved" else "denied",
-                decision_rationale=appeal_decision_data.get("decision_rationale", ""),
-                criteria_applied=appeal_decision_data.get("criteria_applied", ""),
-                peer_to_peer_conducted=appeal_decision_data.get("peer_to_peer_conducted", False)
-            )
-
-            # update state with pa appeal result
-            state.appeal_record = AppealRecord(
-                initial_denial=state.medication_authorization,
-                appeal_submission=appeal_submission,
-                appeal_decision=appeal_decision,
-                appeal_filed=True,
-                appeal_successful=(appeal_decision.appeal_outcome == "approved")
-            )
-
-            # if pa appeal successful, update authorization status
-            if appeal_decision.appeal_outcome == "approved":
-                state.medication_authorization.authorization_status = "approved"
-                state.denial_occurred = False
-                state.appeal_successful = True
-
-        return state
 
     def _phase_3_medication_claims(
         self,
