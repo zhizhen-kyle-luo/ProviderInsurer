@@ -76,6 +76,8 @@ class AuditLogger:
         """Generate summary statistics from interactions."""
         interactions_by_phase = {}
         interactions_by_agent = {}
+        cache_hits = 0
+        cache_misses = 0
 
         for interaction in self.audit_log.interactions:
             # Count by phase
@@ -88,11 +90,25 @@ class AuditLogger:
                 interactions_by_agent[interaction.agent] = 0
             interactions_by_agent[interaction.agent] += 1
 
+            # track cache hits/misses
+            if interaction.metadata.get('cache_hit'):
+                cache_hits += 1
+            else:
+                cache_misses += 1
+
+        total_interactions = len(self.audit_log.interactions)
+        cache_hit_rate = cache_hits / total_interactions if total_interactions > 0 else 0.0
+
         return {
-            "total_interactions": len(self.audit_log.interactions),
+            "total_interactions": total_interactions,
             "interactions_by_phase": interactions_by_phase,
             "interactions_by_agent": interactions_by_agent,
-            "simulation_duration_seconds": self._calculate_duration()
+            "simulation_duration_seconds": self._calculate_duration(),
+            "cache_statistics": {
+                "cache_hits": cache_hits,
+                "cache_misses": cache_misses,
+                "cache_hit_rate": cache_hit_rate
+            }
         }
 
     def _calculate_duration(self) -> float:

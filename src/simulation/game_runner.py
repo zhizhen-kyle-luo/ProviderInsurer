@@ -26,15 +26,13 @@ from src.agents.provider import ProviderAgent
 from src.agents.payor import PayorAgent
 from src.utils.cpt_calculator import CPTCostCalculator
 from src.utils.audit_logger import AuditLogger
+from src.utils.worm_cache import WORMCache
+from src.utils.cached_llm import CachedLLM
 from src.utils.prompts import (
     create_provider_prompt,
     create_payor_prompt,
     create_unified_provider_request_prompt,
     create_unified_payor_review_prompt,
-    create_pa_request_generation_prompt,
-    create_pa_decision_prompt,
-    create_pa_appeal_submission_prompt,
-    create_pa_appeal_decision_prompt,
     create_claim_adjudication_prompt,
     DEFAULT_PROVIDER_PARAMS,
     DEFAULT_PAYOR_PARAMS,
@@ -62,16 +60,23 @@ class UtilizationReviewSimulation:
         master_seed: int = None,
         confidence_threshold: float = None,
         max_iterations: int = None,
-        azure_config: Dict[str, Any] = None
+        azure_config: Dict[str, Any] = None,
+        cache_dir: str = ".worm_cache",
+        enable_cache: bool = True
     ):
         self.master_seed = master_seed if master_seed is not None else int(time.time())
         self.rng = random.Random(self.master_seed)
         self.confidence_threshold = confidence_threshold if confidence_threshold is not None else CONFIDENCE_THRESHOLD
         self.max_iterations = max_iterations if max_iterations is not None else MAX_ITERATIONS
 
+        self.cache = WORMCache(cache_dir=cache_dir, enable_persistence=enable_cache) if enable_cache else None
+
         provider_model = self._create_llm(provider_llm, azure_config)
         payor_model = self._create_llm(payor_llm, azure_config)
 
+        if self.cache:
+            provider_model = CachedLLM(provider_model, self.cache, agent_name="provider")
+            payor_model = CachedLLM(payor_model, self.cache, agent_name="payor")
         # create deterministic LLM for test result generation (temperature=0)
         self.test_result_llm = self._create_llm(provider_llm, azure_config, temperature=0)
 
@@ -288,6 +293,7 @@ Test result for {test_name}:"""
             messages = [HumanMessage(content=full_prompt)]
             response = self.provider.llm.invoke(messages)
             provider_response_text = response.content
+            cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 clean_response = provider_response_text
@@ -320,7 +326,8 @@ Test result for {test_name}:"""
                 metadata={
                     "iteration": iteration_num,
                     "confidence": confidence,
-                    "request_type": request_type
+                    "request_type": request_type,
+                    "cache_hit": cache_hit
                 }
             )
 
@@ -334,6 +341,7 @@ Test result for {test_name}:"""
             messages = [HumanMessage(content=full_prompt)]
             response = self.payor.llm.invoke(messages)
             payor_response_text = response.content
+            payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 clean_response = payor_response_text
@@ -361,7 +369,8 @@ Test result for {test_name}:"""
                 parsed_output=payor_decision,
                 metadata={
                     "iteration": iteration_num,
-                    "request_type": request_type
+                    "request_type": request_type,
+                    "cache_hit": payor_cache_hit
                 }
             )
 
@@ -458,6 +467,7 @@ Test result for {test_name}:"""
         messages = [HumanMessage(content=full_prompt)]
         response = self.payor.llm.invoke(messages)
         response_text = response.content
+        payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
         try:
             clean_response = response_text
@@ -482,7 +492,7 @@ Test result for {test_name}:"""
             user_prompt=payor_claim_user_prompt,
             llm_response=response_text,
             parsed_output=claim_decision,
-            metadata={"medication": med_request.get('medication_name'), "pa_approved": True}
+            metadata={"medication": med_request.get('medication_name'), "pa_approved": True, "cache_hit": payor_cache_hit}
         )
 
         # store claim decision (reuse medication_authorization field but for claims)
@@ -521,6 +531,7 @@ RESPONSE FORMAT (JSON):
 
             messages = [HumanMessage(content=provider_claim_appeal_prompt)]
             response = self.provider.llm.invoke(messages)
+            cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 response_text = response.content
@@ -562,6 +573,7 @@ RESPONSE FORMAT (JSON):
 
             messages = [HumanMessage(content=payor_claim_appeal_prompt)]
             response = self.payor.llm.invoke(messages)
+            payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 response_text = response.content
@@ -645,3 +657,19 @@ RESPONSE FORMAT (JSON):
         )
 
         return state
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """get worm cache statistics"""
+        if self.cache:
+            return self.cache.get_stats()
+        return {"cache_disabled": True}
+
+    def export_cache(self, output_path: str):
+        """export cache to file for reproducibility"""
+        if self.cache:
+            self.cache.export_cache(output_path)
+
+    def clear_cache(self):
+        """clear all cache entries"""
+        if self.cache:
+            self.cache.clear()
