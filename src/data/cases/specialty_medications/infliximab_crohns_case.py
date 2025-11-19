@@ -75,7 +75,8 @@ INFLIXIMAB_CASE = {
                 "t_spot_tb": "Negative",
                 "indication": "Required before initiating anti-TNF therapy"
             }
-        },
+        }
+    },
 
     "test_result_templates": {
         "fecal_calprotectin": "827.162 mcg/g (critically elevated - normal <50 mcg/g)",
