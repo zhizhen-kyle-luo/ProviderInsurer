@@ -381,6 +381,7 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
 
     # format prior iterations for context
     prior_context = ""
+    completed_tests = []
     if prior_iterations:
         prior_context = "PRIOR ITERATIONS:\n"
         for i, iter_data in enumerate(prior_iterations, 1):
@@ -391,13 +392,23 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
             if iter_data.get('payor_denial_reason'):
                 prior_context += f"  Denial reason: {iter_data['payor_denial_reason']}\n"
             if iter_data.get('test_results'):
-                prior_context += f"  Test results: {json.dumps(iter_data['test_results'], indent=4)}\n"
+                prior_context += f"  NEW TEST RESULTS RECEIVED: {json.dumps(iter_data['test_results'], indent=4)}\n"
+                # track completed tests to prevent re-requesting
+                for test_name in iter_data['test_results'].keys():
+                    if test_name not in completed_tests:
+                        completed_tests.append(test_name)
+
+    # build constraint message
+    test_constraint = ""
+    if completed_tests:
+        test_constraint = f"\nIMPORTANT CONSTRAINT: The following tests have been APPROVED and COMPLETED. DO NOT request them again:\n- {', '.join(completed_tests)}\nUse the results above to update your confidence. If confidence is now >= {CONFIDENCE_THRESHOLD}, request TREATMENT (not more tests).\n"
 
     return f"""ITERATION {iteration}/{MAX_ITERATIONS}
 
 {CONFIDENCE_GUIDELINES}
 
 {prior_context}
+{test_constraint}
 
 PATIENT INFORMATION:
 - Age: {state.admission.patient_demographics.age}

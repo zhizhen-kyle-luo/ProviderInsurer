@@ -278,10 +278,21 @@ class UtilizationReviewSimulation:
                     )
                     break
                 elif request_type == "diagnostic_test":
-                    # diagnostic test approved - simulate running test and getting results
+                    # diagnostic test approved - generate test result
                     test_name = provider_request.get("request_details", {}).get("test_name")
-                    test_results = case.get("available_test_results", {}).get("labs", {}).get(test_name, {})
-                    iteration_record["test_results"] = test_results
+                    if test_name:
+                        # try static results first, fall back to placeholder
+                        test_results = case.get("available_test_results", {}).get("labs", {}).get(test_name)
+                        if not test_results:
+                            # generate placeholder result for dynamic tests
+                            test_results = {
+                                "test_name": test_name,
+                                "status": "completed",
+                                "finding": "results available for provider review"
+                            }
+                        iteration_record["test_results"] = {test_name: test_results}
+                    else:
+                        iteration_record["test_results"] = {}
 
             elif payor_decision["authorization_status"] == "denied":
                 # request denied - provider will address in next iteration
