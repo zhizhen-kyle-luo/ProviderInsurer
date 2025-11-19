@@ -23,6 +23,8 @@ from src.agents.provider import ProviderAgent
 from src.agents.payor import PayorAgent
 from src.utils.cpt_calculator import CPTCostCalculator
 from src.utils.audit_logger import AuditLogger
+from src.utils.worm_cache import WORMCache
+from src.utils.cached_llm import CachedLLM
 from src.utils.prompts import (
     create_provider_prompt,
     create_payor_prompt,
@@ -57,13 +59,21 @@ class UtilizationReviewSimulation:
         payor_llm: str = "gpt-4",
         confidence_threshold: float = None,
         max_iterations: int = None,
-        azure_config: Dict[str, Any] = None
+        azure_config: Dict[str, Any] = None,
+        cache_dir: str = ".worm_cache",
+        enable_cache: bool = True
     ):
         self.confidence_threshold = confidence_threshold if confidence_threshold is not None else CONFIDENCE_THRESHOLD
         self.max_iterations = max_iterations if max_iterations is not None else MAX_ITERATIONS
 
+        self.cache = WORMCache(cache_dir=cache_dir, enable_persistence=enable_cache) if enable_cache else None
+
         provider_model = self._create_llm(provider_llm, azure_config)
         payor_model = self._create_llm(payor_llm, azure_config)
+
+        if self.cache:
+            provider_model = CachedLLM(provider_model, self.cache, agent_name="provider")
+            payor_model = CachedLLM(payor_model, self.cache, agent_name="payor")
 
         self.provider = ProviderAgent(provider_model)
         self.payor = PayorAgent(payor_model)
@@ -166,6 +176,7 @@ class UtilizationReviewSimulation:
             messages = [HumanMessage(content=full_prompt)]
             response = self.provider.llm.invoke(messages)
             provider_response_text = response.content
+            cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 clean_response = provider_response_text
@@ -198,7 +209,8 @@ class UtilizationReviewSimulation:
                 metadata={
                     "iteration": iteration_num,
                     "confidence": confidence,
-                    "request_type": request_type
+                    "request_type": request_type,
+                    "cache_hit": cache_hit
                 }
             )
 
@@ -212,6 +224,7 @@ class UtilizationReviewSimulation:
             messages = [HumanMessage(content=full_prompt)]
             response = self.payor.llm.invoke(messages)
             payor_response_text = response.content
+            payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 clean_response = payor_response_text
@@ -239,7 +252,8 @@ class UtilizationReviewSimulation:
                 parsed_output=payor_decision,
                 metadata={
                     "iteration": iteration_num,
-                    "request_type": request_type
+                    "request_type": request_type,
+                    "cache_hit": payor_cache_hit
                 }
             )
 
@@ -326,6 +340,7 @@ class UtilizationReviewSimulation:
         messages = [HumanMessage(content=full_prompt)]
         response = self.provider.llm.invoke(messages)
         provider_response_text = response.content
+        cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
         try:
             clean_response = provider_response_text
@@ -353,7 +368,7 @@ class UtilizationReviewSimulation:
             user_prompt=provider_user_prompt,
             llm_response=provider_response_text,
             parsed_output=provider_pa_request,
-            metadata={"medication": med_request.get('medication_name')}
+            metadata={"medication": med_request.get('medication_name'), "cache_hit": cache_hit}
         )
 
         # step 2: payer reviews provider's generated pa request
@@ -364,6 +379,7 @@ class UtilizationReviewSimulation:
         messages = [HumanMessage(content=full_prompt)]
         response = self.payor.llm.invoke(messages)
         response_text = response.content
+        payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
         try:
             clean_response = response_text
@@ -390,7 +406,7 @@ class UtilizationReviewSimulation:
             user_prompt=payor_user_prompt,
             llm_response=response_text,
             parsed_output=payor_decision,
-            metadata={"medication": med_request.get('medication_name')}
+            metadata={"medication": med_request.get('medication_name'), "cache_hit": payor_cache_hit}
         )
 
         state.medication_authorization = MedicationAuthorizationDecision(
@@ -418,6 +434,7 @@ class UtilizationReviewSimulation:
             messages = [HumanMessage(content=full_prompt)]
             response = self.provider.llm.invoke(messages)
             response_text = response.content
+            cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 clean_response = response_text
@@ -443,7 +460,7 @@ class UtilizationReviewSimulation:
                 user_prompt=provider_user_prompt,
                 llm_response=response_text,
                 parsed_output=provider_appeal,
-                metadata={"denial_reason": state.medication_authorization.denial_reason}
+                metadata={"denial_reason": state.medication_authorization.denial_reason, "cache_hit": cache_hit}
             )
 
             appeal_submission = AppealSubmission(
@@ -461,6 +478,7 @@ class UtilizationReviewSimulation:
             messages = [HumanMessage(content=full_prompt)]
             response = self.payor.llm.invoke(messages)
             response_text = response.content
+            payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 clean_response = response_text
@@ -486,7 +504,7 @@ class UtilizationReviewSimulation:
                 user_prompt=payor_appeal_user_prompt,
                 llm_response=response_text,
                 parsed_output=appeal_decision_data,
-                metadata={"appeal_type": provider_appeal.get("appeal_type")}
+                metadata={"appeal_type": provider_appeal.get("appeal_type"), "cache_hit": payor_cache_hit}
             )
 
             appeal_decision = AppealDecision(
@@ -551,6 +569,7 @@ class UtilizationReviewSimulation:
         messages = [HumanMessage(content=full_prompt)]
         response = self.payor.llm.invoke(messages)
         response_text = response.content
+        payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
         try:
             clean_response = response_text
@@ -575,7 +594,7 @@ class UtilizationReviewSimulation:
             user_prompt=payor_claim_user_prompt,
             llm_response=response_text,
             parsed_output=claim_decision,
-            metadata={"medication": med_request.get('medication_name'), "pa_approved": True}
+            metadata={"medication": med_request.get('medication_name'), "pa_approved": True, "cache_hit": payor_cache_hit}
         )
 
         # store claim decision (reuse medication_authorization field but for claims)
@@ -614,6 +633,7 @@ RESPONSE FORMAT (JSON):
 
             messages = [HumanMessage(content=provider_claim_appeal_prompt)]
             response = self.provider.llm.invoke(messages)
+            cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 response_text = response.content
@@ -655,6 +675,7 @@ RESPONSE FORMAT (JSON):
 
             messages = [HumanMessage(content=payor_claim_appeal_prompt)]
             response = self.payor.llm.invoke(messages)
+            payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 response_text = response.content
@@ -738,3 +759,19 @@ RESPONSE FORMAT (JSON):
         )
 
         return state
+
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """get worm cache statistics"""
+        if self.cache:
+            return self.cache.get_stats()
+        return {"cache_disabled": True}
+
+    def export_cache(self, output_path: str):
+        """export cache to file for reproducibility"""
+        if self.cache:
+            self.cache.export_cache(output_path)
+
+    def clear_cache(self):
+        """clear all cache entries"""
+        if self.cache:
+            self.cache.clear()
