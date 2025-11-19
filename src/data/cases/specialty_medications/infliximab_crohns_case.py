@@ -46,10 +46,36 @@ INFLIXIMAB_CASE = {
     },
 
     "environment_hidden_data": {
-        "true_diagnosis": "Crohn's disease with small intestinal stenosis",
-        "disease_severity": "moderate-to-severe active inflammation",
-        "clinical_context": "Active Crohn's disease with fecal calprotectin >800 mcg/g, hypoalbuminemia, failed mesalazine therapy, persistent symptoms requiring biologic therapy escalation"
+        "true_diagnosis": "Moderate-to-severe Crohn's disease with small intestinal stenosis",
+        "disease_severity": "Moderate-to-severe",
+        "clinical_context": "Active inflammation refractory to conventional 5-ASA therapy, requiring biologic escalation"
     },
+
+    "available_test_results": {
+        "labs": {
+            "inflammatory_markers": {
+                "fecal_calprotectin": "827.162 µg/g (CRITICALLY ELEVATED - normal <50 µg/g)",
+                "indication": "Severe active intestinal inflammation"
+            },
+            "nutritional_status": {
+                "albumin": "36.1 g/L (LOW - normal 40-55 g/L)",
+                "indication": "Hypoalbuminemia reflects disease severity and malnutrition"
+            },
+            "hematology": {
+                "leukocytes": "3.2 × 10⁹/L (low-normal)",
+                "platelets": "123 × 10⁹/L (low - normal 125-350)",
+                "indication": "Mild cytopenias consistent with chronic inflammation"
+            },
+            "chemistry": {
+                "calcium": "2.18 mmol/L (LOW - normal 2.25-2.75)",
+                "magnesium": "0.82 mmol/L (normal 0.7-1.0)",
+                "cholesterol": "3.35 mmol/L (elevated - normal 1.89-3.1)"
+            },
+            "tb_screening": {
+                "t_spot_tb": "Negative",
+                "indication": "Required before initiating anti-TNF therapy"
+            }
+        },
 
     "test_result_templates": {
         "fecal_calprotectin": "827.162 mcg/g (critically elevated - normal <50 mcg/g)",

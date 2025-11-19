@@ -11,6 +11,7 @@ class PAType:
     SPECIALTY_MEDICATION = "specialty_medication"
     OUTPATIENT_IMAGING = "outpatient_imaging"
     POST_ACUTE_CARE = "post_acute_care"
+    CARDIAC_TESTING = "cardiac_testing"
 
 
 class PatientDemographics(BaseModel):
@@ -179,6 +180,9 @@ class EncounterState(BaseModel):
     medication_authorization: Optional[MedicationAuthorizationDecision] = None
     medication_financial: Optional[MedicationFinancialSettlement] = None
 
+    # procedure-specific fields
+    procedure_request: Optional[ProcedureRequest] = None
+
     denial_occurred: bool = False
     appeal_filed: bool = False
     appeal_successful: bool = False
@@ -219,6 +223,14 @@ class MedicationRequest(BaseModel):
     clinical_rationale: str
     prior_therapies_failed: List[str] = Field(default_factory=list)
     step_therapy_completed: bool = False
+
+
+# cardiac/procedure pa models
+class ProcedureRequest(BaseModel):
+    procedure_name: str
+    cpt_code: Optional[str] = None
+    clinical_indication: str
+    icd10_codes: List[str] = Field(default_factory=list)
 
 
 class MedicationAuthorizationDecision(BaseModel):
