@@ -263,8 +263,8 @@ class LLMInteraction(BaseModel):
     """Single LLM prompt-response interaction."""
     interaction_id: str
     timestamp: str
-    phase: Literal["phase_2_pa", "phase_2_pa_appeal", "phase_3_claims", "phase_4_financial"]
-    agent: Literal["provider", "payor"]
+    phase: Literal["phase_1_presentation", "phase_2_pa", "phase_2_pa_appeal", "phase_3_claims", "phase_4_financial"]
+    agent: Literal["provider", "payor", "environment"]
     action: str  # e.g., "order_tests", "concurrent_review", "submit_appeal", "review_appeal"
     system_prompt: str
     user_prompt: str
@@ -273,12 +273,32 @@ class LLMInteraction(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class EnvironmentAction(BaseModel):
+    """environment agent action (test result generation, noise injection, etc)"""
+    action_id: str
+    timestamp: str
+    phase: str
+    action_type: str  # "generate_test_result", "inject_noise", "calculate_settlement"
+    description: str
+    outcome: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentConfiguration(BaseModel):
+    """agent behavioral parameters and system prompt"""
+    agent_name: str
+    behavioral_parameters: Dict[str, Any]
+    system_prompt: str
+
+
 class AuditLog(BaseModel):
     """Complete audit log for a case simulation."""
     case_id: str
     simulation_start: str
     simulation_end: Optional[str] = None
     interactions: List[LLMInteraction] = Field(default_factory=list)
+    environment_actions: List[EnvironmentAction] = Field(default_factory=list)
+    agent_configurations: List[AgentConfiguration] = Field(default_factory=list)
     summary: Dict[str, Any] = Field(default_factory=dict)
 
     def save_to_markdown(self, filepath: str):
