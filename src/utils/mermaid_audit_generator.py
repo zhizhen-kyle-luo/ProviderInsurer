@@ -1,8 +1,8 @@
 """
-generate mermaid sequence diagrams from audit logs
+generate mermaid graph execution traces from audit logs
 
-creates visual abstractions of provider-payor interactions across
-the 4-phase utilization review workflow
+creates session execution trace as directed graph showing chronological
+flow of provider-payor-environment interactions
 """
 
 from typing import List
@@ -10,280 +10,237 @@ from src.models.schemas import AuditLog, EncounterState
 
 
 class MermaidAuditGenerator:
-    """generates mermaid sequence diagrams from audit logs"""
-
-    @staticmethod
-    def generate_from_audit_log(audit_log: AuditLog) -> str:
-        """generate mermaid diagram from audit log"""
-        lines = ["sequenceDiagram"]
-        lines.append("    participant Provider as Provider Agent")
-        lines.append("    participant Payor as Payor Agent")
-        lines.append("")
-
-        # Group interactions by phase
-        current_phase = None
-
-        for interaction in audit_log.interactions:
-            # Add phase separator
-            if interaction.phase != current_phase:
-                current_phase = interaction.phase
-                phase_name = MermaidAuditGenerator._format_phase_name(interaction.phase)
-                lines.append(f"    Note over Provider,Payor: {phase_name}")
-                lines.append("")
-
-            # Add interaction arrows
-            if interaction.agent == "provider":
-                action_label = MermaidAuditGenerator._format_action(interaction.action, interaction.parsed_output)
-                lines.append(f"    Provider->>Payor: {action_label}")
-            elif interaction.agent == "payor":
-                action_label = MermaidAuditGenerator._format_action(interaction.action, interaction.parsed_output)
-                lines.append(f"    Payor-->>Provider: {action_label}")
-
-            # Add metadata notes if relevant
-            if interaction.metadata:
-                metadata_str = MermaidAuditGenerator._format_metadata(interaction.metadata)
-                if metadata_str:
-                    lines.append(f"    Note over {interaction.agent.capitalize()}: {metadata_str}")
-
-            lines.append("")
-
-        return "\n".join(lines)
+    """generates mermaid execution trace graphs from audit logs"""
 
     @staticmethod
     def generate_from_encounter_state(state: EncounterState) -> str:
-        """generate mermaid diagram from encounter state with audit log"""
+        """generate mermaid graph TD execution trace from encounter state"""
         if not state.audit_log:
-            return "sequenceDiagram\n    Note over Provider,Payor: No audit log available"
+            return "graph TD\n    Start((No Audit Log))"
 
-        lines = ["sequenceDiagram"]
-        lines.append("    autonumber")
-        lines.append("    participant Provider")
-        lines.append("    participant Payor")
+        lines = ["graph TD"]
+
+        # style definitions
+        lines.append("    %% Styles")
+        lines.append("    classDef prov fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;")
+        lines.append("    classDef pay fill:#fce7f3,stroke:#db2777,color:#831843;")
+        lines.append("    classDef env fill:#e2e8f0,stroke:#334155,color:#0f172a;")
         lines.append("")
 
-        # phase 1: patient presentation
-        lines.append("    rect rgb(220, 240, 255)")
-        lines.append("    Note over Provider,Payor: PHASE 1: Patient Presentation")
+        # start node
+        lines.append("    Start((Start))")
         lines.append("")
 
-        if state.admission:
-            patient = state.admission.patient_demographics
-            insurance = state.admission.insurance
-            lines.append(f"    Note right of Provider: Patient: {patient.age}yo {patient.sex}")
+        # track last node for edges
+        last_node_id = "Start"
+        node_counter = 0
 
-        if state.clinical_presentation:
-            diagnosis = state.clinical_presentation.medical_history[0] if state.clinical_presentation.medical_history else "Unknown"
-            diag_short = diagnosis[:60] + "..." if len(diagnosis) > 60 else diagnosis
-            lines.append(f"    Note right of Provider: {diag_short}")
+        # phase 1: environment actions (noise introduction)
+        phase1_nodes = []
+        for env_action in state.audit_log.environment_actions:
+            if env_action.phase == "phase_1_presentation":
+                node_counter += 1
+                node_id = f"Env_P1_{node_counter}"
+                action_desc = env_action.description[:40] + "..." if len(env_action.description) > 40 else env_action.description
 
-        if state.admission:
-            lines.append(f"    Note right of Provider: Insurance: {insurance.payer_name}")
+                phase1_nodes.append((node_id, f"[<b>Environment</b><br/>{action_desc}]:::env"))
 
-        lines.append("    end")
-        lines.append("")
+        if phase1_nodes:
+            lines.append("    %% --- PHASE 1: PATIENT PRESENTATION ---")
+            lines.append("    subgraph Phase1 [Phase 1: Patient Presentation]")
+            lines.append("        direction TB")
+            lines.append("")
 
-        # phase 2-3: llm interactions from audit log
-        current_phase = None
-        phase_colors = {
-            "phase_2_pa": "rgb(255, 240, 220)",
-            "phase_2_pa_appeal": "rgb(255, 220, 220)",
-            "phase_3_claims": "rgb(240, 255, 220)"
-        }
-
-        for interaction in state.audit_log.interactions:
-            if interaction.phase != current_phase:
-                if current_phase:
-                    lines.append("    end")
-                    lines.append("")
-
-                current_phase = interaction.phase
-                phase_name = MermaidAuditGenerator._format_phase_name(interaction.phase)
-                color = phase_colors.get(interaction.phase, "rgb(240, 240, 240)")
-                lines.append(f"    rect {color}")
-                lines.append(f"    Note over Provider,Payor: {phase_name}")
-                lines.append("")
-
-            if interaction.agent == "provider":
-                action_label = MermaidAuditGenerator._format_action(interaction.action, interaction.parsed_output)
-                # use activation for phase 2 (request-response pattern)
-                if interaction.phase == "phase_2_pa" or interaction.phase == "phase_2_pa_appeal":
-                    lines.append(f"    Provider->>+Payor: {action_label}")
+            for i, (node_id, node_def) in enumerate(phase1_nodes):
+                lines.append(f"        {node_id}{node_def}")
+                if i == 0:
+                    lines.append(f"        {last_node_id} --> {node_id}")
                 else:
-                    lines.append(f"    Provider->>Payor: {action_label}")
-            elif interaction.agent == "payor":
-                action_label = MermaidAuditGenerator._format_action(interaction.action, interaction.parsed_output)
-                # use deactivation for phase 2 (completing request-response), plain arrow for phase 3
-                if interaction.phase == "phase_2_pa" or interaction.phase == "phase_2_pa_appeal":
-                    lines.append(f"    Payor-->>-Provider: {action_label}")
-                else:
-                    lines.append(f"    Payor-->>Provider: {action_label}")
+                    prev_node = phase1_nodes[i-1][0]
+                    lines.append(f"        {prev_node} --> {node_id}")
+                last_node_id = node_id
 
-            if interaction.metadata:
-                metadata_str = MermaidAuditGenerator._format_metadata(interaction.metadata)
-                if metadata_str:
-                    lines.append(f"    Note over {interaction.agent.capitalize()}: {metadata_str}")
-
-        if current_phase:
             lines.append("    end")
             lines.append("")
 
-        # phase 4: financial settlement
-        lines.append("    rect rgb(220, 255, 240)")
-        lines.append("    Note over Provider,Payor: PHASE 4: Financial Settlement")
-        lines.append("")
+        # phase 2: prior authorization interactions
+        phase2_interactions = [i for i in state.audit_log.interactions if i.phase.startswith("phase_2")]
 
-        if state.medication_financial:
-            fin = state.medication_financial
-            lines.append(f"    Note right of Payor: Drug Cost: ${fin.acquisition_cost:,.2f}")
-            lines.append(f"    Note right of Payor: Total Billed: ${fin.total_billed:,.2f}")
-            lines.append(f"    Note right of Payor: Payer Payment: ${fin.payer_payment:,.2f}")
-            lines.append(f"    Note right of Payor: Patient Copay: ${fin.patient_copay:,.2f}")
-            lines.append(f"    Note right of Payor: Administrative Cost: ${fin.total_administrative_cost:,.2f}")
-        elif state.financial_settlement:
-            fin = state.financial_settlement
-            lines.append(f"    Note right of Payor: Total Billed: ${fin.total_billed_charges:,.2f}")
-            lines.append(f"    Note right of Payor: Payer Payment: ${fin.payer_payment:,.2f}")
-            lines.append(f"    Note right of Payor: Patient Responsibility: ${fin.patient_responsibility:,.2f}")
-            lines.append(f"    Note right of Payor: Hospital Revenue: ${fin.total_hospital_revenue:,.2f}")
+        if phase2_interactions:
+            lines.append("    %% --- PHASE 2: PRIOR AUTHORIZATION ---")
+            lines.append("    subgraph Phase2 [Phase 2: Prior Authorization]")
+            lines.append("        direction TB")
+            lines.append("")
 
-        lines.append("    end")
+            iteration_tracker = {}
+            for interaction in phase2_interactions:
+                node_counter += 1
+                agent = interaction.agent.capitalize()
+
+                # get iteration number from metadata
+                iteration = interaction.metadata.get("iteration", 1)
+
+                # create node id
+                agent_prefix = "Prov" if interaction.agent == "provider" else "Pay"
+                node_id = f"P2_Iter{iteration}_{agent_prefix}"
+
+                # format action label
+                action_label = MermaidAuditGenerator._format_action_label(interaction)
+
+                # get confidence or status
+                detail = ""
+                if interaction.agent == "provider":
+                    conf = interaction.metadata.get("confidence")
+                    if conf:
+                        detail = f"<br/>Conf: {conf:.2f}"
+                elif interaction.agent == "payor":
+                    status = interaction.parsed_output.get("authorization_status", "")
+                    if status:
+                        detail = f"<br/>{status.upper()}"
+
+                # node style
+                style_class = "prov" if interaction.agent == "provider" else "pay"
+
+                # create node
+                node_def = f"{node_id}[<b>{agent}</b><br/>{action_label}{detail}]:::{style_class}"
+                lines.append(f"        {node_def}")
+
+                # edge from last node
+                lines.append(f"        {last_node_id} --> {node_id}")
+                last_node_id = node_id
+
+                # add environment actions between iterations
+                # check if there are environment test generation actions
+                for env_action in state.audit_log.environment_actions:
+                    if (env_action.phase == "phase_2_pa" and
+                        env_action.action_type == "generate_test_result" and
+                        env_action.metadata.get("iteration") == iteration):
+
+                        node_counter += 1
+                        env_node_id = f"Env_P2_{node_counter}"
+                        test_name = env_action.outcome.get("test_name", "test")[:30]
+                        env_node_def = f"{env_node_id}[<b>Environment</b><br/>Generate: {test_name}]:::env"
+
+                        lines.append(f"        {env_node_def}")
+                        lines.append(f"        {last_node_id} --> {env_node_id}")
+                        last_node_id = env_node_id
+
+                lines.append("")
+
+            lines.append("    end")
+            lines.append("")
+
+        # phase 3: claims adjudication interactions
+        phase3_interactions = [i for i in state.audit_log.interactions if i.phase == "phase_3_claims"]
+
+        if phase3_interactions:
+            lines.append("    %% --- PHASE 3: CLAIMS ADJUDICATION ---")
+            lines.append("    subgraph Phase3 [Phase 3: Claims Adjudication]")
+            lines.append("        direction TB")
+            lines.append("")
+
+            p3_node_counter = 0
+            for interaction in phase3_interactions:
+                p3_node_counter += 1
+                agent = interaction.agent.capitalize()
+                agent_prefix = "Prov" if interaction.agent == "provider" else "Pay"
+                node_id = f"P3_{agent_prefix}{p3_node_counter}"
+
+                # format action label
+                action_label = MermaidAuditGenerator._format_action_label(interaction)
+
+                # node style
+                style_class = "prov" if interaction.agent == "provider" else "pay"
+
+                # create node
+                node_def = f"{node_id}[<b>{agent}</b><br/>{action_label}]:::{style_class}"
+                lines.append(f"        {node_def}")
+
+                # edge from last node
+                lines.append(f"        {last_node_id} --> {node_id}")
+                last_node_id = node_id
+                lines.append("")
+
+            lines.append("    end")
+            lines.append("")
+
+        # end node
+        lines.append(f"    {last_node_id} --> End((Settled))")
         lines.append("")
 
         return "\n".join(lines)
 
     @staticmethod
-    def _format_phase_name(phase: str) -> str:
-        """format phase identifier as readable name"""
-        phase_names = {
-            "phase_2_pa": "PHASE 2: Prior Authorization",
-            "phase_2_pa_appeal": "PHASE 2: PA Appeal Process",
-            "phase_3_claims": "PHASE 3: Claims Adjudication",
-            "phase_4_financial": "PHASE 4: Financial Settlement"
-        }
-        return phase_names.get(phase, phase.upper())
+    def _format_action_label(interaction) -> str:
+        """format interaction action into concise node label"""
+        action = interaction.action
+        parsed = interaction.parsed_output
 
-    @staticmethod
-    def _format_action(action: str, parsed_output: dict) -> str:
-        """format action with key details from parsed output"""
-        # provider treatment/diagnostic requests
+        # phase 2 actions
         if action == "treatment_request":
-            request_type = parsed_output.get("request_type", "")
+            request_type = parsed.get("request_type", "")
             if request_type == "treatment":
-                details = parsed_output.get("request_details", {})
-                treatment_name = details.get("treatment_name", "treatment")
-                return f"PA Request: {treatment_name}"
+                details = parsed.get("request_details", {})
+                treatment_name = details.get("treatment_name", "treatment")[:25]
+                return f"Req: {treatment_name}"
             elif request_type == "diagnostic_test":
-                details = parsed_output.get("request_details", {})
-                test_name = details.get("test_name", "diagnostic test")
-                return f"Test Request: {test_name}"
+                details = parsed.get("request_details", {})
+                test_name = details.get("test_name", "test")[:25]
+                return f"Test Req: {test_name}"
             else:
                 return "PA Request"
 
-        # payor review responses
         elif action == "treatment_review":
-            status = parsed_output.get("authorization_status", "unknown")
+            status = parsed.get("authorization_status", "unknown")
             if status == "approved":
                 return "PA APPROVED"
             elif status == "denied":
-                reason = parsed_output.get("denial_reason", "")
-                if reason:
-                    short_reason = reason[:50] + "..." if len(reason) > 50 else reason
-                    return f"PA DENIED: {short_reason}"
                 return "PA DENIED"
             else:
                 return f"PA {status.upper()}"
 
-        # claims adjudication
-        elif action == "claim_adjudication":
-            status = parsed_output.get("claim_status", "unknown")
-            approved_amount = parsed_output.get("approved_amount", 0)
-            if status == "approved" and approved_amount:
-                return f"Claim APPROVED (${approved_amount:,.2f})"
+        # phase 3 actions
+        elif action == "claim_submission":
+            amount = parsed.get("claim_submission", {}).get("amount_billed", 0)
+            if amount:
+                return f"Submit Claim (${amount:,.0f})"
+            return "Submit Claim"
+
+        elif action == "claim_review":
+            status = parsed.get("claim_status", "unknown")
+            if status == "approved":
+                return "Claim APPROVED"
             elif status == "denied":
                 return "Claim DENIED"
             else:
                 return f"Claim {status.upper()}"
 
-        # legacy action names
-        elif action == "pa_request" or action == "medication_pa_request":
-            medication = parsed_output.get('medication_name', 'medication')
-            return f"PA Request: {medication}"
-
-        elif action == "pa_decision":
-            status = parsed_output.get("authorization_status", "unknown")
-            if status == "denied":
-                return "PA DENIED"
-            elif status == "approved":
-                return "PA APPROVED"
+        elif action == "claim_denial_decision":
+            decision = parsed.get("decision", "unknown")
+            if decision == "write_off":
+                return "Decision: Write Off"
+            elif decision == "appeal":
+                return "Decision: Appeal"
+            elif decision == "bill_patient":
+                return "Decision: Bill Patient"
             else:
-                return f"PA {status.upper()}"
+                return "Provider Decision"
 
-        elif action == "pa_appeal_submission":
-            appeal_type = parsed_output.get("appeal_type", "appeal")
-            return f"Submit Appeal ({appeal_type})"
+        elif action == "claim_appeal_submission":
+            iteration = interaction.metadata.get("appeal_iteration", "")
+            return f"Submit Appeal #{iteration}" if iteration else "Submit Appeal"
 
-        elif action == "pa_appeal_decision":
-            outcome = parsed_output.get("appeal_outcome", "unknown")
+        elif action == "claim_appeal_review":
+            outcome = parsed.get("appeal_outcome", "unknown")
             if outcome == "approved":
                 return "Appeal APPROVED"
-            elif outcome == "upheld_denial":
+            elif outcome == "denied":
                 return "Appeal DENIED"
             else:
                 return f"Appeal {outcome.upper()}"
 
-        elif action == "claim_submission":
-            amount = parsed_output.get("amount_billed", 0)
-            if amount:
-                return f"Submit Claim (${amount:,.2f})"
-            return "Submit Claim (post-treatment)"
-
-        elif action == "claim_adjudication":
-            status = parsed_output.get("claim_status", "unknown")
-            approved_amount = parsed_output.get("approved_amount")
-            if status == "approved" and approved_amount:
-                return f"Claim APPROVED (${approved_amount:,.2f})"
-            elif status == "denied":
-                return "Claim DENIED"
-            else:
-                return f"Claim {status.upper()}"
-
         # generic fallback
-        else:
-            return action.replace("_", " ").title()
-
-    @staticmethod
-    def _format_metadata(metadata: dict) -> str:
-        """format metadata for display in notes"""
-        important_keys = ["medication", "appeal_type", "pa_approved",
-                         "iteration", "confidence", "tests_ordered", "tests_denied"]
-        parts = []
-
-        for key in important_keys:
-            if key in metadata:
-                value = metadata[key]
-                if key == "confidence":
-                    parts.append(f"Confidence: {value:.2f}")
-                elif key == "tests_denied" and value:
-                    parts.append(f"Denied: {len(value)} tests")
-                elif key == "tests_ordered" and value:
-                    parts.append(f"Ordered: {len(value)} tests")
-                elif key == "medication" and value:
-                    parts.append(f"Medication: {value}")
-                elif key == "appeal_type" and value:
-                    parts.append(f"Appeal Type: {value}")
-                elif key == "pa_approved" and value:
-                    parts.append("PA Previously Approved")
-                else:
-                    parts.append(f"{key}: {value}")
-
-        return ", ".join(parts) if parts else ""
-
-    @staticmethod
-    def save_to_file(audit_log: AuditLog, filepath: str):
-        """generate and save mermaid diagram to file"""
-        diagram = MermaidAuditGenerator.generate_from_audit_log(audit_log)
-        with open(filepath, 'w') as f:
-            f.write(diagram)
+        return action.replace("_", " ").title()[:30]
 
     @staticmethod
     def save_from_state(state: EncounterState, filepath: str):
