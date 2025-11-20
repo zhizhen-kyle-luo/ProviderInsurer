@@ -34,9 +34,14 @@ from src.utils.prompts import (
     create_unified_provider_request_prompt,
     create_unified_payor_review_prompt,
     create_claim_adjudication_prompt,
+    create_provider_claim_submission_prompt,
+    create_provider_claim_appeal_decision_prompt,
+    create_provider_claim_appeal_prompt,
+    create_payor_claim_appeal_review_prompt,
     DEFAULT_PROVIDER_PARAMS,
     DEFAULT_PAYOR_PARAMS,
     MAX_ITERATIONS,
+    MAX_PHASE_3_ITERATIONS,
     CONFIDENCE_THRESHOLD,
     NOISE_PROBABILITY
 )
@@ -614,48 +619,83 @@ Test result for {test_name}:"""
         case: Dict[str, Any]
     ) -> EncounterState:
         """
-        phase 3: claims adjudication (AFTER treatment delivered)
+        phase 3: claims adjudication with provider decision and appeal loop
 
-        if pa approved → provider treats patient and submits claim
-        payer reviews claim → approve/deny (INDEPENDENT from pa decision)
-        if claim denied → provider appeals claim
-
-        KEY: payer can deny claim even if pa was approved
+        workflow:
+        1. provider submits claim (LLM)
+        2. payor reviews claim (LLM)
+        3. if denied:
+           - provider decides: write-off / appeal / bill patient (LLM)
+           - if appeal:
+             - loop until max iterations OR approved OR provider stops
         """
         import json
 
-        # only process claims if pa was approved (or appealed successfully)
+        # only process claims if pa was approved
         if state.medication_authorization.authorization_status != "approved":
-            # pa denied and not overturned - no treatment, no claim
             return state
 
         med_request = case.get("medication_request", {})
         cost_ref = case.get("cost_reference", {})
-
-        # provider treats patient and submits claim
-        claim_date = state.appeal_date if state.appeal_date else state.review_date
-        claim_date = claim_date + timedelta(days=7)  # treatment + claim submission
-
-        # payer reviews claim (AFTER treatment delivered)
         phase_2_evidence = getattr(state, '_phase_2_evidence', {})
-        payor_claim_system_prompt = create_payor_prompt()
-        payor_claim_user_prompt = create_claim_adjudication_prompt(
+
+        claim_date = state.appeal_date if state.appeal_date else state.review_date
+        claim_date = claim_date + timedelta(days=7)
+
+        # STEP 1: provider submits claim
+        provider_system_prompt = create_provider_prompt()
+        provider_claim_prompt = create_provider_claim_submission_prompt(
+            state, med_request, cost_ref, phase_2_evidence
+        )
+
+        messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_claim_prompt}")]
+        response = self.provider.llm.invoke(messages)
+        provider_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
+
+        try:
+            response_text = response.content
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+            claim_submission = json.loads(response_text)
+        except:
+            claim_submission = {
+                "claim_submission": {
+                    "medication_administered": med_request.get('medication_name'),
+                    "amount_billed": cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+                }
+            }
+
+        # log provider claim submission
+        self.audit_logger.log_interaction(
+            phase="phase_3_claims",
+            agent="provider",
+            action="claim_submission",
+            system_prompt=provider_system_prompt,
+            user_prompt=provider_claim_prompt,
+            llm_response=response.content,
+            parsed_output=claim_submission,
+            metadata={"medication": med_request.get('medication_name'), "pa_approved": True, "cache_hit": provider_cache_hit}
+        )
+
+        # STEP 2: payor reviews claim
+        payor_system_prompt = create_payor_prompt()
+        payor_claim_prompt = create_claim_adjudication_prompt(
             state, med_request, cost_ref, case, phase_2_evidence
         )
 
-        full_prompt = f"{payor_claim_system_prompt}\n\n{payor_claim_user_prompt}"
-        messages = [HumanMessage(content=full_prompt)]
+        messages = [HumanMessage(content=f"{payor_system_prompt}\n\n{payor_claim_prompt}")]
         response = self.payor.llm.invoke(messages)
-        response_text = response.content
         payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
         try:
-            clean_response = response_text
-            if "```json" in clean_response:
-                clean_response = clean_response.split("```json")[1].split("```")[0].strip()
-            elif "```" in clean_response:
-                clean_response = clean_response.split("```")[1].split("```")[0].strip()
-            claim_decision = json.loads(clean_response)
+            response_text = response.content
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+            claim_decision = json.loads(response_text)
         except:
             claim_decision = {
                 "claim_status": "approved",
@@ -663,55 +703,36 @@ Test result for {test_name}:"""
                 "reviewer_type": "Claims adjudicator"
             }
 
-        # log claim adjudication with properly separated prompts
+        # log payor claim review
         self.audit_logger.log_interaction(
             phase="phase_3_claims",
             agent="payor",
-            action="claim_adjudication",
-            system_prompt=payor_claim_system_prompt,
-            user_prompt=payor_claim_user_prompt,
-            llm_response=response_text,
+            action="claim_review",
+            system_prompt=payor_system_prompt,
+            user_prompt=payor_claim_prompt,
+            llm_response=response.content,
             parsed_output=claim_decision,
-            metadata={"medication": med_request.get('medication_name'), "pa_approved": True, "cache_hit": payor_cache_hit}
+            metadata={"medication": med_request.get('medication_name'), "claim_status": claim_decision.get("claim_status"), "cache_hit": payor_cache_hit}
         )
 
-        # store claim decision (reuse medication_authorization field but for claims)
-        # TODO: add separate ClaimDecision model to schemas
+        # update state with claim decision
         state.medication_authorization.authorization_status = claim_decision["claim_status"]
         if claim_decision["claim_status"] == "denied":
             state.medication_authorization.denial_reason = claim_decision.get("denial_reason")
 
-            # claim denied - provider can appeal
+        # STEP 3: if claim denied, provider decides what to do
+        if claim_decision["claim_status"] == "denied":
+            denial_reason = claim_decision.get("denial_reason", "Claim denied")
             state.appeal_date = claim_date + timedelta(days=2)
-            state.appeal_filed = True
 
-            # provider appeals claim denial
-            provider_claim_appeal_prompt = f"""You are a PROVIDER appealing a CLAIM DENIAL (Phase 3).
+            # provider decision: write-off / appeal / bill patient
+            provider_decision_prompt = create_provider_claim_appeal_decision_prompt(
+                state, denial_reason, med_request, cost_ref
+            )
 
-CLAIM WAS DENIED - you already treated the patient, but payer is denying payment.
-Note: PA was approved, but claim was denied anyway.
-
-CLAIM DENIAL REASON:
-{claim_decision.get('denial_reason')}
-
-TREATMENT PROVIDED:
-- Medication: {med_request.get('medication_name')}
-- Dosage: {med_request.get('dosage')}
-- Clinical Rationale: {med_request.get('clinical_rationale')}
-
-Your task: Submit claim appeal to get payment for treatment already delivered.
-
-RESPONSE FORMAT (JSON):
-{{
-    "appeal_type": "peer_to_peer" or "written_appeal",
-    "additional_documentation": "<what you're providing>",
-    "billing_justification": "<why claim should be paid>",
-    "guidelines_cited": ["<guideline 1>", ...]
-}}"""
-
-            messages = [HumanMessage(content=provider_claim_appeal_prompt)]
+            messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_decision_prompt}")]
             response = self.provider.llm.invoke(messages)
-            cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
+            provider_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
             try:
                 response_text = response.content
@@ -719,64 +740,117 @@ RESPONSE FORMAT (JSON):
                     response_text = response_text.split("```json")[1].split("```")[0].strip()
                 elif "```" in response_text:
                     response_text = response_text.split("```")[1].split("```")[0].strip()
-                provider_claim_appeal = json.loads(response_text)
+                provider_decision = json.loads(response_text)
             except:
-                provider_claim_appeal = {
-                    "appeal_type": "written_appeal",
-                    "additional_documentation": "Additional documentation submitted",
-                    "billing_justification": "Claim meets billing criteria"
-                }
+                provider_decision = {"decision": "write_off", "rationale": "Unable to parse decision"}
 
-            # payer reviews claim appeal
-            payor_claim_appeal_prompt = f"""You are a PAYER MEDICAL DIRECTOR reviewing CLAIM APPEAL (Phase 3).
+            # log provider decision
+            self.audit_logger.log_interaction(
+                phase="phase_3_claims",
+                agent="provider",
+                action="claim_denial_decision",
+                system_prompt=provider_system_prompt,
+                user_prompt=provider_decision_prompt,
+                llm_response=response.content,
+                parsed_output=provider_decision,
+                metadata={"decision": provider_decision.get("decision"), "cache_hit": provider_cache_hit}
+            )
 
-Provider appealing your claim denial. Treatment already delivered, they want payment.
+            # STEP 4: appeal loop if provider chooses to appeal
+            if provider_decision.get("decision") == "appeal":
+                state.appeal_filed = True
+                appeal_iteration = 0
+                claim_approved = False
 
-ORIGINAL CLAIM DENIAL:
-{claim_decision.get('denial_reason')}
+                while appeal_iteration < MAX_PHASE_3_ITERATIONS and not claim_approved:
+                    appeal_iteration += 1
 
-PROVIDER APPEAL:
-{provider_claim_appeal.get('additional_documentation')}
+                    # provider submits appeal
+                    provider_appeal_prompt = create_provider_claim_appeal_prompt(
+                        state, denial_reason, med_request, phase_2_evidence
+                    )
 
-BILLING JUSTIFICATION:
-{provider_claim_appeal.get('billing_justification')}
+                    messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_appeal_prompt}")]
+                    response = self.provider.llm.invoke(messages)
+                    provider_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
-Your task: Reconsider claim decision based on appeal.
+                    try:
+                        response_text = response.content
+                        if "```json" in response_text:
+                            response_text = response_text.split("```json")[1].split("```")[0].strip()
+                        elif "```" in response_text:
+                            response_text = response_text.split("```")[1].split("```")[0].strip()
+                        appeal_letter = json.loads(response_text)
+                    except:
+                        appeal_letter = {
+                            "appeal_letter": {
+                                "denial_addressed": "Addressing denial reason",
+                                "requested_action": "full payment"
+                            }
+                        }
 
-RESPONSE FORMAT (JSON):
-{{
-    "appeal_outcome": "approved" or "upheld_denial" or "partial_approval",
-    "approved_amount": <dollar amount or null>,
-    "decision_rationale": "<reasoning>",
-    "criteria_applied": "<guidelines>"
-}}"""
+                    # log provider appeal submission
+                    self.audit_logger.log_interaction(
+                        phase="phase_3_claims",
+                        agent="provider",
+                        action="claim_appeal_submission",
+                        system_prompt=provider_system_prompt,
+                        user_prompt=provider_appeal_prompt,
+                        llm_response=response.content,
+                        parsed_output=appeal_letter,
+                        metadata={"appeal_iteration": appeal_iteration, "cache_hit": provider_cache_hit}
+                    )
 
-            messages = [HumanMessage(content=payor_claim_appeal_prompt)]
-            response = self.payor.llm.invoke(messages)
-            payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
+                    # payor reviews appeal
+                    payor_appeal_prompt = create_payor_claim_appeal_review_prompt(
+                        state, appeal_letter.get("appeal_letter", appeal_letter),
+                        denial_reason, med_request, cost_ref, phase_2_evidence
+                    )
 
-            try:
-                response_text = response.content
-                if "```json" in response_text:
-                    response_text = response_text.split("```json")[1].split("```")[0].strip()
-                elif "```" in response_text:
-                    response_text = response_text.split("```")[1].split("```")[0].strip()
-                claim_appeal_decision = json.loads(response_text)
-            except:
-                claim_appeal_decision = {
-                    "appeal_outcome": "upheld_denial",
-                    "decision_rationale": "Unable to parse appeal"
-                }
+                    messages = [HumanMessage(content=f"{payor_system_prompt}\n\n{payor_appeal_prompt}")]
+                    response = self.payor.llm.invoke(messages)
+                    payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
 
-            # update state with claim appeal result
-            if claim_appeal_decision["appeal_outcome"] == "approved":
-                state.medication_authorization.authorization_status = "approved"
-                state.appeal_successful = True
-            elif claim_appeal_decision["appeal_outcome"] == "partial_approval":
-                state.medication_authorization.authorization_status = "partial"
+                    try:
+                        response_text = response.content
+                        if "```json" in response_text:
+                            response_text = response_text.split("```json")[1].split("```")[0].strip()
+                        elif "```" in response_text:
+                            response_text = response_text.split("```")[1].split("```")[0].strip()
+                        appeal_decision = json.loads(response_text)
+                    except:
+                        appeal_decision = {
+                            "appeal_outcome": "denied",
+                            "rationale": "Unable to parse appeal decision"
+                        }
+
+                    # log payor appeal review
+                    self.audit_logger.log_interaction(
+                        phase="phase_3_claims",
+                        agent="payor",
+                        action="claim_appeal_review",
+                        system_prompt=payor_system_prompt,
+                        user_prompt=payor_appeal_prompt,
+                        llm_response=response.content,
+                        parsed_output=appeal_decision,
+                        metadata={"appeal_iteration": appeal_iteration, "appeal_outcome": appeal_decision.get("appeal_outcome"), "cache_hit": payor_cache_hit}
+                    )
+
+                    # check appeal outcome
+                    if appeal_decision.get("appeal_outcome") == "approved":
+                        state.medication_authorization.authorization_status = "approved"
+                        state.appeal_successful = True
+                        claim_approved = True
+                    elif appeal_decision.get("appeal_outcome") == "partial":
+                        state.medication_authorization.authorization_status = "partial"
+                        state.appeal_successful = True
+                        claim_approved = True
+                    else:
+                        # appeal denied - provider could appeal again or stop
+                        # for simplicity, continue loop until max iterations
+                        denial_reason = appeal_decision.get("denial_reason", "Appeal denied")
 
         return state
-
     def _phase_4_medication_financial(
         self,
         state: EncounterState,
