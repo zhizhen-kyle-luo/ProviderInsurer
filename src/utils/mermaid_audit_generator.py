@@ -41,7 +41,8 @@ class MermaidAuditGenerator:
             if env_action.phase == "phase_1_presentation":
                 node_counter += 1
                 node_id = f"Env_P1_{node_counter}"
-                action_desc = env_action.description[:40] + "..." if len(env_action.description) > 40 else env_action.description
+                # show full description for environment actions
+                action_desc = env_action.description
 
                 phase1_nodes.append((node_id, f"[<b>Environment</b><br/>{action_desc}]:::env"))
 
@@ -181,14 +182,29 @@ class MermaidAuditGenerator:
             request_type = parsed.get("request_type", "")
             if request_type == "treatment":
                 details = parsed.get("request_details", {})
-                treatment_name = details.get("treatment_name", "treatment")[:25]
+                treatment_name = details.get("treatment_name", "treatment")[:35]
                 return f"Req: {treatment_name}"
             elif request_type == "diagnostic_test":
                 details = parsed.get("request_details", {})
-                test_name = details.get("test_name", "test")[:25]
+                test_name = details.get("test_name", "test")[:35]
                 return f"Test Req: {test_name}"
             else:
                 return "PA Request"
+
+        elif action == "diagnostic_test_request":
+            # handle diagnostic test requests
+            details = parsed.get("request_details", {})
+            test_name = details.get("test_name", "diagnostic test")[:35]
+            return f"Test Req: {test_name}"
+
+        elif action == "diagnostic_test_review":
+            status = parsed.get("authorization_status", "unknown")
+            if status == "approved":
+                return "Test APPROVED"
+            elif status == "denied":
+                return "Test DENIED"
+            else:
+                return f"Test {status.upper()}"
 
         elif action == "treatment_review":
             status = parsed.get("authorization_status", "unknown")
