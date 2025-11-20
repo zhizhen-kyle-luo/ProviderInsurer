@@ -494,11 +494,10 @@ RESPONSE FORMAT (JSON):
     "reviewer_type": "AI algorithm" or "Nurse reviewer" or "Medical director"
 }}"""
 
-def create_claim_adjudication_prompt(state, med_request, cost_ref, case, phase_2_evidence=None):
-    """create task prompt for claim review"""
+def create_claim_adjudication_prompt(state, service_request, cost_ref, case, phase_2_evidence=None, pa_type="specialty_medication"):
+    """create task prompt for claim review - works for all PA types"""
     import json
-
-    total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+    from src.models.schemas import PAType
 
     # build comprehensive clinical documentation from phase 2 evidence
     clinical_doc_parts = []
@@ -517,7 +516,11 @@ def create_claim_adjudication_prompt(state, med_request, cost_ref, case, phase_2
     if phase_2_evidence and phase_2_evidence.get('test_results'):
         clinical_doc_parts.append("DIAGNOSTIC WORKUP COMPLETED IN PHASE 2:")
         for test_name, test_data in phase_2_evidence['test_results'].items():
-            finding = test_data.get('finding', 'completed')
+            # test_data can be either a string or dict
+            if isinstance(test_data, dict):
+                finding = test_data.get('finding', 'completed')
+            else:
+                finding = test_data
             clinical_doc_parts.append(f"- {test_name}: {finding}")
         clinical_doc_parts.append("")
 
@@ -539,10 +542,10 @@ def create_claim_adjudication_prompt(state, med_request, cost_ref, case, phase_2
             clinical_doc_parts.append(f"Guidelines Cited: {', '.join(req_details['guideline_references'])}")
         clinical_doc_parts.append("")
 
-    # medication request rationale
-    if med_request.get('clinical_rationale'):
-        clinical_doc_parts.append("MEDICATION REQUEST RATIONALE:")
-        clinical_doc_parts.append(med_request['clinical_rationale'])
+    # service request rationale
+    if service_request.get('clinical_rationale'):
+        clinical_doc_parts.append("SERVICE REQUEST RATIONALE:")
+        clinical_doc_parts.append(service_request['clinical_rationale'])
         clinical_doc_parts.append("")
 
     # static lab data if available
@@ -553,7 +556,23 @@ def create_claim_adjudication_prompt(state, med_request, cost_ref, case, phase_2
 
     combined_clinical_doc = "\n".join(clinical_doc_parts) if clinical_doc_parts else "No documentation provided"
 
-    return f"""TASK: Review CLAIM for specialty medication (Phase 3)
+    # build service details based on PA type
+    if pa_type == PAType.SPECIALTY_MEDICATION:
+        service_name = service_request.get('medication_name', 'medication')
+        service_details = f"""CLAIM SUBMITTED:
+- Medication: {service_request.get('medication_name')}
+- Dosage Administered: {service_request.get('dosage')}"""
+        total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+        task_desc = "Review CLAIM for specialty medication (Phase 3)"
+    else:
+        service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
+        service_details = f"""CLAIM SUBMITTED:
+- Procedure/Service: {service_name}
+- Clinical Indication: {service_request.get('clinical_indication', service_request.get('treatment_justification', 'N/A'))}"""
+        total_billed = cost_ref.get('procedure_cost', 7800)
+        task_desc = "Review CLAIM for procedure/service (Phase 3)"
+
+    return f"""TASK: {task_desc}
 
 CRITICAL CONTEXT: This is Phase 3 - CLAIM ADJUDICATION after treatment already delivered.
 The PA was approved in Phase 2, but you can still deny payment if documentation is insufficient.
@@ -562,9 +581,7 @@ PATIENT:
 - Age: {state.admission.patient_demographics.age}
 - Medical History: {', '.join(state.clinical_presentation.medical_history)}
 
-CLAIM SUBMITTED:
-- Medication: {med_request.get('medication_name')}
-- Dosage Administered: {med_request.get('dosage')}
+{service_details}
 - Amount Billed: ${total_billed:.2f}
 
 PA APPROVAL RATIONALE (from Phase 2):
@@ -576,7 +593,7 @@ CLINICAL DOCUMENTATION:
 Your task: Review claim and decide to approve/deny PAYMENT.
 
 Common reasons to deny claim despite PA approval:
-- Dosing doesn't match PA approval
+- Service/dosing doesn't match PA approval
 - Documentation insufficient (missing notes, labs)
 - Treatment delivered doesn't match authorized indication
 - Billing errors or upcoding
@@ -592,11 +609,10 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_claim_submission_prompt(state, med_request, cost_ref, phase_2_evidence=None):
-    """create provider claim submission prompt (phase 3)"""
+def create_provider_claim_submission_prompt(state, service_request, cost_ref, phase_2_evidence=None, pa_type="specialty_medication"):
+    """create provider claim submission prompt (phase 3) - works for all PA types"""
     import json
-
-    total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+    from src.models.schemas import PAType
 
     # build clinical documentation
     clinical_doc_parts = []
@@ -604,7 +620,11 @@ def create_provider_claim_submission_prompt(state, med_request, cost_ref, phase_
     if phase_2_evidence and phase_2_evidence.get('test_results'):
         clinical_doc_parts.append("DIAGNOSTIC WORKUP RESULTS:")
         for test_name, test_data in phase_2_evidence['test_results'].items():
-            finding = test_data.get('finding', 'completed')
+            # test_data can be either a string or dict
+            if isinstance(test_data, dict):
+                finding = test_data.get('finding', 'completed')
+            else:
+                finding = test_data
             clinical_doc_parts.append(f"- {test_name}: {finding}")
         clinical_doc_parts.append("")
 
@@ -619,16 +639,37 @@ def create_provider_claim_submission_prompt(state, med_request, cost_ref, phase_
 
     combined_clinical_doc = "\n".join(clinical_doc_parts) if clinical_doc_parts else "No additional documentation"
 
+    # build service details and billing based on PA type
+    if pa_type == PAType.SPECIALTY_MEDICATION:
+        service_name = service_request.get('medication_name', 'medication')
+        service_details = f"""TREATMENT DELIVERED:
+- Medication: {service_request.get('medication_name')}
+- Dosage Administered: {service_request.get('dosage')}
+- Route: {service_request.get('route', 'N/A')}
+- Frequency: {service_request.get('frequency', 'N/A')}"""
+        total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+        billing_details = f"""BILLING INFORMATION:
+- Drug Acquisition Cost: ${cost_ref.get('drug_acquisition_cost', 7800):.2f}
+- Administration Fee: ${cost_ref.get('administration_fee', 150):.2f}
+- Total Amount Billed: ${total_billed:.2f}"""
+        response_field = "medication_administered"
+    else:
+        # procedures, cardiac testing, imaging
+        service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
+        service_details = f"""SERVICE DELIVERED:
+- Procedure/Service: {service_name}
+- Clinical Indication: {service_request.get('clinical_indication', service_request.get('treatment_justification', 'N/A'))}"""
+        total_billed = cost_ref.get('procedure_cost', 7800)
+        billing_details = f"""BILLING INFORMATION:
+- Procedure Cost: ${total_billed:.2f}"""
+        response_field = "service_delivered"
+
     return f"""TASK: Submit CLAIM for reimbursement (Phase 3)
 
 CONTEXT: You have completed treating the patient. PA was approved in Phase 2.
 Now you must submit a claim to receive payment for services rendered.
 
-TREATMENT DELIVERED:
-- Medication: {med_request.get('medication_name')}
-- Dosage Administered: {med_request.get('dosage')}
-- Route: {med_request.get('route', 'N/A')}
-- Frequency: {med_request.get('frequency', 'N/A')}
+{service_details}
 
 PA APPROVAL FROM PHASE 2:
 - Status: {state.medication_authorization.authorization_status if state.medication_authorization else 'approved'}
@@ -638,19 +679,16 @@ PA APPROVAL FROM PHASE 2:
 CLINICAL DOCUMENTATION:
 {combined_clinical_doc}
 
-BILLING INFORMATION:
-- Drug Acquisition Cost: ${cost_ref.get('drug_acquisition_cost', 7800):.2f}
-- Administration Fee: ${cost_ref.get('administration_fee', 150):.2f}
-- Total Amount Billed: ${total_billed:.2f}
+{billing_details}
 
 Your task: Submit comprehensive claim for payment with supporting documentation.
 
 RESPONSE FORMAT (JSON):
 {{
     "claim_submission": {{
-        "medication_administered": "<medication name and dosage>",
+        "{response_field}": "<service name and details>",
         "treatment_dates": "<date range or single date>",
-        "billing_codes": ["<J-code or CPT>", ...],
+        "billing_codes": ["<J-code or CPT or procedure code>", ...],
         "amount_billed": <dollar amount>,
         "clinical_documentation": "<summary of treatment necessity and delivery>",
         "pa_reference": "<reference to phase 2 PA approval>",
@@ -659,9 +697,21 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_claim_appeal_decision_prompt(state, denial_reason, med_request, cost_ref):
-    """create provider decision prompt after claim denial (write-off, appeal, or bill patient)"""
-    total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+def create_provider_claim_appeal_decision_prompt(state, denial_reason, service_request, cost_ref, pa_type="specialty_medication"):
+    """create provider decision prompt after claim denial - works for all PA types"""
+    from src.models.schemas import PAType
+
+    if pa_type == PAType.SPECIALTY_MEDICATION:
+        service_name = service_request.get('medication_name', 'medication')
+        service_details = f"""TREATMENT DELIVERED:
+- Medication: {service_request.get('medication_name')}
+- Dosage: {service_request.get('dosage')}"""
+        total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+    else:
+        service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
+        service_details = f"""SERVICE DELIVERED:
+- Procedure/Service: {service_name}"""
+        total_billed = cost_ref.get('procedure_cost', 7800)
 
     return f"""CRITICAL DECISION: CLAIM WAS DENIED (Phase 3)
 
@@ -673,9 +723,7 @@ SITUATION:
 DENIAL REASON:
 {denial_reason}
 
-TREATMENT DELIVERED:
-- Medication: {med_request.get('medication_name')}
-- Dosage: {med_request.get('dosage')}
+{service_details}
 
 YOUR OPTIONS:
 1. WRITE-OFF: Absorb the cost yourself (direct financial loss to practice)
@@ -703,9 +751,10 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_claim_appeal_prompt(state, denial_reason, med_request, phase_2_evidence=None):
-    """create provider claim appeal submission prompt"""
+def create_provider_claim_appeal_prompt(state, denial_reason, service_request, phase_2_evidence=None, pa_type="specialty_medication"):
+    """create provider claim appeal submission prompt - works for all PA types"""
     import json
+    from src.models.schemas import PAType
 
     # build comprehensive evidence
     evidence_parts = []
@@ -713,7 +762,11 @@ def create_provider_claim_appeal_prompt(state, denial_reason, med_request, phase
     if phase_2_evidence and phase_2_evidence.get('test_results'):
         evidence_parts.append("DIAGNOSTIC TEST RESULTS:")
         for test_name, test_data in phase_2_evidence['test_results'].items():
-            finding = test_data.get('finding', 'completed')
+            # test_data can be either a string or dict
+            if isinstance(test_data, dict):
+                finding = test_data.get('finding', 'completed')
+            else:
+                finding = test_data
             evidence_parts.append(f"- {test_name}: {finding}")
         evidence_parts.append("")
 
@@ -729,6 +782,18 @@ def create_provider_claim_appeal_prompt(state, denial_reason, med_request, phase
 
     combined_evidence = "\n".join(evidence_parts) if evidence_parts else "See original PA documentation"
 
+    # build service details based on PA type
+    if pa_type == PAType.SPECIALTY_MEDICATION:
+        service_details = f"""TREATMENT DELIVERED:
+- Medication: {service_request.get('medication_name')}
+- Dosage: {service_request.get('dosage')}
+- Clinical Indication: {service_request.get('icd10_codes', [])}"""
+    else:
+        service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
+        service_details = f"""SERVICE DELIVERED:
+- Procedure/Service: {service_name}
+- Clinical Indication: {service_request.get('clinical_indication', service_request.get('treatment_justification', 'N/A'))}"""
+
     return f"""TASK: Appeal DENIED CLAIM (Phase 3)
 
 SITUATION:
@@ -739,10 +804,7 @@ SITUATION:
 DENIAL REASON:
 {denial_reason}
 
-TREATMENT DELIVERED:
-- Medication: {med_request.get('medication_name')}
-- Dosage: {med_request.get('dosage')}
-- Clinical Indication: {med_request.get('icd10_codes', [])}
+{service_details}
 
 SUPPORTING EVIDENCE:
 {combined_evidence}
@@ -766,11 +828,21 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_payor_claim_appeal_review_prompt(state, appeal_letter, denial_reason, med_request, cost_ref, phase_2_evidence=None):
-    """create payor claim appeal review prompt"""
+def create_payor_claim_appeal_review_prompt(state, appeal_letter, denial_reason, service_request, cost_ref, phase_2_evidence=None, pa_type="specialty_medication"):
+    """create payor claim appeal review prompt - works for all PA types"""
     import json
+    from src.models.schemas import PAType
 
-    total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+    if pa_type == PAType.SPECIALTY_MEDICATION:
+        service_details = f"""TREATMENT DETAILS:
+- Medication: {service_request.get('medication_name')}
+- Dosage: {service_request.get('dosage')}"""
+        total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+    else:
+        service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
+        service_details = f"""SERVICE DETAILS:
+- Procedure/Service: {service_name}"""
+        total_billed = cost_ref.get('procedure_cost', 7800)
 
     return f"""TASK: Review CLAIM APPEAL (Phase 3)
 
@@ -782,9 +854,7 @@ ORIGINAL DENIAL REASON:
 PROVIDER'S APPEAL:
 {json.dumps(appeal_letter, indent=2)}
 
-TREATMENT DETAILS:
-- Medication: {med_request.get('medication_name')}
-- Dosage: {med_request.get('dosage')}
+{service_details}
 - Amount in dispute: ${total_billed:.2f}
 
 PA HISTORY:

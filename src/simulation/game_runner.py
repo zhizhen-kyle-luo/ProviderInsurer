@@ -271,11 +271,10 @@ Test result for {test_name}:"""
         state = self._phase_2_unified_pa(state, case)
 
         # phase 3: claims adjudication (if treatment was approved and delivered)
-        # only run for medication cases, not procedures
+        # applies to ALL PA types
         if (state.medication_authorization and
-            state.medication_authorization.authorization_status == "approved" and
-            pa_type == PAType.SPECIALTY_MEDICATION):
-            state = self._phase_3_medication_claims(state, case)
+            state.medication_authorization.authorization_status == "approved"):
+            state = self._phase_3_claims(state, case, pa_type)
 
         # phase 4: financial settlement
         if state.medication_authorization:
@@ -613,13 +612,16 @@ Test result for {test_name}:"""
         """run multiple cases sequentially"""
         return [self.run_case(case) for case in cases]
 
-    def _phase_3_medication_claims(
+    def _phase_3_claims(
         self,
         state: EncounterState,
-        case: Dict[str, Any]
+        case: Dict[str, Any],
+        pa_type: str
     ) -> EncounterState:
         """
         phase 3: claims adjudication with provider decision and appeal loop
+
+        applies to ALL PA types: medication, cardiac testing, imaging, etc.
 
         workflow:
         1. provider submits claim (LLM)
@@ -632,12 +634,26 @@ Test result for {test_name}:"""
         import json
 
         # only process claims if pa was approved
-        if state.medication_authorization.authorization_status != "approved":
+        if not state.medication_authorization or state.medication_authorization.authorization_status != "approved":
             return state
 
-        med_request = case.get("medication_request", {})
-        cost_ref = case.get("cost_reference", {})
+        # extract service request data based on PA type
         phase_2_evidence = getattr(state, '_phase_2_evidence', {})
+
+        if pa_type == PAType.SPECIALTY_MEDICATION:
+            service_request = case.get("medication_request", {})
+            service_name = service_request.get('medication_name', 'medication')
+        else:
+            # for procedures, cardiac testing, imaging: use approved request from phase 2
+            approved_req = phase_2_evidence.get('approved_request', {})
+            req_details = approved_req.get('request_details', {})
+            if pa_type == PAType.CARDIAC_TESTING:
+                service_name = req_details.get('treatment_name', req_details.get('procedure_name', 'procedure'))
+            else:
+                service_name = req_details.get('treatment_name', req_details.get('test_name', 'service'))
+            service_request = req_details
+
+        cost_ref = case.get("cost_reference", {})
 
         claim_date = state.appeal_date if state.appeal_date else state.review_date
         claim_date = claim_date + timedelta(days=7)
@@ -645,7 +661,7 @@ Test result for {test_name}:"""
         # STEP 1: provider submits claim
         provider_system_prompt = create_provider_prompt()
         provider_claim_prompt = create_provider_claim_submission_prompt(
-            state, med_request, cost_ref, phase_2_evidence
+            state, service_request, cost_ref, phase_2_evidence, pa_type
         )
 
         messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_claim_prompt}")]
@@ -660,10 +676,14 @@ Test result for {test_name}:"""
                 response_text = response_text.split("```")[1].split("```")[0].strip()
             claim_submission = json.loads(response_text)
         except:
+            # generic fallback
+            default_amount = cost_ref.get('drug_acquisition_cost', cost_ref.get('procedure_cost', 7800))
+            if pa_type == PAType.SPECIALTY_MEDICATION:
+                default_amount += cost_ref.get('administration_fee', 150)
             claim_submission = {
                 "claim_submission": {
-                    "medication_administered": med_request.get('medication_name'),
-                    "amount_billed": cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+                    "service_delivered": service_name,
+                    "amount_billed": default_amount
                 }
             }
 
@@ -676,13 +696,13 @@ Test result for {test_name}:"""
             user_prompt=provider_claim_prompt,
             llm_response=response.content,
             parsed_output=claim_submission,
-            metadata={"medication": med_request.get('medication_name'), "pa_approved": True, "cache_hit": provider_cache_hit}
+            metadata={"service": service_name, "pa_type": pa_type, "pa_approved": True, "cache_hit": provider_cache_hit}
         )
 
         # STEP 2: payor reviews claim
         payor_system_prompt = create_payor_prompt()
         payor_claim_prompt = create_claim_adjudication_prompt(
-            state, med_request, cost_ref, case, phase_2_evidence
+            state, service_request, cost_ref, case, phase_2_evidence, pa_type
         )
 
         messages = [HumanMessage(content=f"{payor_system_prompt}\n\n{payor_claim_prompt}")]
@@ -712,7 +732,7 @@ Test result for {test_name}:"""
             user_prompt=payor_claim_prompt,
             llm_response=response.content,
             parsed_output=claim_decision,
-            metadata={"medication": med_request.get('medication_name'), "claim_status": claim_decision.get("claim_status"), "cache_hit": payor_cache_hit}
+            metadata={"service": service_name, "pa_type": pa_type, "claim_status": claim_decision.get("claim_status"), "cache_hit": payor_cache_hit}
         )
 
         # update state with claim decision
@@ -727,7 +747,7 @@ Test result for {test_name}:"""
 
             # provider decision: write-off / appeal / bill patient
             provider_decision_prompt = create_provider_claim_appeal_decision_prompt(
-                state, denial_reason, med_request, cost_ref
+                state, denial_reason, service_request, cost_ref, pa_type
             )
 
             messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_decision_prompt}")]
@@ -767,7 +787,7 @@ Test result for {test_name}:"""
 
                     # provider submits appeal
                     provider_appeal_prompt = create_provider_claim_appeal_prompt(
-                        state, denial_reason, med_request, phase_2_evidence
+                        state, denial_reason, service_request, phase_2_evidence, pa_type
                     )
 
                     messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_appeal_prompt}")]
@@ -798,13 +818,13 @@ Test result for {test_name}:"""
                         user_prompt=provider_appeal_prompt,
                         llm_response=response.content,
                         parsed_output=appeal_letter,
-                        metadata={"appeal_iteration": appeal_iteration, "cache_hit": provider_cache_hit}
+                        metadata={"appeal_iteration": appeal_iteration, "service": service_name, "cache_hit": provider_cache_hit}
                     )
 
                     # payor reviews appeal
                     payor_appeal_prompt = create_payor_claim_appeal_review_prompt(
                         state, appeal_letter.get("appeal_letter", appeal_letter),
-                        denial_reason, med_request, cost_ref, phase_2_evidence
+                        denial_reason, service_request, cost_ref, phase_2_evidence, pa_type
                     )
 
                     messages = [HumanMessage(content=f"{payor_system_prompt}\n\n{payor_appeal_prompt}")]
