@@ -1,5 +1,6 @@
 # simulation configuration
-MAX_ITERATIONS = 10
+MAX_ITERATIONS = 10  # phase 2: prior authorization max iterations
+MAX_PHASE_3_ITERATIONS = 10  # phase 3: claims adjudication max appeal iterations
 CONFIDENCE_THRESHOLD = 0.9
 NOISE_PROBABILITY = 0.15
 

@@ -103,22 +103,36 @@ class UtilizationReviewSimulation:
         introduce environmental noise to patient_visible_data based on NOISE_PROBABILITY
 
         deterministically applies one of three noise types using self.rng
+        logs noise as environment action
         """
         import copy
 
         if self.rng.random() > NOISE_PROBABILITY:
+            # no noise introduced
+            self.audit_logger.log_environment_action(
+                phase="phase_1_presentation",
+                action_type="data_quality_check",
+                description="no environmental noise introduced (clean data)",
+                outcome={"noise_applied": False},
+                metadata={"noise_probability": NOISE_PROBABILITY}
+            )
             return case
 
         noisy_case = copy.deepcopy(case)
         patient_data = noisy_case.get("patient_visible_data", {})
 
         noise_type = self.rng.choice(["age", "medication", "diagnosis"])
+        noise_description = ""
+        noise_details = {}
 
         if noise_type == "age":
             # age error: ±3-7 years
             age_offset = self.rng.randint(3, 7) * self.rng.choice([-1, 1])
             original_age = patient_data.get("age", 60)
-            patient_data["age"] = max(18, original_age + age_offset)
+            noisy_age = max(18, original_age + age_offset)
+            patient_data["age"] = noisy_age
+            noise_description = f"age error introduced: {original_age} → {noisy_age}"
+            noise_details = {"original_age": original_age, "noisy_age": noisy_age, "offset": age_offset}
 
         elif noise_type == "medication":
             # wrong medication name in history
@@ -131,14 +145,30 @@ class UtilizationReviewSimulation:
                     "Atorvastatin 20mg daily"
                 ]
                 idx = self.rng.randint(0, len(medications) - 1)
-                medications[idx] = self.rng.choice(wrong_meds)
+                original_med = medications[idx]
+                wrong_med = self.rng.choice(wrong_meds)
+                medications[idx] = wrong_med
+                noise_description = f"medication error introduced: replaced '{original_med}' with '{wrong_med}'"
+                noise_details = {"original": original_med, "replacement": wrong_med, "index": idx}
 
         elif noise_type == "diagnosis":
             # remove key diagnosis from medical history
             medical_history = patient_data.get("medical_history", [])
             if medical_history and len(medical_history) > 1:
                 idx = self.rng.randint(0, len(medical_history) - 1)
+                removed_diagnosis = medical_history[idx]
                 medical_history.pop(idx)
+                noise_description = f"diagnosis omitted: removed '{removed_diagnosis}' from medical history"
+                noise_details = {"removed_diagnosis": removed_diagnosis, "index": idx}
+
+        # log environment noise action
+        self.audit_logger.log_environment_action(
+            phase="phase_1_presentation",
+            action_type="introduce_noise",
+            description=noise_description,
+            outcome={"noise_type": noise_type, "noise_applied": True, **noise_details},
+            metadata={"noise_probability": NOISE_PROBABILITY}
+        )
 
         return noisy_case
 
