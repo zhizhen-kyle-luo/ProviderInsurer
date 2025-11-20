@@ -105,12 +105,18 @@ class MermaidAuditGenerator:
 
             if interaction.agent == "provider":
                 action_label = MermaidAuditGenerator._format_action(interaction.action, interaction.parsed_output)
-                lines.append(f"    activate Provider")
-                lines.append(f"    Provider->>+Payor: {action_label}")
-                lines.append(f"    deactivate Provider")
+                # use activation for phase 2 (request-response pattern)
+                if interaction.phase == "phase_2_pa" or interaction.phase == "phase_2_pa_appeal":
+                    lines.append(f"    Provider->>+Payor: {action_label}")
+                else:
+                    lines.append(f"    Provider->>Payor: {action_label}")
             elif interaction.agent == "payor":
                 action_label = MermaidAuditGenerator._format_action(interaction.action, interaction.parsed_output)
-                lines.append(f"    Payor-->>-Provider: {action_label}")
+                # use deactivation for phase 2 (completing request-response), plain arrow for phase 3
+                if interaction.phase == "phase_2_pa" or interaction.phase == "phase_2_pa_appeal":
+                    lines.append(f"    Payor-->>-Provider: {action_label}")
+                else:
+                    lines.append(f"    Payor-->>Provider: {action_label}")
 
             if interaction.metadata:
                 metadata_str = MermaidAuditGenerator._format_metadata(interaction.metadata)
@@ -159,12 +165,50 @@ class MermaidAuditGenerator:
     @staticmethod
     def _format_action(action: str, parsed_output: dict) -> str:
         """format action with key details from parsed output"""
-        # For PA requests
-        if action == "pa_request" or action == "medication_pa_request":
+        # provider treatment/diagnostic requests
+        if action == "treatment_request":
+            request_type = parsed_output.get("request_type", "")
+            if request_type == "treatment":
+                details = parsed_output.get("request_details", {})
+                treatment_name = details.get("treatment_name", "treatment")
+                return f"PA Request: {treatment_name}"
+            elif request_type == "diagnostic_test":
+                details = parsed_output.get("request_details", {})
+                test_name = details.get("test_name", "diagnostic test")
+                return f"Test Request: {test_name}"
+            else:
+                return "PA Request"
+
+        # payor review responses
+        elif action == "treatment_review":
+            status = parsed_output.get("authorization_status", "unknown")
+            if status == "approved":
+                return "PA APPROVED"
+            elif status == "denied":
+                reason = parsed_output.get("denial_reason", "")
+                if reason:
+                    short_reason = reason[:50] + "..." if len(reason) > 50 else reason
+                    return f"PA DENIED: {short_reason}"
+                return "PA DENIED"
+            else:
+                return f"PA {status.upper()}"
+
+        # claims adjudication
+        elif action == "claim_adjudication":
+            status = parsed_output.get("claim_status", "unknown")
+            approved_amount = parsed_output.get("approved_amount", 0)
+            if status == "approved" and approved_amount:
+                return f"Claim APPROVED (${approved_amount:,.2f})"
+            elif status == "denied":
+                return "Claim DENIED"
+            else:
+                return f"Claim {status.upper()}"
+
+        # legacy action names
+        elif action == "pa_request" or action == "medication_pa_request":
             medication = parsed_output.get('medication_name', 'medication')
             return f"PA Request: {medication}"
 
-        # For PA decisions
         elif action == "pa_decision":
             status = parsed_output.get("authorization_status", "unknown")
             if status == "denied":
@@ -174,7 +218,6 @@ class MermaidAuditGenerator:
             else:
                 return f"PA {status.upper()}"
 
-        # For appeals
         elif action == "pa_appeal_submission":
             appeal_type = parsed_output.get("appeal_type", "appeal")
             return f"Submit Appeal ({appeal_type})"
@@ -188,7 +231,6 @@ class MermaidAuditGenerator:
             else:
                 return f"Appeal {outcome.upper()}"
 
-        # For claims
         elif action == "claim_submission":
             amount = parsed_output.get("amount_billed", 0)
             if amount:
@@ -198,7 +240,6 @@ class MermaidAuditGenerator:
         elif action == "claim_adjudication":
             status = parsed_output.get("claim_status", "unknown")
             approved_amount = parsed_output.get("approved_amount")
-
             if status == "approved" and approved_amount:
                 return f"Claim APPROVED (${approved_amount:,.2f})"
             elif status == "denied":
@@ -206,7 +247,7 @@ class MermaidAuditGenerator:
             else:
                 return f"Claim {status.upper()}"
 
-        # Generic fallback
+        # generic fallback
         else:
             return action.replace("_", " ").title()
 
