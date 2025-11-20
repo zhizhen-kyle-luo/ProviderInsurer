@@ -41,8 +41,8 @@ class MermaidAuditGenerator:
             if env_action.phase == "phase_1_presentation":
                 node_counter += 1
                 node_id = f"Env_P1_{node_counter}"
-                # show full description for environment actions
-                action_desc = env_action.description
+                # show full description, escape parentheses for mermaid syntax
+                action_desc = env_action.description.replace("(", "[").replace(")", "]")
 
                 phase1_nodes.append((node_id, f"[<b>Environment</b><br/>{action_desc}]:::env"))
 
@@ -102,8 +102,9 @@ class MermaidAuditGenerator:
                 # node style
                 style_class = "prov" if interaction.agent == "provider" else "pay"
 
-                # create node
-                node_def = f"{node_id}[<b>{agent}</b><br/>{action_label}{detail}]:::{style_class}"
+                # create node - escape parentheses for mermaid syntax
+                node_label = f"<b>{agent}</b><br/>{action_label}{detail}".replace("(", "[").replace(")", "]")
+                node_def = f"{node_id}[{node_label}]:::{style_class}"
                 lines.append(f"        {node_def}")
 
                 # edge from last node
@@ -153,8 +154,9 @@ class MermaidAuditGenerator:
                 # node style
                 style_class = "prov" if interaction.agent == "provider" else "pay"
 
-                # create node
-                node_def = f"{node_id}[<b>{agent}</b><br/>{action_label}]:::{style_class}"
+                # create node - escape parentheses for mermaid syntax
+                node_label = f"<b>{agent}</b><br/>{action_label}".replace("(", "[").replace(")", "]")
+                node_def = f"{node_id}[{node_label}]:::{style_class}"
                 lines.append(f"        {node_def}")
 
                 # edge from last node
