@@ -262,5 +262,5 @@ class MermaidAuditGenerator:
     def save_from_state(state: EncounterState, filepath: str):
         """generate and save mermaid diagram from encounter state"""
         diagram = MermaidAuditGenerator.generate_from_encounter_state(state)
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write(diagram)
