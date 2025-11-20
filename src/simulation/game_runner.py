@@ -248,6 +248,9 @@ Test result for {test_name}:"""
 
         routes to appropriate workflow based on pa_type
         """
+        # initialize audit logger for this case (before noise introduction)
+        self.audit_logger = AuditLogger(case_id=case["case_id"])
+
         # apply environmental noise deterministically
         case = self._introduce_noise(case)
 
@@ -263,9 +266,6 @@ Test result for {test_name}:"""
             clinical_presentation=case["clinical_presentation"],
             pa_type=pa_type
         )
-
-        # initialize audit logger for this case
-        self.audit_logger = AuditLogger(case_id=case["case_id"])
 
         # unified phase 2 workflow (all case types)
         state = self._phase_2_unified_pa(state, case)

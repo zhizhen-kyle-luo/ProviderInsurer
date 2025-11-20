@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import uuid
 import json
-from src.models.schemas import AuditLog, LLMInteraction
+from src.models.schemas import AuditLog, LLMInteraction, EnvironmentAction
 
 
 class AuditLogger:
@@ -66,6 +66,42 @@ class AuditLogger:
 
         self.audit_log.interactions.append(interaction)
         return interaction_id
+
+    def log_environment_action(
+        self,
+        phase: str,
+        action_type: str,
+        description: str,
+        outcome: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        log environment agent action (test result generation, noise injection, etc)
+
+        Args:
+            phase: Phase identifier (e.g., "phase_1_presentation", "phase_2_pa")
+            action_type: Type of action (e.g., "introduce_noise", "generate_test_result")
+            description: Human-readable description of action
+            outcome: Result of the action
+            metadata: Additional context
+
+        Returns:
+            Action ID for reference
+        """
+        action_id = f"env_{action_type}_{uuid.uuid4().hex[:8]}"
+
+        env_action = EnvironmentAction(
+            action_id=action_id,
+            timestamp=datetime.now().isoformat(),
+            phase=phase,
+            action_type=action_type,
+            description=description,
+            outcome=outcome or {},
+            metadata=metadata or {}
+        )
+
+        self.audit_log.environment_actions.append(env_action)
+        return action_id
 
     def finalize(self, summary: Optional[Dict[str, Any]] = None):
         """Finalize audit log with summary statistics."""
