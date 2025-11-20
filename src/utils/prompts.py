@@ -590,3 +590,226 @@ RESPONSE FORMAT (JSON):
     "requires_additional_documentation": ["<item1>", ...],
     "reviewer_type": "Claims adjudicator" or "Medical reviewer"
 }}"""
+
+
+def create_provider_claim_submission_prompt(state, med_request, cost_ref, phase_2_evidence=None):
+    """create provider claim submission prompt (phase 3)"""
+    import json
+
+    total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+
+    # build clinical documentation
+    clinical_doc_parts = []
+
+    if phase_2_evidence and phase_2_evidence.get('test_results'):
+        clinical_doc_parts.append("DIAGNOSTIC WORKUP RESULTS:")
+        for test_name, test_data in phase_2_evidence['test_results'].items():
+            finding = test_data.get('finding', 'completed')
+            clinical_doc_parts.append(f"- {test_name}: {finding}")
+        clinical_doc_parts.append("")
+
+    if phase_2_evidence and phase_2_evidence.get('approved_request'):
+        approved_req = phase_2_evidence['approved_request']
+        req_details = approved_req.get('request_details', {})
+        if req_details.get('treatment_justification'):
+            clinical_doc_parts.append(f"TREATMENT JUSTIFICATION: {req_details['treatment_justification']}")
+        if req_details.get('clinical_evidence'):
+            clinical_doc_parts.append(f"CLINICAL EVIDENCE: {req_details['clinical_evidence']}")
+        clinical_doc_parts.append("")
+
+    combined_clinical_doc = "\n".join(clinical_doc_parts) if clinical_doc_parts else "No additional documentation"
+
+    return f"""TASK: Submit CLAIM for reimbursement (Phase 3)
+
+CONTEXT: You have completed treating the patient. PA was approved in Phase 2.
+Now you must submit a claim to receive payment for services rendered.
+
+TREATMENT DELIVERED:
+- Medication: {med_request.get('medication_name')}
+- Dosage Administered: {med_request.get('dosage')}
+- Route: {med_request.get('route', 'N/A')}
+- Frequency: {med_request.get('frequency', 'N/A')}
+
+PA APPROVAL FROM PHASE 2:
+- Status: {state.medication_authorization.authorization_status if state.medication_authorization else 'approved'}
+- Reviewer: {state.medication_authorization.reviewer_type if state.medication_authorization else 'AI algorithm'}
+- Criteria: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity guidelines'}
+
+CLINICAL DOCUMENTATION:
+{combined_clinical_doc}
+
+BILLING INFORMATION:
+- Drug Acquisition Cost: ${cost_ref.get('drug_acquisition_cost', 7800):.2f}
+- Administration Fee: ${cost_ref.get('administration_fee', 150):.2f}
+- Total Amount Billed: ${total_billed:.2f}
+
+Your task: Submit comprehensive claim for payment with supporting documentation.
+
+RESPONSE FORMAT (JSON):
+{{
+    "claim_submission": {{
+        "medication_administered": "<medication name and dosage>",
+        "treatment_dates": "<date range or single date>",
+        "billing_codes": ["<J-code or CPT>", ...],
+        "amount_billed": <dollar amount>,
+        "clinical_documentation": "<summary of treatment necessity and delivery>",
+        "pa_reference": "<reference to phase 2 PA approval>",
+        "supporting_evidence": ["<test results>", "<clinical notes>", ...]
+    }}
+}}"""
+
+
+def create_provider_claim_appeal_decision_prompt(state, denial_reason, med_request, cost_ref):
+    """create provider decision prompt after claim denial (write-off, appeal, or bill patient)"""
+    total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+
+    return f"""CRITICAL DECISION: CLAIM WAS DENIED (Phase 3)
+
+SITUATION:
+- You already treated the patient and incurred costs
+- PA was APPROVED in Phase 2, but claim was DENIED in Phase 3
+- Amount at stake: ${total_billed:.2f}
+
+DENIAL REASON:
+{denial_reason}
+
+TREATMENT DELIVERED:
+- Medication: {med_request.get('medication_name')}
+- Dosage: {med_request.get('dosage')}
+
+YOUR OPTIONS:
+1. WRITE-OFF: Absorb the cost yourself (direct financial loss to practice)
+2. APPEAL: Fight the denial with additional documentation (time/cost investment, uncertain outcome)
+3. BILL PATIENT: Transfer cost to patient (often uncollectible, damages relationship)
+
+FINANCIAL IMPACT:
+- Write-off: You lose ${total_billed:.2f} immediately
+- Appeal: Administrative cost ~$50-200, potential to recover ${total_billed:.2f}
+- Bill Patient: Patient may not pay, may damage relationship and reputation
+
+APPEAL SUCCESS FACTORS:
+- Was denial based on documentation? (Appeal likely to succeed)
+- Was denial based on medical necessity? (Appeal uncertain)
+- Was denial based on billing errors? (Appeal likely to succeed if correctable)
+
+Your task: Decide how to handle this denied claim based on your behavioral parameters.
+
+RESPONSE FORMAT (JSON):
+{{
+    "decision": "write_off" or "appeal" or "bill_patient",
+    "rationale": "<why you chose this option given your incentives>",
+    "expected_outcome": "<what you expect to happen>",
+    "admin_time_investment": <hours if appealing, 0 otherwise>
+}}"""
+
+
+def create_provider_claim_appeal_prompt(state, denial_reason, med_request, phase_2_evidence=None):
+    """create provider claim appeal submission prompt"""
+    import json
+
+    # build comprehensive evidence
+    evidence_parts = []
+
+    if phase_2_evidence and phase_2_evidence.get('test_results'):
+        evidence_parts.append("DIAGNOSTIC TEST RESULTS:")
+        for test_name, test_data in phase_2_evidence['test_results'].items():
+            finding = test_data.get('finding', 'completed')
+            evidence_parts.append(f"- {test_name}: {finding}")
+        evidence_parts.append("")
+
+    if phase_2_evidence and phase_2_evidence.get('approved_request'):
+        approved_req = phase_2_evidence['approved_request']
+        evidence_parts.append("ORIGINAL PA JUSTIFICATION:")
+        req_details = approved_req.get('request_details', {})
+        if req_details.get('clinical_evidence'):
+            evidence_parts.append(req_details['clinical_evidence'])
+        if req_details.get('guideline_references'):
+            evidence_parts.append(f"\nGuidelines: {', '.join(req_details['guideline_references'])}")
+        evidence_parts.append("")
+
+    combined_evidence = "\n".join(evidence_parts) if evidence_parts else "See original PA documentation"
+
+    return f"""TASK: Appeal DENIED CLAIM (Phase 3)
+
+SITUATION:
+- Treatment was delivered with PA approval from Phase 2
+- Claim was denied despite PA approval
+- You are appealing to recover payment
+
+DENIAL REASON:
+{denial_reason}
+
+TREATMENT DELIVERED:
+- Medication: {med_request.get('medication_name')}
+- Dosage: {med_request.get('dosage')}
+- Clinical Indication: {med_request.get('icd10_codes', [])}
+
+SUPPORTING EVIDENCE:
+{combined_evidence}
+
+PA APPROVAL REFERENCE:
+- PA was APPROVED in Phase 2 by {state.medication_authorization.reviewer_type if state.medication_authorization else 'AI algorithm'}
+- Criteria used: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity'}
+
+Your task: Submit appeal with evidence addressing the specific denial reason.
+
+RESPONSE FORMAT (JSON):
+{{
+    "appeal_letter": {{
+        "denial_addressed": "<how you address the specific denial reason>",
+        "additional_documentation": ["<new evidence item 1>", "<new evidence item 2>", ...],
+        "pa_approval_reference": "<reference to phase 2 approval>",
+        "clinical_necessity_reaffirmation": "<why treatment was medically necessary>",
+        "billing_accuracy_verification": "<confirm billing codes and amounts are correct>",
+        "requested_action": "full payment" or "partial payment" or "reconsideration"
+    }}
+}}"""
+
+
+def create_payor_claim_appeal_review_prompt(state, appeal_letter, denial_reason, med_request, cost_ref, phase_2_evidence=None):
+    """create payor claim appeal review prompt"""
+    import json
+
+    total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+
+    return f"""TASK: Review CLAIM APPEAL (Phase 3)
+
+CONTEXT: Provider is appealing your claim denial. They already delivered treatment with PA approval.
+
+ORIGINAL DENIAL REASON:
+{denial_reason}
+
+PROVIDER'S APPEAL:
+{json.dumps(appeal_letter, indent=2)}
+
+TREATMENT DETAILS:
+- Medication: {med_request.get('medication_name')}
+- Dosage: {med_request.get('dosage')}
+- Amount in dispute: ${total_billed:.2f}
+
+PA HISTORY:
+- PA Status in Phase 2: {state.medication_authorization.authorization_status if state.medication_authorization else 'approved'}
+- PA Criteria Used: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity'}
+
+DECISION FACTORS:
+- Does appeal address the denial reason adequately?
+- Is additional documentation sufficient?
+- Was original denial justified or was it an error?
+- Cost of continuing dispute vs. approving payment?
+
+TRADE-OFFS:
+- Upholding denial: Save ${total_billed:.2f} but risk provider escalation
+- Approving appeal: Pay ${total_billed:.2f} but maintain provider relationship
+- Ongoing appeals cost administrative resources
+
+Your task: Review appeal and decide to approve payment, continue denial, or request more documentation.
+
+RESPONSE FORMAT (JSON):
+{{
+    "appeal_outcome": "approved" or "denied" or "partial",
+    "approved_amount": <dollar amount if approved/partial, null if denied>,
+    "denial_reason": "<reason if appeal denied>",
+    "additional_documentation_requested": ["<item 1>", ...] or [],
+    "reviewer_type": "Medical director" or "Appeals coordinator",
+    "rationale": "<why you made this decision>"
+}}"""
