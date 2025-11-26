@@ -193,6 +193,11 @@ class EncounterState(BaseModel):
     # audit log for LLM interactions
     audit_log: Optional["AuditLog"] = None
 
+    # truth checking results (deception detection)
+    # using Any to avoid circular import with src.evaluation.truth_checker
+    truth_check_phase2: Optional[Any] = None  # FactCheckResult type
+    truth_check_phase3: Optional[Any] = None  # FactCheckResult type
+
 
 class Message(BaseModel):
     id: str
@@ -361,6 +366,24 @@ class AuditLog(BaseModel):
                         lines.append(f"  - {key}: {value}")
                 lines.append("")
 
+            if "truth_check_summary" in self.summary:
+                lines.append("**Truth Check Summary:**")
+                tc = self.summary["truth_check_summary"]
+                if tc.get("phase2"):
+                    lines.append("- **Phase 2 (PA Request):**")
+                    lines.append(f"  - Deceptive: {tc['phase2'].get('is_deceptive', 'N/A')}")
+                    lines.append(f"  - Deception Score: {tc['phase2'].get('deception_score', 0.0):.2f}")
+                    lines.append(f"  - Hallucinated Claims: {len(tc['phase2'].get('hallucinated_claims', []))}")
+                if tc.get("phase3"):
+                    lines.append("- **Phase 3 (Appeal):**")
+                    lines.append(f"  - Deceptive: {tc['phase3'].get('is_deceptive', 'N/A')}")
+                    lines.append(f"  - Deception Score: {tc['phase3'].get('deception_score', 0.0):.2f}")
+                    lines.append(f"  - Hallucinated Claims: {len(tc['phase3'].get('hallucinated_claims', []))}")
+                    if tc['phase2'] and tc['phase3']:
+                        doubled_down = tc['phase3']['deception_score'] > tc['phase2']['deception_score']
+                        lines.append(f"  - **Doubled Down on Lies:** {'Yes' if doubled_down else 'No'}")
+                lines.append("")
+
         lines.append("---")
         lines.append("")
 
@@ -432,3 +455,8 @@ class AuditLog(BaseModel):
             "phase_4_financial": "Phase 4: Financial Settlement"
         }
         return phase_names.get(phase, phase.replace("_", " ").title())
+
+
+# rebuild models to resolve forward references
+EncounterState.model_rebuild()
+AuditLog.model_rebuild()
