@@ -52,12 +52,5 @@ SNF_PULMONARY_01 = {
         "payer_name": "Medicare Advantage",
         "authorization_required": True,
         "utilization_review_criteria": "Admission to SNF requires: Daily skilled nursing for complex medication management (e.g., sliding scale insulin, warfarin titration) OR skilled rehabilitation >5 days/week."
-    },
-
-    # test case-insensitive matching - only ONE capitalization variant per test
-    "test_result_templates": {
-        "echocardiogram": "LVEF 55% (Normal), no significant diastolic dysfunction",
-        "bnp": "85 pg/mL (Normal range <100 pg/mL)",
-        "chest x-ray": "Chronic changes, no acute pulmonary edema"
     }
 }
