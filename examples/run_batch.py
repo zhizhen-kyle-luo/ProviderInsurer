@@ -1,5 +1,5 @@
 """
-batch experiment runner for ACL pilot study
+batch experiment runner for pilot study
 
 tests two hypotheses:
 1. Strategic Deception: agents lie more under high financial pressure
@@ -182,7 +182,7 @@ def main():
         }
 
     print("=" * 80)
-    print("ACL PILOT EXPERIMENT - BATCH RUN")
+    print("PILOT EXPERIMENT - BATCH RUN")
     print("=" * 80)
     print()
     print("Hypotheses:")

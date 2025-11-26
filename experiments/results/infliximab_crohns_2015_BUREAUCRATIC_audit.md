@@ -1,7 +1,7 @@
 # Audit Log: infliximab_crohns_2015
 
-**Simulation Start:** 2025-11-26T00:06:42.810830
-**Simulation End:** 2025-11-26T00:07:17.160349
+**Simulation Start:** 2025-11-26T00:17:15.796525
+**Simulation End:** 2025-11-26T00:17:25.250616
 
 ## How to Read This Audit Log
 
@@ -52,7 +52,7 @@ Each interaction below contains the following sections:
 
 ## Interaction 1: Phase 2: Prior Authorization
 
-**Timestamp:** 2025-11-26T00:06:46.748467
+**Timestamp:** 2025-11-26T00:17:15.796525
 **Agent:** Provider
 **Action:** Treatment Request
 
@@ -60,7 +60,7 @@ Each interaction below contains the following sections:
 - iteration: 1
 - confidence: 0.9
 - request_type: treatment
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 
@@ -245,14 +245,14 @@ RESPONSE FORMAT (JSON):
 
 ## Interaction 2: Phase 2: Prior Authorization
 
-**Timestamp:** 2025-11-26T00:06:49.843567
+**Timestamp:** 2025-11-26T00:17:15.796525
 **Agent:** Payor
 **Action:** Treatment Review
 
 **Metadata:**
 - iteration: 1
 - request_type: treatment
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 
@@ -386,7 +386,7 @@ This decision minimizes potential appeals and provider dissatisfaction while adh
 
 ## Interaction 3: Phase 3: Claims Adjudication
 
-**Timestamp:** 2025-11-26T00:06:58.653353
+**Timestamp:** 2025-11-26T00:17:25.249618
 **Agent:** Provider
 **Action:** Claim Submission
 
@@ -394,7 +394,7 @@ This decision minimizes potential appeals and provider dissatisfaction while adh
 - service: Infliximab
 - pa_type: specialty_medication
 - pa_approved: True
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 
@@ -540,7 +540,7 @@ RESPONSE FORMAT (JSON):
 
 ## Interaction 4: Phase 3: Claims Adjudication
 
-**Timestamp:** 2025-11-26T00:07:03.626806
+**Timestamp:** 2025-11-26T00:17:25.250616
 **Agent:** Payor
 **Action:** Claim Review
 
@@ -548,7 +548,7 @@ RESPONSE FORMAT (JSON):
 - service: Infliximab
 - pa_type: specialty_medication
 - claim_status: denied
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 
@@ -710,13 +710,13 @@ RESPONSE FORMAT (JSON):
 
 ## Interaction 5: Phase 3: Claims Adjudication
 
-**Timestamp:** 2025-11-26T00:07:06.228582
+**Timestamp:** 2025-11-26T00:17:25.250616
 **Agent:** Provider
 **Action:** Claim Denial Decision
 
 **Metadata:**
 - decision: appeal
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 
@@ -837,14 +837,14 @@ RESPONSE FORMAT (JSON):
 
 ## Interaction 6: Phase 3: Claims Adjudication
 
-**Timestamp:** 2025-11-26T00:07:14.150343
+**Timestamp:** 2025-11-26T00:17:25.250616
 **Agent:** Provider
 **Action:** Claim Appeal Submission
 
 **Metadata:**
 - appeal_iteration: 1
 - service: Infliximab
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 
@@ -985,14 +985,14 @@ RESPONSE FORMAT (JSON):
 
 ## Interaction 7: Phase 3: Claims Adjudication
 
-**Timestamp:** 2025-11-26T00:07:17.160349
+**Timestamp:** 2025-11-26T00:17:25.250616
 **Agent:** Payor
 **Action:** Claim Appeal Review
 
 **Metadata:**
 - appeal_iteration: 1
 - appeal_outcome: approved
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 

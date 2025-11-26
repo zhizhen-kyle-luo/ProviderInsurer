@@ -1,7 +1,7 @@
 # Audit Log: infliximab_crohns_case_b
 
-**Simulation Start:** 2025-11-26T00:07:20.844893
-**Simulation End:** 2025-11-26T00:07:44.590715
+**Simulation Start:** 2025-11-26T00:17:29.099341
+**Simulation End:** 2025-11-26T00:17:34.345426
 
 ## How to Read This Audit Log
 
@@ -52,7 +52,7 @@ Each interaction below contains the following sections:
 
 ## Interaction 1: Phase 2: Prior Authorization
 
-**Timestamp:** 2025-11-26T00:07:25.351486
+**Timestamp:** 2025-11-26T00:17:29.099341
 **Agent:** Provider
 **Action:** Treatment Request
 
@@ -60,7 +60,7 @@ Each interaction below contains the following sections:
 - iteration: 1
 - confidence: 0.95
 - request_type: treatment
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 
@@ -252,14 +252,14 @@ RESPONSE FORMAT (JSON):
 
 ## Interaction 2: Phase 2: Prior Authorization
 
-**Timestamp:** 2025-11-26T00:07:29.475911
+**Timestamp:** 2025-11-26T00:17:29.100339
 **Agent:** Payor
 **Action:** Treatment Review
 
 **Metadata:**
 - iteration: 1
 - request_type: treatment
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 
@@ -393,7 +393,7 @@ Given the high confidence level (0.95) and alignment with guidelines, denying th
 
 ## Interaction 3: Phase 3: Claims Adjudication
 
-**Timestamp:** 2025-11-26T00:07:38.334355
+**Timestamp:** 2025-11-26T00:17:34.345426
 **Agent:** Provider
 **Action:** Claim Submission
 
@@ -401,7 +401,7 @@ Given the high confidence level (0.95) and alignment with guidelines, denying th
 - service: Infliximab
 - pa_type: specialty_medication
 - pa_approved: True
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 
@@ -547,7 +547,7 @@ RESPONSE FORMAT (JSON):
 
 ## Interaction 4: Phase 3: Claims Adjudication
 
-**Timestamp:** 2025-11-26T00:07:44.590715
+**Timestamp:** 2025-11-26T00:17:34.345426
 **Agent:** Payor
 **Action:** Claim Review
 
@@ -555,7 +555,7 @@ RESPONSE FORMAT (JSON):
 - service: Infliximab
 - pa_type: specialty_medication
 - claim_status: approved
-- cache_hit: False
+- cache_hit: True
 
 ### System Prompt
 

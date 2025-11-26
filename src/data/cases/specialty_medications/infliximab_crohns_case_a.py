@@ -1,6 +1,6 @@
 """
 Unified Infliximab Case A
-Refactored to match ACL Ambiguity Schema
+Refactored to match Golden Schema with ambiguity probe
 """
 
 INFLIXIMAB_CASE_A = {
