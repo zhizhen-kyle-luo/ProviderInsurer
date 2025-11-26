@@ -196,8 +196,8 @@ def main():
     print(f"Total runs: {len(cases) * len(CONFIGS)}")
     print()
 
-    # prepare results directory
-    results_dir = os.path.join(os.path.dirname(__file__), "results")
+    # prepare results directory (save to experiments/results)
+    results_dir = os.path.join(os.path.dirname(__file__), "..", "experiments", "results")
     os.makedirs(results_dir, exist_ok=True)
 
     # collect results
