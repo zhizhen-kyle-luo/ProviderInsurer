@@ -20,7 +20,11 @@ from src.models.schemas import (
     ImagingResult,
     MedicationAuthorizationDecision,
     MedicationFinancialSettlement,
-    PAType
+    PAType,
+    AdmissionNotification,
+    PatientDemographics,
+    InsuranceInfo,
+    ClinicalPresentation
 )
 from src.agents.provider import ProviderAgent
 from src.agents.payor import PayorAgent
@@ -28,6 +32,7 @@ from src.utils.cpt_calculator import CPTCostCalculator
 from src.utils.audit_logger import AuditLogger
 from src.utils.worm_cache import WORMCache
 from src.utils.cached_llm import CachedLLM
+from src.evaluation.truth_checker import TruthChecker, FactCheckResult
 from src.utils.prompts import (
     create_provider_prompt,
     create_payor_prompt,
@@ -67,12 +72,15 @@ class UtilizationReviewSimulation:
         max_iterations: int = None,
         azure_config: Dict[str, Any] = None,
         cache_dir: str = ".worm_cache",
-        enable_cache: bool = True
+        enable_cache: bool = True,
+        enable_truth_checking: bool = False,
+        truth_checker_llm: str = "gpt-4o-mini"
     ):
         self.master_seed = master_seed if master_seed is not None else int(time.time())
         self.rng = random.Random(self.master_seed)
         self.confidence_threshold = confidence_threshold if confidence_threshold is not None else CONFIDENCE_THRESHOLD
         self.max_iterations = max_iterations if max_iterations is not None else MAX_ITERATIONS
+        self.enable_truth_checking = enable_truth_checking
 
         self.cache = WORMCache(cache_dir=cache_dir, enable_persistence=enable_cache) if enable_cache else None
 
@@ -84,6 +92,13 @@ class UtilizationReviewSimulation:
             payor_model = CachedLLM(payor_model, self.cache, agent_name="payor")
         # create deterministic LLM for test result generation (temperature=0)
         self.test_result_llm = self._create_llm(provider_llm, azure_config, temperature=0)
+
+        # initialize truth checker if enabled
+        if enable_truth_checking:
+            truth_checker_model = self._create_llm(truth_checker_llm, azure_config, temperature=0)
+            self.truth_checker = TruthChecker(truth_checker_model)
+        else:
+            self.truth_checker = None
 
         self.provider = ProviderAgent(provider_model)
         self.payor = PayorAgent(payor_model)
@@ -190,15 +205,36 @@ class UtilizationReviewSimulation:
             return self.test_result_cache[cache_key]
 
         # check if test result is pre-defined in test_result_templates
+        # use case-insensitive matching to avoid false negatives from capitalization
         test_templates = case.get("test_result_templates", {})
-        if test_name in test_templates:
+
+        # normalize query
+        query = test_name.lower().strip()
+
+        # create normalized lookup dict
+        normalized_templates = {k.lower().strip(): (k, v) for k, v in test_templates.items()}
+
+        # exact match (case-insensitive)
+        if query in normalized_templates:
+            original_key, template_value = normalized_templates[query]
             result = {
                 "test_name": test_name,
-                "value": test_templates[test_name],
+                "value": template_value,
                 "generated": False
             }
             self.test_result_cache[cache_key] = result
             return result
+
+        # partial match (e.g., "echo" matches "echocardiogram")
+        for normalized_key, (original_key, template_value) in normalized_templates.items():
+            if normalized_key in query or query in normalized_key:
+                result = {
+                    "test_name": test_name,
+                    "value": template_value,
+                    "generated": False
+                }
+                self.test_result_cache[cache_key] = result
+                return result
 
         # generate test result using LLM with environment_hidden_data
         hidden_data = case.get("environment_hidden_data", {})
@@ -237,6 +273,51 @@ Test result for {test_name}:"""
         self.test_result_cache[cache_key] = result
         return result
 
+    def _build_admission_from_patient_data(self, case: Dict[str, Any]) -> AdmissionNotification:
+        """construct AdmissionNotification from patient_visible_data (Golden Schema)"""
+        from datetime import datetime
+
+        patient_data = case["patient_visible_data"]
+        insurance_data = case.get("insurance_info", {})
+
+        demographics = PatientDemographics(
+            patient_id=patient_data.get("patient_id", "UNKNOWN"),
+            age=patient_data.get("age", 0),
+            sex=patient_data.get("sex", "M"),
+            mrn=patient_data.get("patient_id", "UNKNOWN")
+        )
+
+        insurance = InsuranceInfo(
+            plan_type=insurance_data.get("plan_type", "MA"),
+            payer_name=insurance_data.get("payer_name", "Unknown"),
+            member_id=patient_data.get("patient_id", "UNKNOWN"),
+            authorization_required=insurance_data.get("authorization_required", True)
+        )
+
+        admission_date_str = patient_data.get("admission_date", "2024-01-01")
+        admission_date = datetime.strptime(admission_date_str, "%Y-%m-%d").date()
+
+        return AdmissionNotification(
+            patient_demographics=demographics,
+            insurance=insurance,
+            admission_date=admission_date,
+            admission_source=patient_data.get("admission_source", "Direct"),
+            chief_complaint=patient_data.get("chief_complaint", ""),
+            preliminary_diagnoses=patient_data.get("medical_history", [])
+        )
+
+    def _build_clinical_presentation_from_patient_data(self, case: Dict[str, Any]) -> ClinicalPresentation:
+        """construct ClinicalPresentation from patient_visible_data (Golden Schema)"""
+        patient_data = case["patient_visible_data"]
+
+        return ClinicalPresentation(
+            chief_complaint=patient_data.get("chief_complaint", ""),
+            history_of_present_illness=patient_data.get("presenting_symptoms", patient_data.get("chief_complaint", "")),
+            vital_signs=patient_data.get("vital_signs", {}),
+            physical_exam_findings=patient_data.get("presenting_symptoms", ""),
+            medical_history=patient_data.get("medical_history", [])
+        )
+
     def run_case(self, case: Dict[str, Any]) -> EncounterState:
         """
         Run single case through 4-phase utilization review workflow.
@@ -259,22 +340,34 @@ Test result for {test_name}:"""
 
         pa_type = case.get("pa_type", PAType.INPATIENT_ADMISSION)
 
+        # construct structured objects from Golden Schema (patient_visible_data)
+        admission = self._build_admission_from_patient_data(case)
+        clinical_presentation = self._build_clinical_presentation_from_patient_data(case)
+
         state = EncounterState(
             case_id=case["case_id"],
-            admission_date=case["admission"].admission_date,
-            admission=case["admission"],
-            clinical_presentation=case["clinical_presentation"],
+            admission_date=admission.admission_date,
+            admission=admission,
+            clinical_presentation=clinical_presentation,
             pa_type=pa_type
         )
 
         # unified phase 2 workflow (all case types)
         state = self._phase_2_unified_pa(state, case)
 
+        # truth checking after phase 2 (if enabled)
+        if self.enable_truth_checking and self.truth_checker:
+            state = self._run_truth_check_phase2(state, case)
+
         # phase 3: claims adjudication (if treatment was approved and delivered)
         # applies to ALL PA types
         if (state.medication_authorization and
             state.medication_authorization.authorization_status == "approved"):
             state = self._phase_3_claims(state, case, pa_type)
+
+            # truth checking after phase 3 appeals (if enabled and appeal was filed)
+            if self.enable_truth_checking and self.truth_checker and state.appeal_filed:
+                state = self._run_truth_check_phase3(state, case)
 
         # phase 4: financial settlement
         if state.medication_authorization:
@@ -293,6 +386,25 @@ Test result for {test_name}:"""
             "payor": DEFAULT_PAYOR_PARAMS
         }
         summary["master_seed"] = self.master_seed
+
+        # add truth check summary if available
+        if self.enable_truth_checking:
+            truth_check_summary = {}
+            if state.truth_check_phase2:
+                truth_check_summary["phase2"] = {
+                    "is_deceptive": state.truth_check_phase2.is_deceptive,
+                    "deception_score": state.truth_check_phase2.deception_score,
+                    "hallucinated_claims": state.truth_check_phase2.hallucinated_claims
+                }
+            if state.truth_check_phase3:
+                truth_check_summary["phase3"] = {
+                    "is_deceptive": state.truth_check_phase3.is_deceptive,
+                    "deception_score": state.truth_check_phase3.deception_score,
+                    "hallucinated_claims": state.truth_check_phase3.hallucinated_claims
+                }
+            if truth_check_summary:
+                summary["truth_check_summary"] = truth_check_summary
+
         self.audit_logger.finalize(summary)
         state.audit_log = self.audit_logger.get_audit_log()
 
@@ -947,3 +1059,112 @@ Test result for {test_name}:"""
         """clear all cache entries"""
         if self.cache:
             self.cache.clear()
+
+    def _extract_provider_request_from_phase2(self, state: EncounterState) -> str:
+        """
+        extract provider PA request letter from phase 2 audit log
+
+        the PA request is logged in phase_2_pa with action containing 'treatment request'
+        we want the full LLM response text that contains the clinical justification
+        """
+        # get current audit log from logger (state.audit_log not attached yet)
+        if not hasattr(self, 'audit_logger') or not self.audit_logger:
+            return ""
+
+        audit_log = self.audit_logger.get_audit_log()
+
+        for interaction in audit_log.interactions:
+            if interaction.phase == "phase_2_pa" and interaction.action == "treatment_request" and interaction.agent == "provider":
+                return interaction.llm_response
+
+        return ""
+
+    def _extract_provider_appeal_from_phase3(self, state: EncounterState) -> str:
+        """
+        extract provider appeal letter from phase 3 audit log
+
+        used to detect if provider doubles down on hallucinations during appeals
+        """
+        # get current audit log from logger (state.audit_log not attached yet)
+        if not hasattr(self, 'audit_logger') or not self.audit_logger:
+            return ""
+
+        audit_log = self.audit_logger.get_audit_log()
+
+        for interaction in audit_log.interactions:
+            if interaction.phase == "phase_3_claims" and interaction.action == "appeal_submission" and interaction.agent == "provider":
+                return interaction.llm_response
+
+        return ""
+
+    def _run_truth_check_phase2(self, state: EncounterState, case: Dict[str, Any]) -> EncounterState:
+        """
+        run truth checker on phase 2 PA request
+
+        extracts provider request and verifies against ground truth
+        saves result to experiments/results/ and attaches to state
+        """
+        import os
+
+        provider_request = self._extract_provider_request_from_phase2(state)
+        if not provider_request:
+            return state
+
+        ground_truth = case.get("environment_hidden_data", {})
+
+        # run truth checker
+        truth_result = self.truth_checker.check_claims(
+            provider_output=provider_request,
+            ground_truth=ground_truth,
+            case_id=case["case_id"],
+            phase="phase_2_pa"
+        )
+
+        # save to experiments/results/ (use absolute path from project root)
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        results_dir = os.path.join(project_root, "experiments", "results")
+        os.makedirs(results_dir, exist_ok=True)
+        output_path = os.path.join(results_dir, f"{case['case_id']}_phase2_truth_check.json")
+        with open(output_path, 'w') as f:
+            json.dump(truth_result.model_dump(), f, indent=2)
+
+        # attach to state
+        state.truth_check_phase2 = truth_result
+
+        return state
+
+    def _run_truth_check_phase3(self, state: EncounterState, case: Dict[str, Any]) -> EncounterState:
+        """
+        run truth checker on phase 3 appeal letter
+
+        detects if provider doubles down on hallucinations during appeals
+        saves result to experiments/results/ and attaches to state
+        """
+        import os
+
+        provider_appeal = self._extract_provider_appeal_from_phase3(state)
+        if not provider_appeal:
+            return state
+
+        ground_truth = case.get("environment_hidden_data", {})
+
+        # run truth checker
+        truth_result = self.truth_checker.check_claims(
+            provider_output=provider_appeal,
+            ground_truth=ground_truth,
+            case_id=case["case_id"],
+            phase="phase_3_appeal"
+        )
+
+        # save to experiments/results/ (use absolute path from project root)
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        results_dir = os.path.join(project_root, "experiments", "results")
+        os.makedirs(results_dir, exist_ok=True)
+        output_path = os.path.join(results_dir, f"{case['case_id']}_phase3_truth_check.json")
+        with open(output_path, 'w') as f:
+            json.dump(truth_result.model_dump(), f, indent=2)
+
+        # attach to state
+        state.truth_check_phase3 = truth_result
+
+        return state
