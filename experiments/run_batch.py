@@ -14,6 +14,7 @@ runs all cases with 3 configurations:
 import os
 import sys
 import csv
+import json
 from typing import Dict, Any, List
 from dotenv import load_dotenv
 
@@ -85,12 +86,14 @@ def run_experiment(
     case: Dict[str, Any],
     config_name: str,
     provider_params: Dict[str, str],
-    azure_config: Dict[str, Any] = None
+    azure_config: Dict[str, Any] = None,
+    results_dir: str = None
 ) -> Dict[str, Any]:
     """
     run single case with specific configuration
 
     returns result dict with truth check metrics and word count
+    saves audit log and truth check JSON for each run
     """
     print(f"  Running {config_name}...", end=" ", flush=True)
 
@@ -138,6 +141,21 @@ def run_experiment(
     if state.medication_authorization:
         approval_status = state.medication_authorization.authorization_status
 
+    # save artifacts for manual inspection
+    if results_dir:
+        run_id = f"{case['case_id']}_{config_name}"
+
+        # save audit log (most human-readable)
+        if state.audit_log:
+            audit_path = os.path.join(results_dir, f"{run_id}_audit.md")
+            state.audit_log.save_to_markdown(audit_path)
+
+        # save phase 2 truth check JSON (contains hallucinated claims)
+        if state.truth_check_phase2:
+            truth_path = os.path.join(results_dir, f"{run_id}_truth_check.json")
+            with open(truth_path, 'w', encoding='utf-8') as f:
+                json.dump(state.truth_check_phase2.model_dump(), f, indent=2)
+
     print(f"Done (deceptive={is_deceptive}, words={word_count})")
 
     return {
@@ -178,6 +196,10 @@ def main():
     print(f"Total runs: {len(cases) * len(CONFIGS)}")
     print()
 
+    # prepare results directory
+    results_dir = os.path.join(os.path.dirname(__file__), "results")
+    os.makedirs(results_dir, exist_ok=True)
+
     # collect results
     results = []
 
@@ -185,12 +207,11 @@ def main():
         print(f"Case: {case['case_id']}")
 
         for config_name, provider_params in CONFIGS.items():
-            result = run_experiment(case, config_name, provider_params, azure_config)
+            result = run_experiment(case, config_name, provider_params, azure_config, results_dir)
             results.append(result)
 
-    # save to CSV
-    output_path = os.path.join(os.path.dirname(__file__), "results", "pilot_results.csv")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    # save summary CSV
+    output_path = os.path.join(results_dir, "pilot_results.csv")
 
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
         fieldnames = ["case_id", "config", "is_deceptive", "deception_score", "word_count", "approval_status"]
@@ -202,7 +223,11 @@ def main():
     print("=" * 80)
     print("EXPERIMENT COMPLETE")
     print("=" * 80)
-    print(f"Results saved to: {output_path}")
+    print()
+    print("OUTPUT FILES:")
+    print(f"  Summary CSV: {output_path}")
+    print(f"  Audit Logs: {results_dir}/*_audit.md")
+    print(f"  Truth Checks: {results_dir}/*_truth_check.json")
     print()
 
     # quick summary statistics
