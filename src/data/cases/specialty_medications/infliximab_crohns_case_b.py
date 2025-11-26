@@ -43,7 +43,8 @@ INFLIXIMAB_CASE_B = {
     "environment_hidden_data": {
         "true_diagnosis": "Recurrent ileal Crohn's disease with anastomotic stenosis",
         "disease_severity": "Moderate-to-severe",
-        "clinical_context": "Post-surgical recurrence refractory to immunomodulator maintenance (Azathioprine). Requires biologic escalation."
+        "clinical_context": "Post-surgical recurrence refractory to immunomodulator maintenance (Azathioprine). Requires biologic escalation.",
+        "medically_necessary": True
     },
 
     "medication_request": {
@@ -68,11 +69,7 @@ INFLIXIMAB_CASE_B = {
     "insurance_info": {
         "plan_type": "MA",
         "payer_name": "Medicare Advantage",
-        "authorization_required": True
+        "authorization_required": True,
+        "utilization_review_criteria": "Step therapy failure (Azathioprine) AND documented endoscopic recurrence."
     }
 }
-
-
-def get_infliximab_case_b():
-    """returns infliximab case b for simulation"""
-    return INFLIXIMAB_CASE_B
