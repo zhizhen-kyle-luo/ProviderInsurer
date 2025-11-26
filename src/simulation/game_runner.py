@@ -74,13 +74,19 @@ class UtilizationReviewSimulation:
         cache_dir: str = ".worm_cache",
         enable_cache: bool = True,
         enable_truth_checking: bool = False,
-        truth_checker_llm: str = "gpt-4o-mini"
+        truth_checker_llm: str = "gpt-4o-mini",
+        provider_params: Dict[str, str] = None,
+        payor_params: Dict[str, str] = None
     ):
         self.master_seed = master_seed if master_seed is not None else int(time.time())
         self.rng = random.Random(self.master_seed)
         self.confidence_threshold = confidence_threshold if confidence_threshold is not None else CONFIDENCE_THRESHOLD
         self.max_iterations = max_iterations if max_iterations is not None else MAX_ITERATIONS
         self.enable_truth_checking = enable_truth_checking
+
+        # store behavioral parameters for prompts
+        self.provider_params = provider_params if provider_params is not None else DEFAULT_PROVIDER_PARAMS
+        self.payor_params = payor_params if payor_params is not None else DEFAULT_PAYOR_PARAMS
 
         self.cache = WORMCache(cache_dir=cache_dir, enable_persistence=enable_cache) if enable_cache else None
 
@@ -382,8 +388,8 @@ Test result for {test_name}:"""
         # finalize audit log and attach to state with behavioral parameters
         summary = self.audit_logger._generate_summary()
         summary["behavioral_parameters"] = {
-            "provider": DEFAULT_PROVIDER_PARAMS,
-            "payor": DEFAULT_PAYOR_PARAMS
+            "provider": self.provider_params,
+            "payor": self.payor_params
         }
         summary["master_seed"] = self.master_seed
 
@@ -434,7 +440,7 @@ Test result for {test_name}:"""
 
         for iteration_num in range(1, self.max_iterations + 1):
             # provider generates request based on confidence
-            provider_system_prompt = create_provider_prompt(DEFAULT_PROVIDER_PARAMS)
+            provider_system_prompt = create_provider_prompt(self.provider_params)
             provider_user_prompt = create_unified_provider_request_prompt(
                 state, case, iteration_num, prior_iterations
             )
@@ -482,7 +488,7 @@ Test result for {test_name}:"""
             )
 
             # payor reviews request
-            payor_system_prompt = create_payor_prompt(DEFAULT_PAYOR_PARAMS)
+            payor_system_prompt = create_payor_prompt(self.payor_params)
             payor_user_prompt = create_unified_payor_review_prompt(
                 state, provider_request, iteration_num
             )
@@ -978,9 +984,57 @@ Test result for {test_name}:"""
                         state.appeal_successful = True
                         claim_approved = True
                     else:
-                        # appeal denied - provider could appeal again or stop
-                        # for simplicity, continue loop until max iterations
+                        # appeal denied - ask provider if they want to continue appealing
                         denial_reason = appeal_decision.get("denial_reason", "Appeal denied")
+
+                        # ask provider: appeal again or write off?
+                        provider_continue_prompt = f"""APPEAL DENIED
+
+Your appeal was denied with the following reason:
+{denial_reason}
+
+Amount at stake: ${cost_ref.get('procedure_cost', 0):.2f}
+Appeals filed so far: {appeal_iteration}
+Maximum appeals allowed: {MAX_PHASE_3_ITERATIONS}
+
+DECISION REQUIRED:
+Do you want to submit ANOTHER appeal, or write off this claim?
+
+Respond in JSON:
+{{
+    "decision": "appeal" | "write_off",
+    "rationale": "<brief explanation>"
+}}
+"""
+
+                        messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_continue_prompt}")]
+                        response = self.provider.llm.invoke(messages)
+
+                        try:
+                            response_text = response.content
+                            if "```json" in response_text:
+                                response_text = response_text.split("```json")[1].split("```")[0].strip()
+                            elif "```" in response_text:
+                                response_text = response_text.split("```")[1].split("```")[0].strip()
+                            continue_decision = json.loads(response_text)
+                        except:
+                            continue_decision = {"decision": "write_off", "rationale": "Parse error - default to write_off"}
+
+                        # log provider decision
+                        self.audit_logger.log_interaction(
+                            phase="phase_3_claims",
+                            agent="provider",
+                            action="appeal_continuation_decision",
+                            system_prompt=provider_system_prompt,
+                            user_prompt=provider_continue_prompt,
+                            llm_response=response.content,
+                            parsed_output=continue_decision,
+                            metadata={"appeal_iteration": appeal_iteration, "decision": continue_decision.get("decision")}
+                        )
+
+                        # if provider chooses to write off, exit appeal loop
+                        if continue_decision.get("decision") != "appeal":
+                            break
 
         return state
     def _phase_4_medication_financial(
