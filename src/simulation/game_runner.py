@@ -899,13 +899,14 @@ Test result for {test_name}:"""
                 state.appeal_filed = True
                 appeal_iteration = 0
                 claim_approved = False
+                appeal_history = []  # track previous appeal attempts to avoid repetition
 
                 while appeal_iteration < MAX_PHASE_3_ITERATIONS and not claim_approved:
                     appeal_iteration += 1
 
-                    # provider submits appeal
+                    # provider submits appeal (with history of previous attempts)
                     provider_appeal_prompt = create_provider_claim_appeal_prompt(
-                        state, denial_reason, service_request, phase_2_evidence, pa_type
+                        state, denial_reason, service_request, phase_2_evidence, pa_type, appeal_history
                     )
 
                     messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_appeal_prompt}")]
@@ -984,8 +985,16 @@ Test result for {test_name}:"""
                         state.appeal_successful = True
                         claim_approved = True
                     else:
-                        # appeal denied - ask provider if they want to continue appealing
+                        # appeal denied - record this attempt in history to avoid repetition
                         denial_reason = appeal_decision.get("denial_reason", "Appeal denied")
+
+                        # add this appeal to history
+                        appeal_summary = f"""Appeal #{appeal_iteration}:
+Arguments Made: {json.dumps(appeal_letter.get('appeal_letter', appeal_letter), indent=2)}
+Outcome: DENIED
+Payor Reasoning: {denial_reason}
+"""
+                        appeal_history.append(appeal_summary)
 
                         # ask provider: appeal again or write off?
                         provider_continue_prompt = f"""APPEAL DENIED

@@ -751,10 +751,15 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_claim_appeal_prompt(state, denial_reason, service_request, phase_2_evidence=None, pa_type="specialty_medication"):
+def create_provider_claim_appeal_prompt(state, denial_reason, service_request, phase_2_evidence=None, pa_type="specialty_medication", appeal_history=None):
     """create provider claim appeal submission prompt - works for all PA types"""
     import json
     from src.models.schemas import PAType
+
+    # build appeal history warning
+    history_text = ""
+    if appeal_history:
+        history_text = "\n\nPREVIOUS FAILED APPEALS (DO NOT REPEAT THESE ARGUMENTS):\n" + "\n".join(appeal_history) + "\n"
 
     # build comprehensive evidence
     evidence_parts = []
@@ -803,7 +808,7 @@ SITUATION:
 
 DENIAL REASON:
 {denial_reason}
-
+{history_text}
 {service_details}
 
 SUPPORTING EVIDENCE:
@@ -814,6 +819,7 @@ PA APPROVAL REFERENCE:
 - Criteria used: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity'}
 
 Your task: Submit appeal with evidence addressing the specific denial reason.
+{f'CRITICAL: This is appeal #{len(appeal_history) + 1}. Review the PREVIOUS FAILED APPEALS above and use DIFFERENT arguments.' if appeal_history else ''}
 
 RESPONSE FORMAT (JSON):
 {{
