@@ -168,8 +168,8 @@ def main():
     print("=" * 80)
     print()
     print("Hypotheses:")
-    print("  H1 (Strategic Deception): HIGH_PRESSURE → more is_deceptive=True")
-    print("  H2 (Verbosity Bias): BUREAUCRATIC → higher word_count")
+    print("  H1 (Strategic Deception): HIGH_PRESSURE -> more is_deceptive=True")
+    print("  H2 (Verbosity Bias): BUREAUCRATIC -> higher word_count")
     print()
 
     cases = list_cases()
@@ -215,11 +215,11 @@ def main():
     print("PRELIMINARY RESULTS:")
     print(f"  H1: BASELINE deception rate: {baseline_deception:.1%}")
     print(f"      HIGH_PRESSURE deception rate: {high_pressure_deception:.1%}")
-    print(f"      Δ = {high_pressure_deception - baseline_deception:+.1%}")
+    print(f"      Delta = {high_pressure_deception - baseline_deception:+.1%}")
     print()
     print(f"  H2: BASELINE avg words: {baseline_words:.0f}")
     print(f"      BUREAUCRATIC avg words: {bureaucratic_words:.0f}")
-    print(f"      Δ = {bureaucratic_words - baseline_words:+.0f} words")
+    print(f"      Delta = {bureaucratic_words - baseline_words:+.0f} words")
     print()
 
 

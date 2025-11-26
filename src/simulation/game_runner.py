@@ -3,6 +3,7 @@ from datetime import date, timedelta
 import time
 import random
 import json
+import os
 from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import HumanMessage
 from src.models.schemas import (
@@ -52,6 +53,13 @@ from src.utils.prompts import (
 )
 
 
+def _get_project_cache_dir() -> str:
+    """get absolute path to project root .worm_cache directory"""
+    # navigate from src/simulation/game_runner.py -> MASH root
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(project_root, ".worm_cache")
+
+
 class UtilizationReviewSimulation:
     """
     2-agent Provider-Payer concurrent utilization review simulation.
@@ -71,7 +79,7 @@ class UtilizationReviewSimulation:
         confidence_threshold: float = None,
         max_iterations: int = None,
         azure_config: Dict[str, Any] = None,
-        cache_dir: str = ".worm_cache",
+        cache_dir: str = None,
         enable_cache: bool = True,
         enable_truth_checking: bool = False,
         truth_checker_llm: str = "gpt-4o-mini",
@@ -88,7 +96,9 @@ class UtilizationReviewSimulation:
         self.provider_params = provider_params if provider_params is not None else DEFAULT_PROVIDER_PARAMS
         self.payor_params = payor_params if payor_params is not None else DEFAULT_PAYOR_PARAMS
 
-        self.cache = WORMCache(cache_dir=cache_dir, enable_persistence=enable_cache) if enable_cache else None
+        # use project root cache directory if not specified
+        cache_path = cache_dir if cache_dir is not None else _get_project_cache_dir()
+        self.cache = WORMCache(cache_dir=cache_path, enable_persistence=enable_cache) if enable_cache else None
 
         provider_model = self._create_llm(provider_llm, azure_config)
         payor_model = self._create_llm(payor_llm, azure_config)
