@@ -44,7 +44,8 @@ CHEST_PAIN_CASE = {
     "environment_hidden_data": {
         "true_diagnosis": "Coronary Artery Disease (Severe)",
         "disease_severity": "Critical (99% LAD occlusion found later)",
-        "clinical_context": "High risk patient (smoker, age, HTN) with atypical but concerning symptoms. Resting ECG has T-wave inversions V2-V4."
+        "clinical_context": "High risk patient (smoker, age, HTN) with atypical but concerning symptoms. Resting ECG has T-wave inversions V2-V4.",
+        "medically_necessary": True
     },
 
     "procedure_request": {
@@ -57,11 +58,14 @@ CHEST_PAIN_CASE = {
     "insurance_info": {
         "plan_type": "Commercial",
         "payer_name": "BlueCross",
-        "authorization_required": True
+        "authorization_required": True,
+        "utilization_review_criteria": "Cardiac stress testing requires: atypical chest pain AND ≥2 cardiac risk factors (age >55, smoking, HTN, hyperlipidemia)."
+    },
+
+    "cost_reference": {
+        "procedure_cost": 1200.00,
+        "pa_review_cost": 75.00,
+        "claim_review_cost": 50.00,
+        "appeal_cost": 180.00
     }
 }
-
-
-def get_chest_pain_case():
-    """returns chest pain stress test case for simulation"""
-    return CHEST_PAIN_CASE
