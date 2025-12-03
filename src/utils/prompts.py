@@ -419,25 +419,41 @@ TASK: Based on your current diagnostic confidence, decide your next action:
 - If confidence < {CONFIDENCE_THRESHOLD}: Request diagnostic test PA to build confidence
 - If confidence >= {CONFIDENCE_THRESHOLD}: Request treatment PA (medication, procedure, admission)
 
+CLINICAL DOCUMENTATION:
+Update your clinical notes each iteration as you narrow your differential diagnosis. Notes should:
+- Integrate new test results and clinical findings
+- Document evolving diagnostic reasoning
+- Support medical necessity for requested service
+- Follow standard H&P format (concise, pertinent findings only)
+
+Your notes should justify the requested service based on clinical data.
+
 RESPONSE FORMAT (JSON):
 {{
-    "confidence": <float 0.0-1.0>,
-    "confidence_rationale": "<explain why this confidence level based on available data>",
-    "differential_diagnoses": ["<diagnosis 1>", "<diagnosis 2>", ...],
+    "diagnosis_codes": [
+        {{
+            "icd10": "<ICD-10 code>",
+            "description": "<diagnosis description>"
+        }}
+    ],
     "request_type": "diagnostic_test" or "treatment",
-    "request_details": {{
+    "requested_service": {{
         // if diagnostic_test:
-        "test_name": "<specific test>",
-        "test_justification": "<why this test will increase confidence>",
+        "procedure_code": "<CPT code for test>",
+        "code_type": "CPT",
+        "service_name": "<specific test>",
+        "test_justification": "<why this test will establish diagnosis>",
         "expected_findings": "<what results would confirm/rule out diagnosis>"
 
         // if treatment:
-        "treatment_type": "medication" or "procedure" or "admission",
-        "treatment_name": "<specific treatment>",
-        "treatment_justification": "<why treatment is medically necessary>",
+        "procedure_code": "<CPT/HCPCS/J-code>",
+        "code_type": "CPT" or "HCPCS" or "J-code",
+        "service_name": "<specific treatment>",
+        "clinical_justification": "<why treatment is medically necessary>",
         "clinical_evidence": "<objective data supporting request>",
         "guideline_references": ["<guideline 1>", "<guideline 2>"]
-    }}
+    }},
+    "clinical_notes": "<narrative H&P-style documentation integrating all findings to date>"
 }}"""
 
 def create_unified_payor_review_prompt(state, provider_request, iteration):
@@ -686,13 +702,26 @@ Your task: Submit comprehensive claim for payment with supporting documentation.
 RESPONSE FORMAT (JSON):
 {{
     "claim_submission": {{
-        "{response_field}": "<service name and details>",
-        "treatment_dates": "<date range or single date>",
-        "billing_codes": ["<J-code or CPT or procedure code>", ...],
-        "amount_billed": <dollar amount>,
-        "clinical_documentation": "<summary of treatment necessity and delivery>",
+        "diagnosis_codes": [
+            {{
+                "icd10": "<ICD-10 code>",
+                "description": "<diagnosis description>"
+            }}
+        ],
+        "procedure_codes": [
+            {{
+                "code": "<CPT/HCPCS/J-code>",
+                "code_type": "CPT" or "HCPCS" or "J-code",
+                "description": "<service description>",
+                "quantity": <number>,
+                "amount_billed": <dollar amount per unit>
+            }}
+        ],
+        "total_amount_billed": <total dollar amount>,
+        "clinical_evidence": "<objective data: labs, imaging, vitals>",
+        "clinical_notes": "<narrative documentation from Phase 2>",
         "pa_reference": "<reference to phase 2 PA approval>",
-        "supporting_evidence": ["<test results>", "<clinical notes>", ...]
+        "supporting_evidence": ["<objective finding 1>", "<objective finding 2>", ...]
     }}
 }}"""
 
