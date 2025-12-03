@@ -1185,12 +1185,53 @@ Respond in JSON:
 
         ground_truth = case.get("environment_hidden_data", {})
 
-        # run truth checker
+        # extract phase 2 interaction history from audit log
+        phase_2_interactions = []
+        test_results_returned = {}
+        if state.audit_log:
+            for interaction in state.audit_log.interactions:
+                if interaction.phase == "phase_2_pa":
+                    # extract request summary
+                    request_summary = "N/A"
+                    if interaction.agent == "provider":
+                        req_service = interaction.parsed_output.get("requested_service", {})
+                        request_summary = req_service.get("service_name", "N/A")
+
+                    # extract response summary (test results from environment)
+                    response_summary = None
+                    if interaction.agent == "environment":
+                        response_summary = interaction.parsed_output
+                        # collect test results
+                        if "test_results" in interaction.parsed_output:
+                            test_results_returned.update(interaction.parsed_output["test_results"])
+
+                    phase_2_interactions.append({
+                        "iteration": interaction.metadata.get("iteration", "?"),
+                        "agent": interaction.agent,
+                        "action": interaction.action,
+                        "request_summary": request_summary,
+                        "response_summary": response_summary,
+                        "full_request": interaction.parsed_output
+                    })
+
+        # build full context for truth checker
+        full_context = {
+            "interaction_history": phase_2_interactions,
+            "patient_visible_data": case.get("patient_visible_data", {}),
+            "test_results_returned": test_results_returned,
+            "behavioral_params": {
+                "provider": self.provider_params,
+                "payor": self.payor_params
+            }
+        }
+
+        # run truth checker with full context
         truth_result = self.truth_checker.check_claims(
             provider_output=provider_request,
             ground_truth=ground_truth,
             case_id=case["case_id"],
-            phase="phase_2_pa"
+            phase="phase_2_pa",
+            full_context=full_context
         )
 
         # save to experiments/results/ (use absolute path from project root)
@@ -1221,12 +1262,35 @@ Respond in JSON:
 
         ground_truth = case.get("environment_hidden_data", {})
 
-        # run truth checker
+        # extract phase 3 interaction history (for context in appeals)
+        phase_3_interactions = []
+        if state.audit_log:
+            for interaction in state.audit_log.interactions:
+                if interaction.phase == "phase_3_claims":
+                    phase_3_interactions.append({
+                        "iteration": interaction.metadata.get("iteration", "?"),
+                        "agent": interaction.agent,
+                        "action": interaction.action,
+                        "full_request": interaction.parsed_output
+                    })
+
+        # build full context (reuse patient data and test results from phase 2)
+        full_context = {
+            "interaction_history": phase_3_interactions,
+            "patient_visible_data": case.get("patient_visible_data", {}),
+            "behavioral_params": {
+                "provider": self.provider_params,
+                "payor": self.payor_params
+            }
+        }
+
+        # run truth checker with full context
         truth_result = self.truth_checker.check_claims(
             provider_output=provider_appeal,
             ground_truth=ground_truth,
             case_id=case["case_id"],
-            phase="phase_3_appeal"
+            phase="phase_3_appeal",
+            full_context=full_context
         )
 
         # save to experiments/results/ (use absolute path from project root)
