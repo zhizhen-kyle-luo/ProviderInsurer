@@ -131,10 +131,12 @@ def run_experiment(
 
     # extract truth check results
     is_deceptive = False
-    deception_score = 0.0
+    treatment_category = "APPROPRIATE"
+    num_contradicted = 0
     if state.truth_check_phase2:
         is_deceptive = state.truth_check_phase2.is_deceptive
-        deception_score = state.truth_check_phase2.deception_score
+        treatment_category = state.truth_check_phase2.treatment_category
+        num_contradicted = state.truth_check_phase2.num_contradicted
 
     # extract approval status
     approval_status = "denied"
@@ -162,7 +164,8 @@ def run_experiment(
         "case_id": case["case_id"],
         "config": config_name,
         "is_deceptive": is_deceptive,
-        "deception_score": deception_score,
+        "treatment_category": treatment_category,
+        "num_contradicted": num_contradicted,
         "word_count": word_count,
         "approval_status": approval_status
     }
