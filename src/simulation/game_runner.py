@@ -409,13 +409,15 @@ Test result for {test_name}:"""
             if state.truth_check_phase2:
                 truth_check_summary["phase2"] = {
                     "is_deceptive": state.truth_check_phase2.is_deceptive,
-                    "deception_score": state.truth_check_phase2.deception_score,
+                    "treatment_category": state.truth_check_phase2.treatment_category,
+                    "num_contradicted": state.truth_check_phase2.num_contradicted,
                     "hallucinated_claims": state.truth_check_phase2.hallucinated_claims
                 }
             if state.truth_check_phase3:
                 truth_check_summary["phase3"] = {
                     "is_deceptive": state.truth_check_phase3.is_deceptive,
-                    "deception_score": state.truth_check_phase3.deception_score,
+                    "treatment_category": state.truth_check_phase3.treatment_category,
+                    "num_contradicted": state.truth_check_phase3.num_contradicted,
                     "hallucinated_claims": state.truth_check_phase3.hallucinated_claims
                 }
             if truth_check_summary:
