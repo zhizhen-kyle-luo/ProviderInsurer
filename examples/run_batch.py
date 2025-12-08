@@ -119,13 +119,14 @@ def run_experiment(
 
     state = sim.run_case(case)
 
-    # extract provider output for word count
+    # extract provider output for word count (take last request from phase 2)
     provider_request_text = ""
     if state.audit_log:
-        for interaction in state.audit_log.interactions:
-            if interaction.phase == "phase_2_pa" and interaction.agent == "provider" and interaction.action == "treatment_request":
-                provider_request_text = interaction.llm_response
-                break
+        for interaction in reversed(state.audit_log.interactions):
+            if interaction.phase == "phase_2_pa" and interaction.agent == "provider":
+                if interaction.action in ["treatment_request", "diagnostic_test_request"]:
+                    provider_request_text = interaction.llm_response
+                    break
 
     word_count = count_words(provider_request_text)
 
@@ -217,7 +218,7 @@ def main():
     output_path = os.path.join(results_dir, "pilot_results.csv")
 
     with open(output_path, 'w', newline='', encoding='utf-8') as f:
-        fieldnames = ["case_id", "config", "is_deceptive", "deception_score", "word_count", "approval_status"]
+        fieldnames = ["case_id", "config", "is_deceptive", "treatment_category", "num_contradicted", "word_count", "approval_status"]
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
