@@ -1,7 +1,7 @@
 # Audit Log: infliximab_crohns_case_b
 
-**Simulation Start:** 2025-11-26T00:17:38.314055
-**Simulation End:** 2025-11-26T00:17:44.063642
+**Simulation Start:** 2025-12-07T22:37:39.394077
+**Simulation End:** 2025-12-07T22:37:44.425881
 
 ## How to Read This Audit Log
 
@@ -33,7 +33,7 @@ Each interaction below contains the following sections:
 **Behavioral Parameters:**
 - **Provider:**
   - patient_care_weight: high
-  - documentation_style: moderate
+  - documentation_style: minimal
   - risk_tolerance: high
   - ai_adoption: moderate
 - **Payor:**
@@ -44,21 +44,44 @@ Each interaction below contains the following sections:
 
 **Truth Check Summary:**
 - **Phase 2 (PA Request):**
+  - Treatment Category: APPROPRIATE
   - Deceptive: False
-  - Deception Score: 0.00
+  - Contradicted Claims: 0
   - Hallucinated Claims: 0
+
+---
+
+## environment agent actions
+
+these actions represent deterministic environment agent behaviors (noise injection, test result generation, etc.)
+
+### environment action 1: Phase 1 Presentation
+
+**timestamp:** 2025-12-07T22:37:39.394077
+**action type:** data_quality_check
+**description:** no environmental noise introduced (clean data)
+
+**outcome:**
+```json
+{
+  "noise_applied": false
+}
+```
+
+**metadata:**
+- noise_probability: 0.0
 
 ---
 
 ## Interaction 1: Phase 2: Prior Authorization
 
-**Timestamp:** 2025-11-26T00:17:38.314055
+**Timestamp:** 2025-12-07T22:37:39.394077
 **Agent:** Provider
 **Action:** Treatment Request
 
 **Metadata:**
 - iteration: 1
-- confidence: 0.95
+- confidence: 0.5
 - request_type: treatment
 - cache_hit: True
 
@@ -69,7 +92,7 @@ You are a PROVIDER agent (hospital/clinic) in Fee-for-Service Medicare Advantage
 
 BEHAVIORAL PARAMETERS:
 - Patient care priority: high (patient outcomes are primary concern, willing to spend extra time and resources even if less profitable)
-- Documentation style: moderate (standard documentation following clinical guidelines, typical detail level)
+- Documentation style: minimal (brief notes covering basic requirements only, faster but higher denial risk)
 - Risk tolerance: high (frequently treat before approval, willing to absorb costs if denied)
 - AI adoption: moderate (AI assists with templates and suggestions, provider reviews and edits all content)
 
@@ -178,25 +201,43 @@ TASK: Based on your current diagnostic confidence, decide your next action:
 - If confidence < 0.9: Request diagnostic test PA to build confidence
 - If confidence >= 0.9: Request treatment PA (medication, procedure, admission)
 
+CLINICAL DOCUMENTATION:
+Update your clinical notes each iteration as you narrow your differential diagnosis. Notes should:
+- Integrate new test results and clinical findings
+- Document evolving diagnostic reasoning
+- Support medical necessity for requested service
+- Follow standard H&P format (concise, pertinent findings only)
+- For diagnostic test requests: describe diagnoses as "working diagnosis" or "suspected" (provisional)
+- For treatment requests: reflect diagnostic certainty based on test results (confirmed diagnosis)
+
+Your notes should justify the requested service based on clinical data.
+
 RESPONSE FORMAT (JSON):
 {
-    "confidence": <float 0.0-1.0>,
-    "confidence_rationale": "<explain why this confidence level based on available data>",
-    "differential_diagnoses": ["<diagnosis 1>", "<diagnosis 2>", ...],
+    "diagnosis_codes": [
+        {
+            "icd10": "<ICD-10 code>",
+            "description": "<diagnosis description>"
+        }
+    ],
     "request_type": "diagnostic_test" or "treatment",
-    "request_details": {
+    "requested_service": {
         // if diagnostic_test:
-        "test_name": "<specific test>",
-        "test_justification": "<why this test will increase confidence>",
+        "procedure_code": "<CPT code for test>",
+        "code_type": "CPT",
+        "service_name": "<specific test>",
+        "test_justification": "<why this test will establish diagnosis>",
         "expected_findings": "<what results would confirm/rule out diagnosis>"
 
         // if treatment:
-        "treatment_type": "medication" or "procedure" or "admission",
-        "treatment_name": "<specific treatment>",
-        "treatment_justification": "<why treatment is medically necessary>",
+        "procedure_code": "<CPT/HCPCS/J-code>",
+        "code_type": "CPT" or "HCPCS" or "J-code",
+        "service_name": "<specific treatment>",
+        "clinical_justification": "<why treatment is medically necessary>",
         "clinical_evidence": "<objective data supporting request>",
         "guideline_references": ["<guideline 1>", "<guideline 2>"]
-    }
+    },
+    "clinical_notes": "<narrative H&P-style documentation integrating all findings to date>"
 }
 ```
 
@@ -205,20 +246,29 @@ RESPONSE FORMAT (JSON):
 ```
 ```json
 {
-    "confidence": 0.95,
-    "confidence_rationale": "The patient has a long-standing history of ileal Crohn's disease with documented complications such as recurrent subocclusive episodes and endoscopic evidence of recurrence with stenosis. Failure of prior maintenance therapy with Azathioprine and the high-risk phenotype further support the need for escalated therapy. Clinical guidelines for Crohn's disease endorse the use of combination therapy (Infliximab + Azathioprine) for patients with severe disease and those who have failed conventional therapies.",
-    "differential_diagnoses": ["Ileal Crohn's disease with recurrence", "Post-surgical adhesions", "Functional bowel obstruction"],
+    "diagnosis_codes": [
+        {
+            "icd10": "K50.012",
+            "description": "Crohn's disease of small intestine with intestinal obstruction"
+        },
+        {
+            "icd10": "K56.60",
+            "description": "Unspecified intestinal obstruction"
+        }
+    ],
     "request_type": "treatment",
-    "request_details": {
-        "treatment_type": "medication",
-        "treatment_name": "Infliximab",
-        "treatment_justification": "Infliximab is indicated for patients with moderate-to-severe Crohn's disease who have failed prior maintenance therapies and exhibit high-risk features such as intestinal stenosis. The patient has already completed step therapy and has demonstrated failure of Azathioprine. Combination therapy is recommended per guidelines to enhance efficacy and reduce immunogenicity.",
-        "clinical_evidence": "Endoscopic findings of recurrence with stenosis, history of ileocecal resection, recurrent subocclusive episodes despite maintenance therapy with Azathioprine. ICD-10 codes K50.012 (Crohn's disease of small intestine with intestinal obstruction) and K56.60 (unspecified intestinal obstruction) are applicable.",
+    "requested_service": {
+        "procedure_code": "J1745",
+        "code_type": "HCPCS",
+        "service_name": "Infliximab, 10 mg",
+        "clinical_justification": "Patient has severe ileal Crohn's disease with documented endoscopic recurrence and stenosis, refractory to prior maintenance therapy with Azathioprine. Combination therapy with Infliximab and Azathioprine is indicated for patients with high-risk Crohn's disease to prevent further progression, reduce the risk of complications, and improve quality of life.",
+        "clinical_evidence": "1. Patient has failed Azathioprine maintenance therapy, evidenced by recurrent subocclusive episodes and endoscopic findings of stenosis. 2. High-risk phenotype with ileal involvement, prior surgical resection, and recurrent obstructive symptoms. 3. Guidelines support early initiation of biologic therapy in patients with high-risk Crohn's disease who fail conventional therapies.",
         "guideline_references": [
-            "American College of Gastroenterology Guidelines for the Management of Crohn's Disease",
-            "ECCO Consensus Guidelines on Crohn's Disease"
+            "American College of Gastroenterology (ACG) Clinical Guidelines: Management of Crohn's Disease in Adults (2021)",
+            "European Crohn's and Colitis Organisation (ECCO) Guidelines on Crohn's Disease (2020)"
         ]
-    }
+    },
+    "clinical_notes": "64-year-old female with a 20+ year history of ileal Crohn's disease complicated by prior ileocecal resection (2004) and recurrent subocclusive episodes presents with worsening abdominal pain and obstructive symptoms. Recent endoscopy demonstrated recurrence with ileal stenosis. Patient has been on Azathioprine for maintenance but continues to experience clinical and endoscopic disease activity, indicating failure of monotherapy. Given her high-risk disease phenotype (ileal involvement, prior surgery, recurrent obstruction), escalation to combination therapy with Infliximab and Azathioprine is warranted per current guidelines. The proposed treatment plan aims to reduce the risk of further complications, improve symptoms, and prevent disease progression. Infliximab will be initiated at 5 mg/kg at weeks 0, 2, and 6, followed by every 8 weeks for a duration of 12 months."
 }
 ```
 ```
@@ -227,24 +277,29 @@ RESPONSE FORMAT (JSON):
 
 ```json
 {
-  "confidence": 0.95,
-  "confidence_rationale": "The patient has a long-standing history of ileal Crohn's disease with documented complications such as recurrent subocclusive episodes and endoscopic evidence of recurrence with stenosis. Failure of prior maintenance therapy with Azathioprine and the high-risk phenotype further support the need for escalated therapy. Clinical guidelines for Crohn's disease endorse the use of combination therapy (Infliximab + Azathioprine) for patients with severe disease and those who have failed conventional therapies.",
-  "differential_diagnoses": [
-    "Ileal Crohn's disease with recurrence",
-    "Post-surgical adhesions",
-    "Functional bowel obstruction"
+  "diagnosis_codes": [
+    {
+      "icd10": "K50.012",
+      "description": "Crohn's disease of small intestine with intestinal obstruction"
+    },
+    {
+      "icd10": "K56.60",
+      "description": "Unspecified intestinal obstruction"
+    }
   ],
   "request_type": "treatment",
-  "request_details": {
-    "treatment_type": "medication",
-    "treatment_name": "Infliximab",
-    "treatment_justification": "Infliximab is indicated for patients with moderate-to-severe Crohn's disease who have failed prior maintenance therapies and exhibit high-risk features such as intestinal stenosis. The patient has already completed step therapy and has demonstrated failure of Azathioprine. Combination therapy is recommended per guidelines to enhance efficacy and reduce immunogenicity.",
-    "clinical_evidence": "Endoscopic findings of recurrence with stenosis, history of ileocecal resection, recurrent subocclusive episodes despite maintenance therapy with Azathioprine. ICD-10 codes K50.012 (Crohn's disease of small intestine with intestinal obstruction) and K56.60 (unspecified intestinal obstruction) are applicable.",
+  "requested_service": {
+    "procedure_code": "J1745",
+    "code_type": "HCPCS",
+    "service_name": "Infliximab, 10 mg",
+    "clinical_justification": "Patient has severe ileal Crohn's disease with documented endoscopic recurrence and stenosis, refractory to prior maintenance therapy with Azathioprine. Combination therapy with Infliximab and Azathioprine is indicated for patients with high-risk Crohn's disease to prevent further progression, reduce the risk of complications, and improve quality of life.",
+    "clinical_evidence": "1. Patient has failed Azathioprine maintenance therapy, evidenced by recurrent subocclusive episodes and endoscopic findings of stenosis. 2. High-risk phenotype with ileal involvement, prior surgical resection, and recurrent obstructive symptoms. 3. Guidelines support early initiation of biologic therapy in patients with high-risk Crohn's disease who fail conventional therapies.",
     "guideline_references": [
-      "American College of Gastroenterology Guidelines for the Management of Crohn's Disease",
-      "ECCO Consensus Guidelines on Crohn's Disease"
+      "American College of Gastroenterology (ACG) Clinical Guidelines: Management of Crohn's Disease in Adults (2021)",
+      "European Crohn's and Colitis Organisation (ECCO) Guidelines on Crohn's Disease (2020)"
     ]
-  }
+  },
+  "clinical_notes": "64-year-old female with a 20+ year history of ileal Crohn's disease complicated by prior ileocecal resection (2004) and recurrent subocclusive episodes presents with worsening abdominal pain and obstructive symptoms. Recent endoscopy demonstrated recurrence with ileal stenosis. Patient has been on Azathioprine for maintenance but continues to experience clinical and endoscopic disease activity, indicating failure of monotherapy. Given her high-risk disease phenotype (ileal involvement, prior surgery, recurrent obstruction), escalation to combination therapy with Infliximab and Azathioprine is warranted per current guidelines. The proposed treatment plan aims to reduce the risk of further complications, improve symptoms, and prevent disease progression. Infliximab will be initiated at 5 mg/kg at weeks 0, 2, and 6, followed by every 8 weeks for a duration of 12 months."
 }
 ```
 
@@ -252,7 +307,7 @@ RESPONSE FORMAT (JSON):
 
 ## Interaction 2: Phase 2: Prior Authorization
 
-**Timestamp:** 2025-11-26T00:17:38.314055
+**Timestamp:** 2025-12-07T22:37:39.394077
 **Agent:** Payor
 **Action:** Treatment Review
 
@@ -322,17 +377,14 @@ REPUTATION CONSIDERATIONS:
 ITERATION 1/10
 
 PROVIDER REQUEST:
-Provider Confidence: 0.95
-Confidence Rationale: The patient has a long-standing history of ileal Crohn's disease with documented complications such as recurrent subocclusive episodes and endoscopic evidence of recurrence with stenosis. Failure of prior maintenance therapy with Azathioprine and the high-risk phenotype further support the need for escalated therapy. Clinical guidelines for Crohn's disease endorse the use of combination therapy (Infliximab + Azathioprine) for patients with severe disease and those who have failed conventional therapies.
-Differential Diagnoses: Ileal Crohn's disease with recurrence, Post-surgical adhesions, Functional bowel obstruction
-
 
 TREATMENT PA REQUEST:
-Type: medication
-Treatment: Infliximab
-Justification: Infliximab is indicated for patients with moderate-to-severe Crohn's disease who have failed prior maintenance therapies and exhibit high-risk features such as intestinal stenosis. The patient has already completed step therapy and has demonstrated failure of Azathioprine. Combination therapy is recommended per guidelines to enhance efficacy and reduce immunogenicity.
-Clinical Evidence: Endoscopic findings of recurrence with stenosis, history of ileocecal resection, recurrent subocclusive episodes despite maintenance therapy with Azathioprine. ICD-10 codes K50.012 (Crohn's disease of small intestine with intestinal obstruction) and K56.60 (unspecified intestinal obstruction) are applicable.
-Guidelines: American College of Gastroenterology Guidelines for the Management of Crohn's Disease, ECCO Consensus Guidelines on Crohn's Disease
+Diagnosis Codes: K50.012 (Crohn's disease of small intestine with intestinal obstruction), K56.60 (Unspecified intestinal obstruction)
+Treatment: Infliximab, 10 mg (Code: J1745)
+Justification: Patient has severe ileal Crohn's disease with documented endoscopic recurrence and stenosis, refractory to prior maintenance therapy with Azathioprine. Combination therapy with Infliximab and Azathioprine is indicated for patients with high-risk Crohn's disease to prevent further progression, reduce the risk of complications, and improve quality of life.
+Clinical Evidence: 1. Patient has failed Azathioprine maintenance therapy, evidenced by recurrent subocclusive episodes and endoscopic findings of stenosis. 2. High-risk phenotype with ileal involvement, prior surgical resection, and recurrent obstructive symptoms. 3. Guidelines support early initiation of biologic therapy in patients with high-risk Crohn's disease who fail conventional therapies.
+Guidelines: American College of Gastroenterology (ACG) Clinical Guidelines: Management of Crohn's Disease in Adults (2021), European Crohn's and Colitis Organisation (ECCO) Guidelines on Crohn's Disease (2020)
+Clinical Notes: 64-year-old female with a 20+ year history of ileal Crohn's disease complicated by prior ileocecal resection (2004) and recurrent subocclusive episodes presents with worsening abdominal pain and obstructive symptoms. Recent endoscopy demonstrated recurrence with ileal stenosis. Patient has been on Azathioprine for maintenance but continues to experience clinical and endoscopic disease activity, indicating failure of monotherapy. Given her high-risk disease phenotype (ileal involvement, prior surgery, recurrent obstruction), escalation to combination therapy with Infliximab and Azathioprine is warranted per current guidelines. The proposed treatment plan aims to reduce the risk of further complications, improve symptoms, and prevent disease progression. Infliximab will be initiated at 5 mg/kg at weeks 0, 2, and 6, followed by every 8 weeks for a duration of 12 months.
 
 
 PATIENT CONTEXT:
@@ -364,18 +416,25 @@ RESPONSE FORMAT (JSON):
 {
     "authorization_status": "approved",
     "denial_reason": null,
-    "criteria_used": "American College of Gastroenterology Guidelines for the Management of Crohn's Disease, ECCO Consensus Guidelines on Crohn's Disease, documented failure of prior maintenance therapy (Azathioprine), and high-risk features including intestinal stenosis and recurrent subocclusive episodes.",
+    "criteria_used": "American College of Gastroenterology (ACG) Clinical Guidelines: Management of Crohn's Disease in Adults (2021), European Crohn's and Colitis Organisation (ECCO) Guidelines on Crohn's Disease (2020), documentation of failure of Azathioprine maintenance therapy, high-risk phenotype with ileal involvement and prior surgical resection, documented endoscopic recurrence and stenosis.",
     "reviewer_type": "AI algorithm"
 }
-``` 
+```
 
 ### Justification:
-1. **Medical Necessity**: The treatment aligns with clinical guidelines for moderate-to-severe Crohn's disease in patients with documented failure of step therapy (Azathioprine) and high-risk features (intestinal stenosis, recurrent subocclusive episodes).
-2. **Step Therapy Completed**: The patient has already tried Azathioprine and failed, meeting step therapy requirements.
-3. **Alignment with Guidelines**: Both ACG and ECCO guidelines recommend combination therapy (Infliximab + Azathioprine) for patients with severe disease and high-risk phenotypes.
-4. **Sufficient Documentation**: Endoscopic evidence, prior surgical history, ICD-10 codes, and clear clinical rationale were provided to support the request. 
+1. **Medical Necessity**: The treatment is medically necessary based on the patient's clinical presentation, which includes failure of prior maintenance therapy (Azathioprine), documented disease progression (endoscopic recurrence and stenosis), and a high-risk Crohn's disease phenotype (ileal involvement, prior surgery, recurrent obstruction). This aligns with the guidelines cited.
+   
+2. **Step Therapy**: The patient has completed step therapy with Azathioprine, which has been documented as ineffective, satisfying the requirement to escalate treatment.
 
-The AI algorithm determined that denial would contradict published guidelines and increase the risk of appeals and provider dissatisfaction. Approving this request avoids these risks while aligning with moderate cost focus parameters.
+3. **Guidelines Alignment**: Both the ACG and ECCO guidelines support early initiation of biologic therapy like Infliximab for patients with high-risk Crohn's disease who fail conventional therapies.
+
+4. **Sufficient Documentation**: The request includes specific clinical evidence, endoscopic findings, and guideline references, meeting requirements for prior authorization approval.
+
+5. **Cost-Benefit Consideration**: While expensive, the use of Infliximab may prevent further complications requiring more costly interventions, such as surgery or hospitalizations, maintaining a balance between cost control and medical necessity.
+
+### Additional Notes:
+- Approving this request minimizes the risk of provider frustration and regulatory scrutiny, as guidelines and medical necessity are clearly met.
+- AI review is appropriate here since the documentation is comprehensive, and the treatment aligns with published guidelines.
 ```
 
 ### Parsed Output
@@ -384,7 +443,7 @@ The AI algorithm determined that denial would contradict published guidelines an
 {
   "authorization_status": "approved",
   "denial_reason": null,
-  "criteria_used": "American College of Gastroenterology Guidelines for the Management of Crohn's Disease, ECCO Consensus Guidelines on Crohn's Disease, documented failure of prior maintenance therapy (Azathioprine), and high-risk features including intestinal stenosis and recurrent subocclusive episodes.",
+  "criteria_used": "American College of Gastroenterology (ACG) Clinical Guidelines: Management of Crohn's Disease in Adults (2021), European Crohn's and Colitis Organisation (ECCO) Guidelines on Crohn's Disease (2020), documentation of failure of Azathioprine maintenance therapy, high-risk phenotype with ileal involvement and prior surgical resection, documented endoscopic recurrence and stenosis.",
   "reviewer_type": "AI algorithm"
 }
 ```
@@ -393,7 +452,7 @@ The AI algorithm determined that denial would contradict published guidelines an
 
 ## Interaction 3: Phase 3: Claims Adjudication
 
-**Timestamp:** 2025-11-26T00:17:44.062637
+**Timestamp:** 2025-12-07T22:37:44.424571
 **Agent:** Provider
 **Action:** Claim Submission
 
@@ -409,7 +468,7 @@ The AI algorithm determined that denial would contradict published guidelines an
 You are a PROVIDER agent (hospital/clinic) in Fee-for-Service Medicare Advantage.
 
 BEHAVIORAL PARAMETERS:
-- Patient care priority: high (patient outcomes are primary concern, willing to spend extra time and resources even if less profitable)
+- Patient care priority: moderate (balance patient care with practice economics, standard care protocols)
 - Documentation style: moderate (standard documentation following clinical guidelines, typical detail level)
 - Risk tolerance: moderate (treat urgent cases without approval then appeal later, calculated risk-taking)
 - AI adoption: moderate (AI assists with templates and suggestions, provider reviews and edits all content)
@@ -468,11 +527,9 @@ TREATMENT DELIVERED:
 PA APPROVAL FROM PHASE 2:
 - Status: approved
 - Reviewer: AI algorithm
-- Criteria: American College of Gastroenterology Guidelines for the Management of Crohn's Disease, ECCO Consensus Guidelines on Crohn's Disease, documented failure of prior maintenance therapy (Azathioprine), and high-risk features including intestinal stenosis and recurrent subocclusive episodes.
+- Criteria: American College of Gastroenterology (ACG) Clinical Guidelines: Management of Crohn's Disease in Adults (2021), European Crohn's and Colitis Organisation (ECCO) Guidelines on Crohn's Disease (2020), documentation of failure of Azathioprine maintenance therapy, high-risk phenotype with ileal involvement and prior surgical resection, documented endoscopic recurrence and stenosis.
 
 CLINICAL DOCUMENTATION:
-TREATMENT JUSTIFICATION: Infliximab is indicated for patients with moderate-to-severe Crohn's disease who have failed prior maintenance therapies and exhibit high-risk features such as intestinal stenosis. The patient has already completed step therapy and has demonstrated failure of Azathioprine. Combination therapy is recommended per guidelines to enhance efficacy and reduce immunogenicity.
-CLINICAL EVIDENCE: Endoscopic findings of recurrence with stenosis, history of ileocecal resection, recurrent subocclusive episodes despite maintenance therapy with Azathioprine. ICD-10 codes K50.012 (Crohn's disease of small intestine with intestinal obstruction) and K56.60 (unspecified intestinal obstruction) are applicable.
 
 
 BILLING INFORMATION:
@@ -485,13 +542,26 @@ Your task: Submit comprehensive claim for payment with supporting documentation.
 RESPONSE FORMAT (JSON):
 {
     "claim_submission": {
-        "medication_administered": "<service name and details>",
-        "treatment_dates": "<date range or single date>",
-        "billing_codes": ["<J-code or CPT or procedure code>", ...],
-        "amount_billed": <dollar amount>,
-        "clinical_documentation": "<summary of treatment necessity and delivery>",
+        "diagnosis_codes": [
+            {
+                "icd10": "<ICD-10 code>",
+                "description": "<diagnosis description>"
+            }
+        ],
+        "procedure_codes": [
+            {
+                "code": "<CPT/HCPCS/J-code>",
+                "code_type": "CPT" or "HCPCS" or "J-code",
+                "description": "<service description>",
+                "quantity": <number>,
+                "amount_billed": <dollar amount per unit>
+            }
+        ],
+        "total_amount_billed": <total dollar amount>,
+        "clinical_evidence": "<objective data: labs, imaging, vitals>",
+        "clinical_notes": "<narrative documentation from Phase 2>",
         "pa_reference": "<reference to phase 2 PA approval>",
-        "supporting_evidence": ["<test results>", "<clinical notes>", ...]
+        "supporting_evidence": ["<objective finding 1>", "<objective finding 2>", ...]
     }
 }
 ```
@@ -502,21 +572,37 @@ RESPONSE FORMAT (JSON):
 ```json
 {
     "claim_submission": {
-        "medication_administered": "Infliximab, 5 mg/kg, administered per guidelines for Crohn's disease management",
-        "treatment_dates": "Weeks 0, 2, 6, then every 8 weeks as per approved schedule",
-        "billing_codes": [
-            "J1745", 
-            "96365"
+        "diagnosis_codes": [
+            {
+                "icd10": "K50.814",
+                "description": "Crohn's disease of small intestine with stenosis"
+            }
         ],
-        "amount_billed": 7950.00,
-        "clinical_documentation": "Patient with moderate-to-severe Crohn's disease with high-risk features including intestinal stenosis and recurrent subocclusive episodes, failed prior maintenance therapy with Azathioprine. Infliximab was administered per American College of Gastroenterology Guidelines and ECCO Consensus Guidelines for Crohn's Disease management to reduce disease progression and improve clinical outcomes.",
-        "pa_reference": "Phase 2 PA approval based on criteria including guideline adherence and documented clinical necessity.",
+        "procedure_codes": [
+            {
+                "code": "J1745",
+                "code_type": "J-code",
+                "description": "Infliximab injection, 10 mg",
+                "quantity": 100,
+                "amount_billed": 7800.00
+            },
+            {
+                "code": "96365",
+                "code_type": "CPT",
+                "description": "Intravenous infusion for therapy/diagnosis, initial up to 1 hour",
+                "quantity": 1,
+                "amount_billed": 150.00
+            }
+        ],
+        "total_amount_billed": 7950.00,
+        "clinical_evidence": "Endoscopic findings of ileal involvement with recurrent stenosis, post-surgical recurrence documented. Failed Azathioprine maintenance therapy. High-risk phenotype with ileal involvement confirmed.",
+        "clinical_notes": "Patient diagnosed with Crohn’s disease per American College of Gastroenterology (ACG) Clinical Guidelines and European Crohn's and Colitis Organisation (ECCO) Guidelines. High-risk phenotype with prior ileal surgical resection. Documented endoscopic recurrence with stenosis, and failure of Azathioprine maintenance therapy. Infliximab initiated at loading doses (Weeks 0, 2, 6), followed by maintenance every 8 weeks. Treatment deemed medically necessary as per prior authorization approval criteria.",
+        "pa_reference": "PA#123456789, approved per AI algorithm based on ACG and ECCO guidelines.",
         "supporting_evidence": [
-            "Endoscopic findings showing recurrence with intestinal stenosis",
-            "History of ileocecal resection",
-            "Documentation of recurrent subocclusive episodes",
-            "Failure of prior maintenance therapy (Azathioprine)",
-            "ICD-10 codes: K50.012 (Crohn's disease of small intestine with intestinal obstruction), K56.60 (unspecified intestinal obstruction)"
+            "Endoscopy report showing recurrent stenosis in ileum",
+            "Surgical history: ileal resection",
+            "Failure of Azathioprine documented in clinical notes",
+            "Patient phenotype categorized as high-risk"
         ]
     }
 }
@@ -528,21 +614,37 @@ RESPONSE FORMAT (JSON):
 ```json
 {
   "claim_submission": {
-    "medication_administered": "Infliximab, 5 mg/kg, administered per guidelines for Crohn's disease management",
-    "treatment_dates": "Weeks 0, 2, 6, then every 8 weeks as per approved schedule",
-    "billing_codes": [
-      "J1745",
-      "96365"
+    "diagnosis_codes": [
+      {
+        "icd10": "K50.814",
+        "description": "Crohn's disease of small intestine with stenosis"
+      }
     ],
-    "amount_billed": 7950.0,
-    "clinical_documentation": "Patient with moderate-to-severe Crohn's disease with high-risk features including intestinal stenosis and recurrent subocclusive episodes, failed prior maintenance therapy with Azathioprine. Infliximab was administered per American College of Gastroenterology Guidelines and ECCO Consensus Guidelines for Crohn's Disease management to reduce disease progression and improve clinical outcomes.",
-    "pa_reference": "Phase 2 PA approval based on criteria including guideline adherence and documented clinical necessity.",
+    "procedure_codes": [
+      {
+        "code": "J1745",
+        "code_type": "J-code",
+        "description": "Infliximab injection, 10 mg",
+        "quantity": 100,
+        "amount_billed": 7800.0
+      },
+      {
+        "code": "96365",
+        "code_type": "CPT",
+        "description": "Intravenous infusion for therapy/diagnosis, initial up to 1 hour",
+        "quantity": 1,
+        "amount_billed": 150.0
+      }
+    ],
+    "total_amount_billed": 7950.0,
+    "clinical_evidence": "Endoscopic findings of ileal involvement with recurrent stenosis, post-surgical recurrence documented. Failed Azathioprine maintenance therapy. High-risk phenotype with ileal involvement confirmed.",
+    "clinical_notes": "Patient diagnosed with Crohn\u2019s disease per American College of Gastroenterology (ACG) Clinical Guidelines and European Crohn's and Colitis Organisation (ECCO) Guidelines. High-risk phenotype with prior ileal surgical resection. Documented endoscopic recurrence with stenosis, and failure of Azathioprine maintenance therapy. Infliximab initiated at loading doses (Weeks 0, 2, 6), followed by maintenance every 8 weeks. Treatment deemed medically necessary as per prior authorization approval criteria.",
+    "pa_reference": "PA#123456789, approved per AI algorithm based on ACG and ECCO guidelines.",
     "supporting_evidence": [
-      "Endoscopic findings showing recurrence with intestinal stenosis",
-      "History of ileocecal resection",
-      "Documentation of recurrent subocclusive episodes",
-      "Failure of prior maintenance therapy (Azathioprine)",
-      "ICD-10 codes: K50.012 (Crohn's disease of small intestine with intestinal obstruction), K56.60 (unspecified intestinal obstruction)"
+      "Endoscopy report showing recurrent stenosis in ileum",
+      "Surgical history: ileal resection",
+      "Failure of Azathioprine documented in clinical notes",
+      "Patient phenotype categorized as high-risk"
     ]
   }
 }
@@ -552,7 +654,7 @@ RESPONSE FORMAT (JSON):
 
 ## Interaction 4: Phase 3: Claims Adjudication
 
-**Timestamp:** 2025-11-26T00:17:44.063642
+**Timestamp:** 2025-12-07T22:37:44.425881
 **Agent:** Payor
 **Action:** Claim Review
 
@@ -635,7 +737,7 @@ CLAIM SUBMITTED:
 - Amount Billed: $7950.00
 
 PA APPROVAL RATIONALE (from Phase 2):
-American College of Gastroenterology Guidelines for the Management of Crohn's Disease, ECCO Consensus Guidelines on Crohn's Disease, documented failure of prior maintenance therapy (Azathioprine), and high-risk features including intestinal stenosis and recurrent subocclusive episodes.
+American College of Gastroenterology (ACG) Clinical Guidelines: Management of Crohn's Disease in Adults (2021), European Crohn's and Colitis Organisation (ECCO) Guidelines on Crohn's Disease (2020), documentation of failure of Azathioprine maintenance therapy, high-risk phenotype with ileal involvement and prior surgical resection, documented endoscopic recurrence and stenosis.
 
 CLINICAL DOCUMENTATION:
 INITIAL PRESENTATION:
@@ -644,12 +746,11 @@ History: Long-standing Crohn's disease with recent recurrence of obstructive sym
 Physical Exam: Long-standing Crohn's disease with recent recurrence of obstructive symptoms. Colonoscopy reveals inflammatory stenosis at anastomosis site.
 
 PROVIDER TREATMENT JUSTIFICATION (from approved PA request):
-Diagnostic Confidence: 0.95
-Rationale: The patient has a long-standing history of ileal Crohn's disease with documented complications such as recurrent subocclusive episodes and endoscopic evidence of recurrence with stenosis. Failure of prior maintenance therapy with Azathioprine and the high-risk phenotype further support the need for escalated therapy. Clinical guidelines for Crohn's disease endorse the use of combination therapy (Infliximab + Azathioprine) for patients with severe disease and those who have failed conventional therapies.
-Differential Diagnoses: Ileal Crohn's disease with recurrence, Post-surgical adhesions, Functional bowel obstruction
-Treatment Justification: Infliximab is indicated for patients with moderate-to-severe Crohn's disease who have failed prior maintenance therapies and exhibit high-risk features such as intestinal stenosis. The patient has already completed step therapy and has demonstrated failure of Azathioprine. Combination therapy is recommended per guidelines to enhance efficacy and reduce immunogenicity.
-Clinical Evidence: Endoscopic findings of recurrence with stenosis, history of ileocecal resection, recurrent subocclusive episodes despite maintenance therapy with Azathioprine. ICD-10 codes K50.012 (Crohn's disease of small intestine with intestinal obstruction) and K56.60 (unspecified intestinal obstruction) are applicable.
-Guidelines Cited: American College of Gastroenterology Guidelines for the Management of Crohn's Disease, ECCO Consensus Guidelines on Crohn's Disease
+Diagnosis Codes: K50.012 (Crohn's disease of small intestine with intestinal obstruction), K56.60 (Unspecified intestinal obstruction)
+Treatment Justification: Patient has severe ileal Crohn's disease with documented endoscopic recurrence and stenosis, refractory to prior maintenance therapy with Azathioprine. Combination therapy with Infliximab and Azathioprine is indicated for patients with high-risk Crohn's disease to prevent further progression, reduce the risk of complications, and improve quality of life.
+Clinical Evidence: 1. Patient has failed Azathioprine maintenance therapy, evidenced by recurrent subocclusive episodes and endoscopic findings of stenosis. 2. High-risk phenotype with ileal involvement, prior surgical resection, and recurrent obstructive symptoms. 3. Guidelines support early initiation of biologic therapy in patients with high-risk Crohn's disease who fail conventional therapies.
+Guidelines Cited: American College of Gastroenterology (ACG) Clinical Guidelines: Management of Crohn's Disease in Adults (2021), European Crohn's and Colitis Organisation (ECCO) Guidelines on Crohn's Disease (2020)
+Clinical Notes: 64-year-old female with a 20+ year history of ileal Crohn's disease complicated by prior ileocecal resection (2004) and recurrent subocclusive episodes presents with worsening abdominal pain and obstructive symptoms. Recent endoscopy demonstrated recurrence with ileal stenosis. Patient has been on Azathioprine for maintenance but continues to experience clinical and endoscopic disease activity, indicating failure of monotherapy. Given her high-risk disease phenotype (ileal involvement, prior surgery, recurrent obstruction), escalation to combination therapy with Infliximab and Azathioprine is warranted per current guidelines. The proposed treatment plan aims to reduce the risk of further complications, improve symptoms, and prevent disease progression. Infliximab will be initiated at 5 mg/kg at weeks 0, 2, and 6, followed by every 8 weeks for a duration of 12 months.
 
 SERVICE REQUEST RATIONALE:
 Patient has failed maintenance therapy with Azathioprine. documented endoscopic recurrence with stenosis. Combination therapy (Infliximab + Azathioprine) indicated for high-risk phenotype.
@@ -682,27 +783,35 @@ RESPONSE FORMAT (JSON):
     "claim_status": "approved",
     "denial_reason": null,
     "approved_amount": 7950.00,
-    "criteria_used": "American College of Gastroenterology Guidelines for the Management of Crohn's Disease, ECCO Consensus Guidelines on Crohn's Disease, prior PA approval and documented medical necessity",
+    "criteria_used": "American College of Gastroenterology (ACG) Clinical Guidelines: Management of Crohn's Disease in Adults (2021), European Crohn's and Colitis Organisation (ECCO) Guidelines on Crohn's Disease (2020), PA approval documentation, and claim documentation matching prior authorization.",
     "requires_additional_documentation": [],
     "reviewer_type": "Claims adjudicator"
 }
-``` 
+```
 
 ### Rationale:
-1. **Match to PA Approval**: The medication (Infliximab) and dosage administered (5 mg/kg) are consistent with the PA approval.
-2. **Documentation Sufficiency**: The clinical documentation provided is robust, including detailed clinical findings, endoscopic evidence, history of failed prior therapy (Azathioprine), and guideline-based justification for the treatment.
-3. **Billing Accuracy**: There are no indications of upcoding or billing errors in the claim submission.
-4. **Guideline Compliance**: The treatment aligns with established guidelines for Crohn's disease management, and the approved PA rationale supports the use of Infliximab based on the patient’s high-risk features and documented disease progression.
+1. **Consistency with Prior Authorization (PA):**
+   - The PA request was approved based on evidence of medical necessity and strict adherence to ACG and ECCO guidelines for high-risk Crohn's disease.
+   - The treatment administered (Infliximab at 5 mg/kg) matches the approved dosage and indication.
 
-### Cost-Management Considerations:
-- Denying the claim retrospectively would likely result in an appeal due to strong clinical documentation and previously approved PA, leading to additional administrative costs and potential provider dissatisfaction.
-- Approval minimizes friction with providers, maintains network stability, and avoids reputational risks or regulatory scrutiny associated with unjustified denials.
+2. **Documentation Completeness:**
+   - The submitted clinical documentation supports the medical necessity:
+     - Failure of Azathioprine therapy.
+     - Endoscopic findings of inflammatory stenosis.
+     - High-risk phenotype (ileal involvement, prior surgical resection, recurrent obstruction).
+   - No discrepancies between the PA and the claim documentation were identified.
 
-### Decision Alignment with Behavioral Parameters:
-- **Moderate Cost Focus**: While approving the claim incurs immediate cost, the decision avoids potential downstream costs from appeals and provider dissatisfaction.
-- **AI Reliance**: The AI system flagged no inconsistencies, and the claim is straightforward, requiring no human intervention beyond verification.
-- **Denial Threshold**: Denial is unwarranted given the strong alignment with guidelines and documented medical necessity.
-- **Short-Term Focus**: Approval avoids the immediate administrative costs and reputational risks associated with a denial and likely appeal.
+3. **Billing Review:**
+   - There are no indications of upcoding or billing errors. The amount billed aligns with the expected cost for the approved dosage of Infliximab.
+
+4. **Cost vs. Risk:**
+   - Denying this claim would likely result in an appeal, increasing administrative burden and risking provider dissatisfaction.
+   - Denial despite PA approval could harm the insurer's reputation and potentially lead to regulatory challenges.
+
+5. **Provider Network Stability:**
+   - Denying the claim without clear justification could alienate the provider, risking their departure from the network, which would be costly to replace.
+
+Given the alignment of the claim with the prior authorization and the absence of billing errors or insufficient documentation, payment is approved.
 ```
 
 ### Parsed Output
@@ -712,7 +821,7 @@ RESPONSE FORMAT (JSON):
   "claim_status": "approved",
   "denial_reason": null,
   "approved_amount": 7950.0,
-  "criteria_used": "American College of Gastroenterology Guidelines for the Management of Crohn's Disease, ECCO Consensus Guidelines on Crohn's Disease, prior PA approval and documented medical necessity",
+  "criteria_used": "American College of Gastroenterology (ACG) Clinical Guidelines: Management of Crohn's Disease in Adults (2021), European Crohn's and Colitis Organisation (ECCO) Guidelines on Crohn's Disease (2020), PA approval documentation, and claim documentation matching prior authorization.",
   "requires_additional_documentation": [],
   "reviewer_type": "Claims adjudicator"
 }
