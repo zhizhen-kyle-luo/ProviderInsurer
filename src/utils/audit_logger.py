@@ -51,6 +51,14 @@ class AuditLogger:
         """
         interaction_id = f"{phase}_{agent}_{action}_{uuid.uuid4().hex[:8]}"
 
+        # calculate word count for response
+        word_count = len(llm_response.split()) if llm_response else 0
+        
+        # add word count to metadata
+        if metadata is None:
+            metadata = {}
+        metadata['word_count'] = word_count
+
         interaction = LLMInteraction(
             interaction_id=interaction_id,
             timestamp=datetime.now().isoformat(),
@@ -61,7 +69,7 @@ class AuditLogger:
             user_prompt=user_prompt,
             llm_response=llm_response,
             parsed_output=parsed_output or {},
-            metadata=metadata or {}
+            metadata=metadata
         )
 
         self.audit_log.interactions.append(interaction)

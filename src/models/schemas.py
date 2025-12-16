@@ -187,6 +187,13 @@ class EncounterState(BaseModel):
     appeal_filed: bool = False
     appeal_successful: bool = False
 
+    # phase 3 pend tracking
+    claim_pended: bool = False
+    claim_rejected: bool = False
+    claim_abandoned_via_pend: bool = False
+    pend_iterations: int = 0
+    resubmission_cost_incurred: float = 0.0
+
     ground_truth_outcome: Optional[Union[Literal["inpatient", "observation"], Literal["approved", "denied"]]] = None
     simulation_matches_reality: Optional[bool] = None
 
@@ -240,7 +247,7 @@ class ProcedureRequest(BaseModel):
 
 class MedicationAuthorizationDecision(BaseModel):
     reviewer_type: str
-    authorization_status: Literal["approved", "denied", "pending_info"]
+    authorization_status: Literal["approved", "rejected", "pended", "denied", "pending_info"]  # keep denied/pending_info for backward compat
     denial_reason: Optional[str] = None
     criteria_used: str
     step_therapy_required: bool = False

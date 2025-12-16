@@ -23,6 +23,9 @@ simulation_output.mmd
 # Data files (too large / may contain PHI)
 data/mimic_raw.json
 
+# Experiment results (large md files)
+experiments/
+
 # IDE
 .vscode/
 .idea/
