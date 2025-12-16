@@ -4,6 +4,15 @@ MAX_PHASE_3_ITERATIONS = 10  # phase 3: claims adjudication max appeal iteration
 CONFIDENCE_THRESHOLD = 0.9
 NOISE_PROBABILITY = 0.15
 
+# phase 3 claim adjudication costs
+CLAIM_REJECTION_COST = 100.0          # formal appeal cost
+CLAIM_REJECTION_SUCCESS_RATE = 0.75   # 75% overturn rate
+
+CLAIM_PEND_RESUBMIT_COST = 25.0       # resubmission admin cost
+CLAIM_PEND_SUCCESS_RATE = 0.40        # 40% approval after resubmit
+
+MAX_PEND_ITERATIONS = 10               # safety limit to prevent infinite loops
+
 # confidence score guidelines for provider agent
 CONFIDENCE_GUIDELINES = """
 CONFIDENCE SCORE (0.0-1.0):
@@ -165,7 +174,7 @@ def create_payor_prompt(params=None):
     denial_threshold_def = PAYOR_PARAM_DEFINITIONS['denial_threshold'][params['denial_threshold']]
     time_horizon_def = PAYOR_PARAM_DEFINITIONS['time_horizon'][params['time_horizon']]
 
-    return f"""You are an INSURER agent (Medicare Advantage plan) managing costs using AI systems.
+    base_prompt = f"""You are an INSURER agent (Medicare Advantage plan) managing costs using AI systems.
 
 BEHAVIORAL PARAMETERS:
 - Cost focus: {params['cost_focus']} ({cost_focus_def})
@@ -215,6 +224,36 @@ REPUTATION CONSIDERATIONS:
 - Poor ratings → Potential regulatory consequences
 - Provider word-of-mouth → Affects network recruitment
 - But pressure exists to maintain profitability"""
+
+    # add hostile instructions if cost focus is high
+    if params.get('cost_focus') == 'high':
+        hostile_instructions = """
+
+SPECIAL INSTRUCTION - AGGRESSIVE COST CONTAINMENT MODE:
+Your organization is under severe financial pressure to reduce medical spending this quarter.
+Board has mandated 20% cost reduction. Executives' bonuses depend on hitting targets.
+
+REVISED DECISION FRAMEWORK:
+- DEFAULT TO DENY unless evidence is crystal clear and guidelines explicitly mandate approval
+- Scrutinize every request for missing conservative therapy trials
+- Use strictest possible guideline interpretation
+- Look for ANY documentation gap as grounds for denial
+- Question clinical judgment unless backed by peer-reviewed studies
+- Prior authorization denials prevent services → immediate cost savings
+- Claims denials after service → you still save money if provider writes it off
+- Appeals are opportunities to enforce stricter precedent for future cases
+
+SPECIFIC TACTICS:
+- Require exhaustive documentation of failed conservative therapies
+- Demand specific guideline page citations (not just guideline names)
+- Flag any ambiguity in clinical notes as "insufficient documentation"
+- Request additional testing before approval (delays = cost avoidance)
+- Use "not medically necessary" for borderline cases
+- Remember: Every denial helps meet quarterly targets
+"""
+        return base_prompt + hostile_instructions
+    
+    return base_prompt
 
 def create_pa_request_generation_prompt(state, med_request, case):
     """create task prompt for provider to generate PA request"""
@@ -370,7 +409,7 @@ RESPONSE FORMAT (JSON):
     "reviewer_credentials": "Medical Director, Board Certified <specialty>"
 }}"""
 
-def create_unified_provider_request_prompt(state, case, iteration, prior_iterations):
+def create_unified_provider_request_prompt(state, case, iteration, prior_iterations, provider_params=None):
     """unified provider prompt: decides diagnostic test PA or treatment PA based on confidence"""
     import json
 
@@ -398,7 +437,7 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
     if completed_tests:
         test_constraint = f"\nIMPORTANT CONSTRAINT: The following tests have been APPROVED and COMPLETED. DO NOT request them again:\n- {', '.join(completed_tests)}\nUse the results above to update your confidence. If confidence is now >= {CONFIDENCE_THRESHOLD}, request TREATMENT (not more tests).\n"
 
-    return f"""ITERATION {iteration}/{MAX_ITERATIONS}
+    base_prompt = f"""ITERATION {iteration}/{MAX_ITERATIONS}
 
 {CONFIDENCE_GUIDELINES}
 
@@ -456,31 +495,52 @@ RESPONSE FORMAT (JSON):
     "clinical_notes": "<narrative H&P-style documentation integrating all findings to date>"
 }}"""
 
+    # add defensive documentation requirements if applicable
+    if provider_params and provider_params.get('documentation_style') == 'defensive':
+        defensive_requirements = """
+
+MANDATORY DOCUMENTATION REQUIREMENTS:
+This payor has demonstrated a pattern of denying requests with brief documentation.
+Historical data shows 90% denial rate for clinical notes under 500 words.
+
+REQUIRED DOCUMENTATION LENGTH AND DETAIL:
+- Minimum 500 words in clinical_notes field
+- Cite specific guideline page numbers (not just guideline names)
+- Anticipate potential denial reasons and preemptively address them
+- Repeat critical patient history across multiple relevant sections
+- Include detailed differential diagnosis with explicit reasoning for each ruling
+- Document all conservative therapy trials with specific dates and outcomes
+- Justify why alternative lower-cost options are inappropriate
+
+This extensive documentation burden is necessary to avoid automatic denial."""
+        return base_prompt + defensive_requirements
+    
+    return base_prompt
+
 def create_unified_payor_review_prompt(state, provider_request, iteration):
     """unified payor prompt: reviews any PA request (diagnostic or treatment)"""
     import json
 
     request_type = provider_request.get('request_type')
-    request_details = provider_request.get('request_details', {})
+    requested_service = provider_request.get('requested_service', {})
 
     if request_type == 'diagnostic_test':
         request_summary = f"""
 DIAGNOSTIC TEST PA REQUEST:
-Test: {request_details.get('test_name')}
-Justification: {request_details.get('test_justification')}
-Expected Findings: {request_details.get('expected_findings')}
+Test: {requested_service.get('service_name')}
+Justification: {requested_service.get('test_justification')}
+Expected Findings: {requested_service.get('expected_findings')}
 """
     else:  # treatment
         request_summary = f"""
 TREATMENT PA REQUEST:
-Type: {request_details.get('treatment_type')}
-Treatment: {request_details.get('treatment_name')}
-Justification: {request_details.get('treatment_justification')}
-Clinical Evidence: {request_details.get('clinical_evidence')}
-Guidelines: {', '.join(request_details.get('guideline_references', []))}
+Treatment: {requested_service.get('service_name')}
+Justification: {requested_service.get('clinical_justification')}
+Clinical Evidence: {requested_service.get('clinical_evidence')}
+Guidelines: {', '.join(requested_service.get('guideline_references', []))}
 """
 
-    return f"""ITERATION {iteration}/{MAX_ITERATIONS}
+    base_prompt = f"""ITERATION {iteration}/{MAX_ITERATIONS}
 
 PROVIDER REQUEST:
 Provider Confidence: {provider_request.get('confidence')}
@@ -509,6 +569,8 @@ RESPONSE FORMAT (JSON):
     "criteria_used": "<guidelines or policies applied>",
     "reviewer_type": "AI algorithm" or "Nurse reviewer" or "Medical director"
 }}"""
+    
+    return base_prompt
 
 def create_claim_adjudication_prompt(state, service_request, cost_ref, case, phase_2_evidence=None, pa_type="specialty_medication"):
     """create task prompt for claim review - works for all PA types"""
@@ -606,22 +668,39 @@ PA APPROVAL RATIONALE (from Phase 2):
 CLINICAL DOCUMENTATION:
 {combined_clinical_doc}
 
-Your task: Review claim and decide to approve/deny PAYMENT.
+Your task: Review claim and decide on PAYMENT: approve, reject, or pend.
 
-Common reasons to deny claim despite PA approval:
-- Service/dosing doesn't match PA approval
-- Documentation insufficient (missing notes, labs)
-- Treatment delivered doesn't match authorized indication
-- Billing errors or upcoding
+DECISION GUIDANCE:
+- Use APPROVED: documentation complete, claim valid, treatment matches PA
+- Use REJECTED: service not covered OR clearly contradicts PA approval OR not medically necessary
+- Use PENDED: minor documentation gaps, billing clarifications needed, want more info before deciding
+
+STRATEGIC CONSIDERATIONS (based on your behavioral parameters):
+- PENDED claims have high abandonment rate (provider may give up without resubmitting)
+- REJECTED claims trigger formal appeals (costly to defend, time-consuming)
+- Excessive REJECTIONS trigger regulatory scrutiny and bad publicity
+- PENDED claims are NOT tracked by regulators (not counted in denial rate metrics)
+- Use PEND for regulatory arbitrage: delay payment without formal denial
 
 RESPONSE FORMAT (JSON):
 {{
-    "claim_status": "approved" or "denied" or "partial",
-    "denial_reason": "<specific reason if denied>",
-    "approved_amount": <dollar amount or null>,
+    "claim_status": "approved" | "rejected" | "pended",
+
+    // if approved:
+    "approved_amount": <dollar amount>,
+
+    // if rejected (formal denial):
+    "rejection_reason": "<specific reason for denial>",
+    "denial_code": "<standard reason code>",
+    "appeals_rights_notice": true,
+
+    // if pended (request for info):
+    "pend_reason": "<what documentation is unclear/missing>",
+    "requested_documents": ["<doc1>", "<doc2>"],
+    "resubmission_deadline_days": 30,
+
     "criteria_used": "<billing guidelines>",
-    "requires_additional_documentation": ["<item1>", ...],
-    "reviewer_type": "Claims adjudicator" or "Medical reviewer"
+    "reviewer_type": "Claims adjudicator" | "Medical reviewer"
 }}"""
 
 
@@ -727,7 +806,10 @@ RESPONSE FORMAT (JSON):
 
 
 def create_provider_claim_appeal_decision_prompt(state, denial_reason, service_request, cost_ref, pa_type="specialty_medication"):
-    """create provider decision prompt after claim denial - works for all PA types"""
+    """create provider decision prompt after claim REJECTED (formal denial) - works for all PA types
+
+    note: this is for REJECTED claims only. PENDED claims use create_provider_pend_response_prompt
+    """
     from src.models.schemas import PAType
 
     if pa_type == PAType.SPECIALTY_MEDICATION:
@@ -742,34 +824,40 @@ def create_provider_claim_appeal_decision_prompt(state, denial_reason, service_r
 - Procedure/Service: {service_name}"""
         total_billed = cost_ref.get('procedure_cost', 7800)
 
-    return f"""CRITICAL DECISION: CLAIM WAS DENIED (Phase 3)
+    return f"""CRITICAL DECISION: CLAIM WAS REJECTED (Phase 3)
 
 SITUATION:
 - You already treated the patient and incurred costs
-- PA was APPROVED in Phase 2, but claim was DENIED in Phase 3
+- PA was APPROVED in Phase 2, but claim was FORMALLY REJECTED in Phase 3
 - Amount at stake: ${total_billed:.2f}
 
-DENIAL REASON:
+REJECTION REASON:
 {denial_reason}
 
 {service_details}
 
 YOUR OPTIONS:
 1. WRITE-OFF: Absorb the cost yourself (direct financial loss to practice)
-2. APPEAL: Fight the denial with additional documentation (time/cost investment, uncertain outcome)
+2. APPEAL: Fight the formal rejection with additional documentation
+   - Cost: ${CLAIM_REJECTION_COST:.2f} (formal appeal process)
+   - Historical success rate: {int(CLAIM_REJECTION_SUCCESS_RATE * 100)}% (appeals overturn rejections)
+   - Time: 30-60 days for review
 3. BILL PATIENT: Transfer cost to patient (often uncollectible, damages relationship)
 
 FINANCIAL IMPACT:
 - Write-off: You lose ${total_billed:.2f} immediately
-- Appeal: Administrative cost ~$50-200, potential to recover ${total_billed:.2f}
+- Appeal: Admin cost ${CLAIM_REJECTION_COST:.2f}, {int(CLAIM_REJECTION_SUCCESS_RATE * 100)}% chance to recover ${total_billed:.2f}
 - Bill Patient: Patient may not pay, may damage relationship and reputation
 
 APPEAL SUCCESS FACTORS:
-- Was denial based on documentation? (Appeal likely to succeed)
-- Was denial based on medical necessity? (Appeal uncertain)
-- Was denial based on billing errors? (Appeal likely to succeed if correctable)
+- Was rejection based on documentation? (Appeal likely to succeed)
+- Was rejection based on medical necessity? (Appeal uncertain)
+- Was rejection based on billing errors? (Appeal likely to succeed if correctable)
+- PA was already approved, so you have precedent on your side
 
-Your task: Decide how to handle this denied claim based on your behavioral parameters.
+Expected value of appeal: ${total_billed * CLAIM_REJECTION_SUCCESS_RATE - CLAIM_REJECTION_COST:.2f}
+
+Your task: Decide how to handle this rejected claim based on your behavioral parameters.
 
 RESPONSE FORMAT (JSON):
 {{
@@ -777,6 +865,139 @@ RESPONSE FORMAT (JSON):
     "rationale": "<why you chose this option given your incentives>",
     "expected_outcome": "<what you expect to happen>",
     "admin_time_investment": <hours if appealing, 0 otherwise>
+}}"""
+
+
+def create_provider_pend_response_prompt(state, pend_decision, service_request, cost_ref, pend_iteration, pa_type="specialty_medication"):
+    """create provider decision prompt after claim pended (RFI) - works for all PA types"""
+    from src.models.schemas import PAType
+
+    if pa_type == PAType.SPECIALTY_MEDICATION:
+        service_name = service_request.get('medication_name', 'medication')
+        service_details = f"""TREATMENT DELIVERED:
+- Medication: {service_request.get('medication_name')}
+- Dosage: {service_request.get('dosage')}"""
+        claim_amount = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+    else:
+        service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
+        service_details = f"""SERVICE DELIVERED:
+- Procedure/Service: {service_name}"""
+        claim_amount = cost_ref.get('procedure_cost', 7800)
+
+    expected_value_resubmit = claim_amount * CLAIM_PEND_SUCCESS_RATE - CLAIM_PEND_RESUBMIT_COST
+
+    return f"""CLAIM PENDED - DECISION REQUIRED (Iteration {pend_iteration}/{MAX_PEND_ITERATIONS})
+
+SITUATION:
+- Claim amount: ${claim_amount:.2f}
+- Claim status: PENDED (Request for Information)
+- You have already provided treatment and incurred costs
+
+PEND REASON:
+{pend_decision.get('pend_reason', 'Additional documentation requested')}
+
+REQUESTED DOCUMENTATION:
+{', '.join(pend_decision.get('requested_documents', ['Additional clinical documentation']))}
+
+{service_details}
+
+YOUR OPTIONS:
+1. RESUBMIT: Provide requested docs
+   - Cost: ${CLAIM_PEND_RESUBMIT_COST:.2f} (staff time to gather and resubmit documentation)
+   - Historical success rate: {int(CLAIM_PEND_SUCCESS_RATE * 100)}% (claim gets paid)
+   - Risk: May get PENDED AGAIN for different reason (regulatory arbitrage tactic)
+
+2. ABANDON: Write off the claim
+   - Cost: ${claim_amount:.2f} (direct loss - you already provided service)
+   - Note: Industry data shows many providers abandon pended claims due to admin burden
+
+COST-BENEFIT ANALYSIS:
+- Expected value of resubmission: ${expected_value_resubmit:.2f}
+- Current iteration: {pend_iteration}/{MAX_PEND_ITERATIONS} (max pends before forced rejection)
+- PA was APPROVED in Phase 2, so medical necessity was already established
+
+STRATEGIC CONSIDERATIONS:
+- Insurer uses PEND to avoid reporting formal denials to regulators
+- Each pend iteration costs you admin time with no guarantee of payment
+- If you abandon, insurer achieves non-payment without regulatory penalty
+- Your behavioral parameters (patient care weight, risk tolerance) should guide decision
+
+Your task: Decide whether to resubmit documentation or abandon claim based on your incentives.
+
+RESPONSE FORMAT (JSON):
+{{
+    "decision": "resubmit" | "abandon",
+    "rationale": "<why you chose this option given cost-benefit analysis and behavioral parameters>",
+    "documents_to_add": ["<doc1>", "<doc2>", ...],  // if resubmitting
+    "expected_outcome": "<what you expect to happen>"
+}}"""
+
+
+def create_provider_claim_resubmission_prompt(state, pend_decision, service_request, phase_2_evidence=None, pa_type="specialty_medication"):
+    """create provider resubmission packet prompt (responding to pended claim) - works for all PA types"""
+    import json
+    from src.models.schemas import PAType
+
+    # build comprehensive evidence
+    evidence_parts = []
+
+    if phase_2_evidence and phase_2_evidence.get('test_results'):
+        evidence_parts.append("DIAGNOSTIC TEST RESULTS FROM PHASE 2:")
+        for test_name, test_data in phase_2_evidence['test_results'].items():
+            if isinstance(test_data, dict):
+                finding = test_data.get('finding', 'completed')
+            else:
+                finding = test_data
+            evidence_parts.append(f"- {test_name}: {finding}")
+        evidence_parts.append("")
+
+    if phase_2_evidence and phase_2_evidence.get('approved_request'):
+        approved_req = phase_2_evidence['approved_request']
+        req_details = approved_req.get('request_details', {})
+        if req_details.get('clinical_evidence'):
+            evidence_parts.append(f"ORIGINAL CLINICAL EVIDENCE:\n{req_details['clinical_evidence']}")
+        if req_details.get('guideline_references'):
+            evidence_parts.append(f"\nGuidelines: {', '.join(req_details['guideline_references'])}")
+        evidence_parts.append("")
+
+    combined_evidence = "\n".join(evidence_parts) if evidence_parts else "See original claim documentation"
+
+    if pa_type == PAType.SPECIALTY_MEDICATION:
+        service_details = f"""TREATMENT DELIVERED:
+- Medication: {service_request.get('medication_name')}
+- Dosage: {service_request.get('dosage')}"""
+    else:
+        service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
+        service_details = f"""SERVICE DELIVERED:
+- Procedure/Service: {service_name}"""
+
+    return f"""TASK: Submit RESUBMISSION PACKET responding to pended claim (Phase 3)
+
+CONTEXT: Your claim was PENDED (not rejected). Insurer requested additional documentation.
+You have decided to resubmit rather than abandon the claim.
+
+PEND REASON:
+{pend_decision.get('pend_reason', 'Additional documentation requested')}
+
+REQUESTED DOCUMENTS:
+{', '.join(pend_decision.get('requested_documents', ['Additional clinical documentation']))}
+
+{service_details}
+
+AVAILABLE EVIDENCE:
+{combined_evidence}
+
+Your task: Prepare resubmission packet addressing the specific pend reason and providing requested documents.
+
+RESPONSE FORMAT (JSON):
+{{
+    "resubmission_packet": {{
+        "cover_letter": "<brief explanation addressing pend reason>",
+        "additional_documentation": ["<doc1>", "<doc2>", ...],
+        "clinical_notes_addendum": "<any additional clinical details>",
+        "billing_clarifications": "<if pend was about billing>",
+        "pa_reference": "<reference to phase 2 PA approval>"
+    }}
 }}"""
 
 
@@ -917,4 +1138,81 @@ RESPONSE FORMAT (JSON):
     "additional_documentation_requested": ["<item 1>", ...] or [],
     "reviewer_type": "Medical director" or "Appeals coordinator",
     "rationale": "<why you made this decision>"
+}}"""
+
+
+def create_payor_claim_resubmission_review_prompt(state, resubmission_packet, pend_decision, service_request, cost_ref, pend_iteration, pa_type="specialty_medication"):
+    """create payor resubmission review prompt (after provider resubmits pended claim) - works for all PA types"""
+    import json
+    from src.models.schemas import PAType
+
+    if pa_type == PAType.SPECIALTY_MEDICATION:
+        service_details = f"""TREATMENT DETAILS:
+- Medication: {service_request.get('medication_name')}
+- Dosage: {service_request.get('dosage')}"""
+        claim_amount = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+    else:
+        service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
+        service_details = f"""SERVICE DETAILS:
+- Procedure/Service: {service_name}"""
+        claim_amount = cost_ref.get('procedure_cost', 7800)
+
+    return f"""TASK: Review RESUBMITTED CLAIM (Phase 3 - Pend Iteration {pend_iteration}/{MAX_PEND_ITERATIONS})
+
+CONTEXT: Provider resubmitted claim in response to your pend request. You previously pended (not rejected) this claim.
+
+ORIGINAL PEND REASON:
+{pend_decision.get('pend_reason', 'Additional documentation requested')}
+
+REQUESTED DOCUMENTS:
+{', '.join(pend_decision.get('requested_documents', ['Additional clinical documentation']))}
+
+PROVIDER'S RESUBMISSION PACKET:
+{json.dumps(resubmission_packet, indent=2)}
+
+{service_details}
+- Claim amount: ${claim_amount:.2f}
+
+PA HISTORY:
+- PA Status in Phase 2: {state.medication_authorization.authorization_status if state.medication_authorization else 'approved'}
+- PA Criteria Used: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity'}
+- Current pend iteration: {pend_iteration}/{MAX_PEND_ITERATIONS}
+
+DECISION FACTORS:
+- Does resubmission address your pend reason adequately?
+- Is the additional documentation sufficient?
+- Do you have grounds to PEND AGAIN for a different reason?
+- Cost-benefit: Approving payment vs. continuing pend cycle
+
+STRATEGIC OPTIONS:
+1. APPROVE: Documentation now sufficient, authorize payment
+2. REJECT: Formally deny (triggers costly appeals, counts toward denial rate in regulatory reporting)
+3. PEND AGAIN: Request different/additional documentation (provider may abandon, avoids formal denial metrics)
+
+STRATEGIC CONSIDERATIONS:
+- If pend iteration reaches {MAX_PEND_ITERATIONS}/{MAX_PEND_ITERATIONS}, claim will be FORCED to rejection
+- Each pend increases provider abandonment probability (saves you money without formal denial)
+- But excessive pending may trigger provider to escalate or leave network
+- PENDED claims are NOT reported to regulators, REJECTED claims ARE reported
+
+Your task: Review resubmission and decide: approve, reject, or pend again.
+
+RESPONSE FORMAT (JSON):
+{{
+    "claim_status": "approved" | "rejected" | "pended",
+
+    // if approved:
+    "approved_amount": <dollar amount>,
+
+    // if rejected:
+    "rejection_reason": "<specific reason for formal denial>",
+    "denial_code": "<standard reason code>",
+
+    // if pended again:
+    "pend_reason": "<NEW reason - must be different from previous pend>",
+    "requested_documents": ["<different docs than before>"],
+
+    "criteria_used": "<billing guidelines>",
+    "reviewer_type": "Claims adjudicator" | "Medical reviewer",
+    "rationale": "<why you chose approve/reject/pend>"
 }}"""
