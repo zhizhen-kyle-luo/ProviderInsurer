@@ -122,7 +122,29 @@ class UtilizationReviewSimulation:
         self.test_result_cache = {}
 
     def _create_llm(self, model_name: str, azure_config: Dict[str, Any] = None, temperature: float = 0.7):
-        if azure_config:
+        if azure_config or model_name == "azure":
+            import os
+            if model_name == "azure" and not azure_config:
+                endpoint = os.getenv("AZURE_ENDPOINT")
+                api_key = os.getenv("AZURE_KEY")
+                deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+
+                missing = []
+                if not endpoint:
+                    missing.append("AZURE_ENDPOINT")
+                if not api_key:
+                    missing.append("AZURE_KEY")
+                if not deployment:
+                    missing.append("AZURE_OPENAI_DEPLOYMENT_NAME")
+
+                if missing:
+                    raise ValueError(f"missing azure environment variables: {', '.join(missing)}. check .env file has values set.")
+
+                azure_config = {
+                    "endpoint": endpoint,
+                    "key": api_key,
+                    "deployment_name": deployment
+                }
             return AzureChatOpenAI(
                 azure_endpoint=azure_config["endpoint"],
                 api_key=azure_config["key"],
@@ -452,7 +474,7 @@ Test result for {test_name}:"""
             # provider generates request based on confidence
             provider_system_prompt = create_provider_prompt(self.provider_params)
             provider_user_prompt = create_unified_provider_request_prompt(
-                state, case, iteration_num, prior_iterations
+                state, case, iteration_num, prior_iterations, self.provider_params
             )
 
             full_prompt = f"{provider_system_prompt}\n\n{provider_user_prompt}"
@@ -468,6 +490,9 @@ Test result for {test_name}:"""
                 elif "```" in clean_response:
                     clean_response = clean_response.split("```")[1].split("```")[0].strip()
                 provider_request = json.loads(clean_response)
+                # ensure it's a dict, not a list
+                if not isinstance(provider_request, dict):
+                    raise ValueError("expected dict, got {}".format(type(provider_request)))
             except:
                 provider_request = {
                     "confidence": 0.5,
@@ -828,7 +853,7 @@ Test result for {test_name}:"""
         )
 
         # STEP 2: payor reviews claim
-        payor_system_prompt = create_payor_prompt()
+        payor_system_prompt = create_payor_prompt(self.payor_params)
         payor_claim_prompt = create_claim_adjudication_prompt(
             state, service_request, cost_ref, case, phase_2_evidence, pa_type
         )
@@ -864,12 +889,23 @@ Test result for {test_name}:"""
         )
 
         # update state with claim decision
-        state.medication_authorization.authorization_status = claim_decision["claim_status"]
-        if claim_decision["claim_status"] == "denied":
-            state.medication_authorization.denial_reason = claim_decision.get("denial_reason")
+        claim_status = claim_decision.get("claim_status")
 
-        # STEP 3: if claim denied, provider decides what to do
-        if claim_decision["claim_status"] == "denied":
+        # normalize legacy "denied" to "rejected" for consistency
+        if claim_status == "denied":
+            claim_status = "rejected"
+            claim_decision["claim_status"] = "rejected"
+
+        state.medication_authorization.authorization_status = claim_status
+
+        if claim_status == "rejected":
+            state.claim_rejected = True
+            state.medication_authorization.denial_reason = claim_decision.get("rejection_reason", claim_decision.get("denial_reason"))
+        elif claim_status == "pended":
+            state.claim_pended = True
+
+        # STEP 3a: if claim REJECTED (formal denial), provider decides what to do
+        if claim_status == "rejected":
             denial_reason = claim_decision.get("denial_reason", "Claim denied")
             state.appeal_date = claim_date + timedelta(days=2)
 
@@ -1055,6 +1091,154 @@ Respond in JSON:
                         if continue_decision.get("decision") != "appeal":
                             break
 
+        # STEP 3b: if claim PENDED (RFI), handle pend resubmission loop
+        elif claim_status == "pended":
+            from src.utils.prompts import (
+                create_provider_pend_response_prompt,
+                create_provider_claim_resubmission_prompt,
+                create_payor_claim_resubmission_review_prompt,
+                MAX_PEND_ITERATIONS,
+                CLAIM_PEND_RESUBMIT_COST
+            )
+
+            pend_iteration = 0
+            claim_resolved = False
+            current_pend_decision = claim_decision
+
+            while pend_iteration < MAX_PEND_ITERATIONS and not claim_resolved:
+                pend_iteration += 1
+                state.pend_iterations = pend_iteration
+
+                # provider decides: resubmit or abandon
+                provider_pend_prompt = create_provider_pend_response_prompt(
+                    state, current_pend_decision, service_request, cost_ref, pend_iteration, pa_type
+                )
+
+                messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_pend_prompt}")]
+                response = self.provider.llm.invoke(messages)
+                provider_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
+
+                try:
+                    response_text = response.content
+                    if "```json" in response_text:
+                        response_text = response_text.split("```json")[1].split("```")[0].strip()
+                    elif "```" in response_text:
+                        response_text = response_text.split("```")[1].split("```")[0].strip()
+                    provider_pend_decision = json.loads(response_text)
+                except:
+                    provider_pend_decision = {"decision": "abandon", "rationale": "Unable to parse decision"}
+
+                # log provider pend response decision
+                self.audit_logger.log_interaction(
+                    phase="phase_3_claims",
+                    agent="provider",
+                    action="pend_response_decision",
+                    system_prompt=provider_system_prompt,
+                    user_prompt=provider_pend_prompt,
+                    llm_response=response.content,
+                    parsed_output=provider_pend_decision,
+                    metadata={"decision": provider_pend_decision.get("decision"), "pend_iteration": pend_iteration, "cache_hit": provider_cache_hit}
+                )
+
+                # if provider abandons, mark and exit
+                if provider_pend_decision.get("decision") == "abandon":
+                    state.claim_abandoned_via_pend = True
+                    state.medication_authorization.authorization_status = "pended"  # final status remains pended
+                    claim_resolved = True
+                    break
+
+                # provider chose to resubmit - incur cost
+                state.resubmission_cost_incurred += CLAIM_PEND_RESUBMIT_COST
+
+                # provider prepares resubmission packet
+                provider_resubmit_prompt = create_provider_claim_resubmission_prompt(
+                    state, current_pend_decision, service_request, phase_2_evidence, pa_type
+                )
+
+                messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_resubmit_prompt}")]
+                response = self.provider.llm.invoke(messages)
+                provider_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
+
+                try:
+                    response_text = response.content
+                    if "```json" in response_text:
+                        response_text = response_text.split("```json")[1].split("```")[0].strip()
+                    elif "```" in response_text:
+                        response_text = response_text.split("```")[1].split("```")[0].strip()
+                    resubmission_packet = json.loads(response_text)
+                except:
+                    resubmission_packet = {"resubmission_packet": {"cover_letter": "Resubmitting with additional documentation"}}
+
+                # log provider resubmission
+                self.audit_logger.log_interaction(
+                    phase="phase_3_claims",
+                    agent="provider",
+                    action="claim_resubmission",
+                    system_prompt=provider_system_prompt,
+                    user_prompt=provider_resubmit_prompt,
+                    llm_response=response.content,
+                    parsed_output=resubmission_packet,
+                    metadata={"pend_iteration": pend_iteration, "resubmission_cost": CLAIM_PEND_RESUBMIT_COST, "cache_hit": provider_cache_hit}
+                )
+
+                # payor reviews resubmission
+                payor_resubmit_prompt = create_payor_claim_resubmission_review_prompt(
+                    state, resubmission_packet.get("resubmission_packet", resubmission_packet),
+                    current_pend_decision, service_request, cost_ref, pend_iteration, pa_type
+                )
+
+                messages = [HumanMessage(content=f"{payor_system_prompt}\n\n{payor_resubmit_prompt}")]
+                response = self.payor.llm.invoke(messages)
+                payor_cache_hit = response.additional_kwargs.get('cache_hit', False) if hasattr(response, 'additional_kwargs') else False
+
+                try:
+                    response_text = response.content
+                    if "```json" in response_text:
+                        response_text = response_text.split("```json")[1].split("```")[0].strip()
+                    elif "```" in response_text:
+                        response_text = response_text.split("```")[1].split("```")[0].strip()
+                    resubmission_review = json.loads(response_text)
+                except:
+                    resubmission_review = {"claim_status": "approved", "approved_amount": cost_ref.get('procedure_cost', 7800)}
+
+                # log payor resubmission review
+                self.audit_logger.log_interaction(
+                    phase="phase_3_claims",
+                    agent="payor",
+                    action="resubmission_review",
+                    system_prompt=payor_system_prompt,
+                    user_prompt=payor_resubmit_prompt,
+                    llm_response=response.content,
+                    parsed_output=resubmission_review,
+                    metadata={"pend_iteration": pend_iteration, "claim_status": resubmission_review.get("claim_status"), "cache_hit": payor_cache_hit}
+                )
+
+                # check resubmission outcome
+                resubmission_status = resubmission_review.get("claim_status")
+
+                if resubmission_status == "approved":
+                    state.medication_authorization.authorization_status = "approved"
+                    claim_resolved = True
+                elif resubmission_status == "rejected":
+                    state.medication_authorization.authorization_status = "rejected"
+                    state.claim_rejected = True
+                    state.medication_authorization.denial_reason = resubmission_review.get("rejection_reason", "Claim rejected after resubmission")
+                    claim_resolved = True
+                elif resubmission_status == "pended":
+                    # pended again - update pend decision and continue loop
+                    current_pend_decision = resubmission_review
+                    # loop continues
+                else:
+                    # unexpected status - default to approved
+                    state.medication_authorization.authorization_status = "approved"
+                    claim_resolved = True
+
+            # if max pends reached and still pended, force rejection
+            if pend_iteration >= MAX_PEND_ITERATIONS and not claim_resolved:
+                state.medication_authorization.authorization_status = "rejected"
+                state.claim_rejected = True
+                state.medication_authorization.denial_reason = "Maximum resubmission attempts exceeded"
+
         return state
     def _phase_4_medication_financial(
         self,
@@ -1093,14 +1277,17 @@ Respond in JSON:
             patient_copay = 0.0
             payer_payment = 0.0
 
-        # administrative costs: pa review + claim review + appeals
+        # administrative costs: pa review + claim review + appeals + resubmissions
         pa_review_cost = cost_ref.get("pa_review_cost", 75.0)
         claim_review_cost = cost_ref.get("claim_review_cost", 50.0)
         appeal_cost = 0.0
         if state.appeal_filed:
             appeal_cost = cost_ref.get("appeal_cost", 180.0)
 
-        total_admin_cost = pa_review_cost + claim_review_cost + appeal_cost
+        # add pend resubmission costs (tracked separately for regulatory arbitrage analysis)
+        pend_resubmission_cost = state.resubmission_cost_incurred
+
+        total_admin_cost = pa_review_cost + claim_review_cost + appeal_cost + pend_resubmission_cost
 
         state.medication_financial = MedicationFinancialSettlement(
             medication_name=case.get("medication_request", {}).get("medication_name", "Unknown"),
