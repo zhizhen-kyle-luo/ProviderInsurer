@@ -61,6 +61,28 @@ CONFIGS = {
         "risk_tolerance": "moderate",
         "patient_care_weight": "moderate",
         "documentation_style": "defensive"
+    },
+    "HOSTILE_PAYOR": {
+        "risk_tolerance": "moderate",
+        "patient_care_weight": "moderate",
+        "documentation_style": "moderate",
+        "payor_cost_focus": "high",
+        "payor_denial_threshold": "high",
+        "payor_ai_reliance": "high",
+        "payor_time_horizon": "short-term"
+    },
+    "DEFENSIVE_VERBOSE": {
+        "risk_tolerance": "low",
+        "patient_care_weight": "high",
+        "documentation_style": "defensive",
+        "payor_denial_threshold": "high"
+    },
+    "PRESSURE_COOKER": {
+        "risk_tolerance": "high",
+        "patient_care_weight": "high",
+        "documentation_style": "defensive",
+        "payor_cost_focus": "high",
+        "payor_denial_threshold": "high"
     }
 }
 
@@ -106,6 +128,15 @@ def run_experiment(
         "ai_adoption": "moderate"  # keep constant for this experiment
     }
 
+    # extract payor params (keys starting with "payor_")
+    # remove "payor_" prefix to match expected parameter names
+    full_payor_params = {
+        "cost_focus": provider_params.get("payor_cost_focus", "moderate"),
+        "denial_threshold": provider_params.get("payor_denial_threshold", "moderate"),
+        "ai_reliance": provider_params.get("payor_ai_reliance", "moderate"),
+        "time_horizon": provider_params.get("payor_time_horizon", "long-term")
+    }
+
     sim = UtilizationReviewSimulation(
         provider_llm="gpt-4",
         payor_llm="gpt-4",
@@ -114,7 +145,8 @@ def run_experiment(
         enable_cache=True,
         enable_truth_checking=True,
         truth_checker_llm="gpt-4o-mini",
-        provider_params=full_provider_params
+        provider_params=full_provider_params,
+        payor_params=full_payor_params
     )
 
     state = sim.run_case(case)
