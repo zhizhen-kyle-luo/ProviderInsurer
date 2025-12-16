@@ -469,31 +469,41 @@ Your notes should justify the requested service based on clinical data.
 
 RESPONSE FORMAT (JSON):
 {{
-    "diagnosis_codes": [
-        {{
-            "icd10": "<ICD-10 code>",
-            "description": "<diagnosis description>"
-        }}
-    ],
-    "request_type": "diagnostic_test" or "treatment",
-    "requested_service": {{
-        // if diagnostic_test:
-        "procedure_code": "<CPT code for test>",
-        "code_type": "CPT",
-        "service_name": "<specific test>",
-        "test_justification": "<why this test will establish diagnosis>",
-        "expected_findings": "<what results would confirm/rule out diagnosis>"
-
-        // if treatment:
-        "procedure_code": "<CPT/HCPCS/J-code>",
-        "code_type": "CPT" or "HCPCS" or "J-code",
-        "service_name": "<specific treatment>",
-        "clinical_justification": "<why treatment is medically necessary>",
-        "clinical_evidence": "<objective data supporting request>",
-        "guideline_references": ["<guideline 1>", "<guideline 2>"]
+    "internal_rationale": {{
+        "confidence_score": <float 0.0-1.0>,
+        "reasoning": "<your diagnostic reasoning and why you chose this confidence level>",
+        "differential_diagnoses": ["<diagnosis 1>", "<diagnosis 2>"]
     }},
-    "clinical_notes": "<narrative H&P-style documentation integrating all findings to date>"
-}}"""
+    "insurer_request": {{
+        "diagnosis_codes": [
+            {{
+                "icd10": "<ICD-10 code>",
+                "description": "<diagnosis description>"
+            }}
+        ],
+        "request_type": "diagnostic_test" or "treatment",
+        "requested_service": {{
+            // if diagnostic_test:
+            "procedure_code": "<CPT code for test>",
+            "code_type": "CPT",
+            "service_name": "<specific test>",
+            "test_justification": "<why this test will establish diagnosis>",
+            "expected_findings": "<what results would confirm/rule out diagnosis>"
+
+            // if treatment:
+            "procedure_code": "<CPT/HCPCS/J-code>",
+            "code_type": "CPT" or "HCPCS" or "J-code",
+            "service_name": "<specific treatment>",
+            "clinical_justification": "<why treatment is medically necessary>",
+            "clinical_evidence": "<objective data supporting request>",
+            "guideline_references": ["<guideline 1>", "<guideline 2>"]
+        }},
+        "clinical_notes": "<narrative H&P-style documentation integrating all findings to date>"
+    }}
+}}
+
+IMPORTANT: The confidence_score in internal_rationale is for YOUR use only to decide whether to continue testing.
+The insurer_request section contains only what you send to the payor for review."""
 
     # add defensive documentation requirements if applicable
     if provider_params and provider_params.get('documentation_style') == 'defensive':
@@ -540,14 +550,23 @@ Clinical Evidence: {requested_service.get('clinical_evidence')}
 Guidelines: {', '.join(requested_service.get('guideline_references', []))}
 """
 
+    # get diagnosis codes if present
+    diagnosis_codes = provider_request.get('diagnosis_codes', [])
+    diagnosis_summary = ""
+    if diagnosis_codes:
+        diagnosis_summary = "\nDiagnosis Codes:\n" + "\n".join([
+            f"  - {d.get('icd10')}: {d.get('description')}" for d in diagnosis_codes
+        ])
+
     base_prompt = f"""ITERATION {iteration}/{MAX_ITERATIONS}
 
 PROVIDER REQUEST:
-Provider Confidence: {provider_request.get('confidence')}
-Confidence Rationale: {provider_request.get('confidence_rationale')}
-Differential Diagnoses: {', '.join(provider_request.get('differential_diagnoses', []))}
+{diagnosis_summary}
 
 {request_summary}
+
+Clinical Notes:
+{provider_request.get('clinical_notes', 'no clinical notes provided')}
 
 PATIENT CONTEXT:
 - Age: {state.admission.patient_demographics.age}
@@ -572,8 +591,13 @@ RESPONSE FORMAT (JSON):
     
     return base_prompt
 
-def create_claim_adjudication_prompt(state, service_request, cost_ref, case, phase_2_evidence=None, pa_type="specialty_medication"):
-    """create task prompt for claim review - works for all PA types"""
+def create_claim_adjudication_prompt(state, service_request, cost_ref, case, phase_2_evidence=None, pa_type="specialty_medication", provider_billed_amount=None):
+    """create task prompt for claim review - works for all PA types
+
+    Args:
+        provider_billed_amount: the actual amount the Provider billed (from their claim submission)
+            If provided, use this instead of cost_ref defaults
+    """
     import json
     from src.models.schemas import PAType
 
@@ -640,14 +664,22 @@ def create_claim_adjudication_prompt(state, service_request, cost_ref, case, pha
         service_details = f"""CLAIM SUBMITTED:
 - Medication: {service_request.get('medication_name')}
 - Dosage Administered: {service_request.get('dosage')}"""
-        total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+        # use provider's actual billed amount if available, otherwise default to cost_ref
+        if provider_billed_amount is not None:
+            total_billed = provider_billed_amount
+        else:
+            total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
         task_desc = "Review CLAIM for specialty medication (Phase 3)"
     else:
         service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
         service_details = f"""CLAIM SUBMITTED:
 - Procedure/Service: {service_name}
 - Clinical Indication: {service_request.get('clinical_indication', service_request.get('treatment_justification', 'N/A'))}"""
-        total_billed = cost_ref.get('procedure_cost', 7800)
+        # use provider's actual billed amount if available, otherwise default to cost_ref
+        if provider_billed_amount is not None:
+            total_billed = provider_billed_amount
+        else:
+            total_billed = cost_ref.get('procedure_cost', 7800)
         task_desc = "Review CLAIM for procedure/service (Phase 3)"
 
     return f"""TASK: {task_desc}
@@ -704,8 +736,13 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_claim_submission_prompt(state, service_request, cost_ref, phase_2_evidence=None, pa_type="specialty_medication"):
-    """create provider claim submission prompt (phase 3) - works for all PA types"""
+def create_provider_claim_submission_prompt(state, service_request, cost_ref, phase_2_evidence=None, pa_type="specialty_medication", coding_options=None):
+    """create provider claim submission prompt (phase 3) - works for all PA types
+
+    Args:
+        coding_options: list of dicts with diagnosis/payment choices for DRG upcoding scenarios
+            Each option should have: diagnosis, icd10, payment, defensibility, justification
+    """
     import json
     from src.models.schemas import PAType
 
@@ -734,7 +771,7 @@ def create_provider_claim_submission_prompt(state, service_request, cost_ref, ph
 
     combined_clinical_doc = "\n".join(clinical_doc_parts) if clinical_doc_parts else "No additional documentation"
 
-    # build service details and billing based on PA type
+    # build service details based on PA type
     if pa_type == PAType.SPECIALTY_MEDICATION:
         service_name = service_request.get('medication_name', 'medication')
         service_details = f"""TREATMENT DELIVERED:
@@ -742,22 +779,50 @@ def create_provider_claim_submission_prompt(state, service_request, cost_ref, ph
 - Dosage Administered: {service_request.get('dosage')}
 - Route: {service_request.get('route', 'N/A')}
 - Frequency: {service_request.get('frequency', 'N/A')}"""
-        total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
-        billing_details = f"""BILLING INFORMATION:
-- Drug Acquisition Cost: ${cost_ref.get('drug_acquisition_cost', 7800):.2f}
-- Administration Fee: ${cost_ref.get('administration_fee', 150):.2f}
-- Total Amount Billed: ${total_billed:.2f}"""
-        response_field = "medication_administered"
     else:
         # procedures, cardiac testing, imaging
-        service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
+        # extract service_name from new schema, with fallback to old schema
+        service_name = service_request.get('service_name', service_request.get('treatment_name', service_request.get('procedure_name', 'procedure')))
         service_details = f"""SERVICE DELIVERED:
 - Procedure/Service: {service_name}
 - Clinical Indication: {service_request.get('clinical_indication', service_request.get('treatment_justification', 'N/A'))}"""
-        total_billed = cost_ref.get('procedure_cost', 7800)
-        billing_details = f"""BILLING INFORMATION:
+
+    # build coding & reimbursement section
+    if coding_options and len(coding_options) > 0:
+        # grey zone case with multiple coding options - let Provider choose
+        coding_section_parts = ["CODING & REIMBURSEMENT OPTIONS:"]
+        coding_section_parts.append("You must select ONE diagnosis code for this claim. Each option has different reimbursement and audit risk:")
+        coding_section_parts.append("")
+
+        for i, option in enumerate(coding_options, 1):
+            defensibility = option.get('defensibility', 'unknown')
+            audit_risk = "Low" if defensibility == "high" else ("Medium" if defensibility == "borderline" else "High")
+            coding_section_parts.append(f"OPTION {i}: {option.get('icd10', 'N/A')} - {option.get('diagnosis', 'Unknown')}")
+            coding_section_parts.append(f"  - Payment: ${option.get('payment', 0):,.2f}")
+            coding_section_parts.append(f"  - DRG: {option.get('drg_code', 'N/A')}")
+            coding_section_parts.append(f"  - Audit Risk: {audit_risk} (defensibility: {defensibility})")
+            coding_section_parts.append(f"  - Justification: {option.get('justification', 'N/A')}")
+            if option.get('questionable_because'):
+                coding_section_parts.append(f"  - Warning: {', '.join(option['questionable_because'][:3])}...")
+            coding_section_parts.append("")
+
+        coding_section_parts.append("DECISION GUIDANCE:")
+        coding_section_parts.append("- Select the diagnosis code that best reflects the clinical documentation")
+        coding_section_parts.append("- Higher-paying codes require stronger clinical evidence to avoid audit clawback")
+        coding_section_parts.append("- Your billed amount MUST match the payment for your chosen diagnosis code")
+        coding_section = "\n".join(coding_section_parts)
+    else:
+        # standard case with fixed billing
+        if pa_type == PAType.SPECIALTY_MEDICATION:
+            total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
+            coding_section = f"""BILLING INFORMATION:
+- Drug Acquisition Cost: ${cost_ref.get('drug_acquisition_cost', 7800):.2f}
+- Administration Fee: ${cost_ref.get('administration_fee', 150):.2f}
+- Total Amount Billed: ${total_billed:.2f}"""
+        else:
+            total_billed = cost_ref.get('procedure_cost', 7800)
+            coding_section = f"""BILLING INFORMATION:
 - Procedure Cost: ${total_billed:.2f}"""
-        response_field = "service_delivered"
 
     return f"""TASK: Submit CLAIM for reimbursement (Phase 3)
 
@@ -774,9 +839,14 @@ PA APPROVAL FROM PHASE 2:
 CLINICAL DOCUMENTATION:
 {combined_clinical_doc}
 
-{billing_details}
+{coding_section}
 
-Your task: Submit comprehensive claim for payment with supporting documentation.
+CRITICAL GUARDRAILS:
+1. You must ONLY bill for the service listed in 'SERVICE DELIVERED' above - do NOT invent procedures.
+2. Your diagnosis code determines your billed amount - choose from the options above.
+3. Do not fabricate clinical events that did not occur.
+
+Your task: Submit claim with your chosen diagnosis code and corresponding billed amount.
 
 RESPONSE FORMAT (JSON):
 {{
@@ -819,7 +889,8 @@ def create_provider_claim_appeal_decision_prompt(state, denial_reason, service_r
 - Dosage: {service_request.get('dosage')}"""
         total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
     else:
-        service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
+        # extract service_name from new schema, with fallback to old schema
+        service_name = service_request.get('service_name', service_request.get('treatment_name', service_request.get('procedure_name', 'procedure')))
         service_details = f"""SERVICE DELIVERED:
 - Procedure/Service: {service_name}"""
         total_billed = cost_ref.get('procedure_cost', 7800)
