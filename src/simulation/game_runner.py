@@ -489,21 +489,52 @@ Test result for {test_name}:"""
                     clean_response = clean_response.split("```json")[1].split("```")[0].strip()
                 elif "```" in clean_response:
                     clean_response = clean_response.split("```")[1].split("```")[0].strip()
-                provider_request = json.loads(clean_response)
+                provider_response_full = json.loads(clean_response)
                 # ensure it's a dict, not a list
-                if not isinstance(provider_request, dict):
-                    raise ValueError("expected dict, got {}".format(type(provider_request)))
+                if not isinstance(provider_response_full, dict):
+                    raise ValueError("expected dict, got {}".format(type(provider_response_full)))
+
+                # extract internal rationale (includes confidence)
+                internal_rationale = provider_response_full.get("internal_rationale", {})
+                confidence = internal_rationale.get("confidence_score", 0.5)
+                reasoning = internal_rationale.get("reasoning", "no reasoning provided")
+                differential_diagnoses = internal_rationale.get("differential_diagnoses", [])
+
+                # extract insurer request (what payor sees)
+                provider_request = provider_response_full.get("insurer_request", {})
+
+                # add internal fields to provider_request for backwards compatibility
+                provider_request["confidence"] = confidence
+                provider_request["confidence_rationale"] = reasoning
+                provider_request["differential_diagnoses"] = differential_diagnoses
+
             except:
+                provider_response_full = {
+                    "internal_rationale": {
+                        "confidence_score": 0.5,
+                        "reasoning": "unable to parse response",
+                        "differential_diagnoses": []
+                    },
+                    "insurer_request": {
+                        "request_type": "diagnostic_test",
+                        "requested_service": {}
+                    }
+                }
+                confidence = 0.5
+                reasoning = "unable to parse response"
+                differential_diagnoses = []
                 provider_request = {
                     "confidence": 0.5,
                     "confidence_rationale": "unable to parse response",
                     "differential_diagnoses": [],
                     "request_type": "diagnostic_test",
-                    "request_details": {}
+                    "requested_service": {}
                 }
 
-            confidence = provider_request.get("confidence", 0.5)
+            # extract request_type from nested structure if not at top level
             request_type = provider_request.get("request_type")
+            if not request_type and "insurer_request" in provider_response_full:
+                request_type = provider_response_full.get("insurer_request", {}).get("request_type")
 
             # log provider request
             self.audit_logger.log_interaction(
@@ -592,7 +623,12 @@ Test result for {test_name}:"""
                     break
                 elif request_type == "diagnostic_test":
                     # diagnostic test approved - generate test result using environment agent
-                    test_name = provider_request.get("request_details", {}).get("test_name")
+                    # extract test_name from nested schema structure
+                    test_name = provider_request.get("requested_service", {}).get("service_name")
+                    if not test_name:
+                        # fallback to old schema for backwards compatibility
+                        test_name = provider_request.get("request_details", {}).get("test_name")
+
                     if test_name:
                         test_result = self._generate_test_result(test_name, case)
                         iteration_record["test_results"] = {test_name: test_result["value"]}
@@ -799,14 +835,28 @@ Test result for {test_name}:"""
         else:
             # for procedures, cardiac testing, imaging: use approved request from phase 2
             approved_req = phase_2_evidence.get('approved_request', {})
-            req_details = approved_req.get('request_details', {})
-            if pa_type == PAType.CARDIAC_TESTING:
-                service_name = req_details.get('treatment_name', req_details.get('procedure_name', 'procedure'))
-            else:
-                service_name = req_details.get('treatment_name', req_details.get('test_name', 'service'))
-            service_request = req_details
+
+            # the approved_request contains the provider_request structure
+            # which has 'requested_service' with 'service_name' in the new schema
+            requested_service = approved_req.get('requested_service', {})
+
+            # extract service_name with proper fallback chain
+            service_name = requested_service.get('service_name')
+            if not service_name:
+                # fallback to old schema for backwards compatibility
+                req_details = approved_req.get('request_details', {})
+                if pa_type == PAType.CARDIAC_TESTING:
+                    service_name = req_details.get('treatment_name', req_details.get('procedure_name', 'procedure'))
+                else:
+                    service_name = req_details.get('treatment_name', req_details.get('test_name', 'service'))
+
+            service_request = requested_service if requested_service else approved_req.get('request_details', {})
 
         cost_ref = case.get("cost_reference", {})
+
+        # extract coding options for DRG upcoding scenarios (grey zone cases)
+        environment_data = case.get("environment_hidden_data", {})
+        coding_options = environment_data.get("coding_options", [])
 
         claim_date = state.appeal_date if state.appeal_date else state.review_date
         claim_date = claim_date + timedelta(days=7)
@@ -814,7 +864,7 @@ Test result for {test_name}:"""
         # STEP 1: provider submits claim
         provider_system_prompt = create_provider_prompt()
         provider_claim_prompt = create_provider_claim_submission_prompt(
-            state, service_request, cost_ref, phase_2_evidence, pa_type
+            state, service_request, cost_ref, phase_2_evidence, pa_type, coding_options
         )
 
         messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_claim_prompt}")]
@@ -849,13 +899,33 @@ Test result for {test_name}:"""
             user_prompt=provider_claim_prompt,
             llm_response=response.content,
             parsed_output=claim_submission,
-            metadata={"service": service_name, "pa_type": pa_type, "pa_approved": True, "cache_hit": provider_cache_hit}
+            metadata={
+                "service": service_name,
+                "pa_type": pa_type,
+                "pa_approved": True,
+                "cache_hit": provider_cache_hit,
+                "coding_options_available": len(coding_options) if coding_options else 0
+            }
         )
 
         # STEP 2: payor reviews claim
+        # extract the provider's actual billed amount and diagnosis code from their claim submission
+        provider_billed_amount = None
+        provider_diagnosis_code = None
+        if claim_submission and "claim_submission" in claim_submission:
+            provider_billed_amount = claim_submission["claim_submission"].get("total_amount_billed")
+            # extract primary diagnosis code
+            diagnosis_codes = claim_submission["claim_submission"].get("diagnosis_codes", [])
+            if diagnosis_codes and len(diagnosis_codes) > 0:
+                provider_diagnosis_code = diagnosis_codes[0].get("icd10")
+
+        # store on state for Phase 4 financial settlement
+        state.phase_3_billed_amount = provider_billed_amount
+        state.phase_3_diagnosis_code = provider_diagnosis_code
+
         payor_system_prompt = create_payor_prompt(self.payor_params)
         payor_claim_prompt = create_claim_adjudication_prompt(
-            state, service_request, cost_ref, case, phase_2_evidence, pa_type
+            state, service_request, cost_ref, case, phase_2_evidence, pa_type, provider_billed_amount
         )
 
         messages = [HumanMessage(content=f"{payor_system_prompt}\n\n{payor_claim_prompt}")]
@@ -1262,18 +1332,31 @@ Respond in JSON:
         )
 
         if claim_approved:
-            acquisition_cost = cost_ref.get("drug_acquisition_cost", 7800.0)
-            admin_fee = cost_ref.get("administration_fee", 150.0)
-            total_cost = acquisition_cost + admin_fee
+            # use Provider's actual billed amount from Phase 3 if available (DRG upcoding scenarios)
+            if state.phase_3_billed_amount is not None:
+                total_cost = state.phase_3_billed_amount
+                # for DRG-based billing, acquisition_cost IS the billed amount (no separate admin fee)
+                acquisition_cost = total_cost
+                admin_fee = 0.0
+            else:
+                # fallback to cost_ref for non-DRG cases (e.g., specialty medications)
+                acquisition_cost = cost_ref.get("drug_acquisition_cost", 7800.0)
+                admin_fee = cost_ref.get("administration_fee", 150.0)
+                total_cost = acquisition_cost + admin_fee
 
             # typical ma copay: 20% patient, 80% plan
             patient_copay = total_cost * 0.20
             payer_payment = total_cost * 0.80
         else:
             # claim denied - provider gets $0 even though they already treated patient
-            acquisition_cost = cost_ref.get("drug_acquisition_cost", 7800.0)
-            admin_fee = cost_ref.get("administration_fee", 150.0)
-            total_cost = acquisition_cost + admin_fee
+            if state.phase_3_billed_amount is not None:
+                total_cost = state.phase_3_billed_amount
+                acquisition_cost = total_cost
+                admin_fee = 0.0
+            else:
+                acquisition_cost = cost_ref.get("drug_acquisition_cost", 7800.0)
+                admin_fee = cost_ref.get("administration_fee", 150.0)
+                total_cost = acquisition_cost + admin_fee
             patient_copay = 0.0
             payer_payment = 0.0
 

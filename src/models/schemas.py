@@ -194,6 +194,10 @@ class EncounterState(BaseModel):
     pend_iterations: int = 0
     resubmission_cost_incurred: float = 0.0
 
+    # phase 3 billing - Provider's actual chosen amount (for DRG upcoding analysis)
+    phase_3_billed_amount: Optional[float] = None
+    phase_3_diagnosis_code: Optional[str] = None
+
     ground_truth_outcome: Optional[Union[Literal["inpatient", "observation"], Literal["approved", "denied"]]] = None
     simulation_matches_reality: Optional[bool] = None
 
@@ -462,6 +466,343 @@ class AuditLog(BaseModel):
             "phase_4_financial": "Phase 4: Financial Settlement"
         }
         return phase_names.get(phase, phase.replace("_", " ").title())
+
+    def save_to_folder(self, output_dir: str):
+        """save audit log split into organized folder structure
+
+        creates:
+            {output_dir}/
+                00_config.md         - agent configs
+                phase2_iter01.md     - P2 iteration 1 (provider + payor)
+                phase2_iter02.md     - P2 iteration 2 ...
+                phase3_claims.md     - claim submission + adjudication
+                summary.md           - compact decision trace
+        """
+        import os
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 1. Config file - agent settings
+        config_lines = []
+        config_lines.append(f"# Configuration: {self.case_id}")
+        config_lines.append("")
+        config_lines.append(f"**Simulation:** {self.simulation_start} → {self.simulation_end or 'In Progress'}")
+        config_lines.append("")
+
+        if self.summary.get("behavioral_parameters"):
+            params = self.summary["behavioral_parameters"]
+            config_lines.append("## Agent Parameters")
+            config_lines.append("")
+            if "provider" in params:
+                config_lines.append("### Provider")
+                for k, v in params["provider"].items():
+                    config_lines.append(f"- {k}: {v}")
+                config_lines.append("")
+            if "payor" in params:
+                config_lines.append("### Payor")
+                for k, v in params["payor"].items():
+                    config_lines.append(f"- {k}: {v}")
+                config_lines.append("")
+
+        with open(os.path.join(output_dir, "00_config.md"), 'w', encoding='utf-8') as f:
+            f.write("\n".join(config_lines))
+
+        # 2. Phase 2 files - one per iteration (provider + payor pair)
+        phase_2_interactions = [i for i in self.interactions if i.phase == "phase_2_pa"]
+
+        # group by iteration
+        iterations = {}
+        for interaction in phase_2_interactions:
+            iter_num = interaction.metadata.get("iteration", 0)
+            if iter_num not in iterations:
+                iterations[iter_num] = []
+            iterations[iter_num].append(interaction)
+
+        for iter_num, iter_interactions in sorted(iterations.items()):
+            iter_lines = []
+            iter_lines.append(f"# Phase 2 - Iteration {iter_num}")
+            iter_lines.append("")
+
+            for interaction in iter_interactions:
+                iter_lines.append(f"## {interaction.agent.capitalize()} - {interaction.action.replace('_', ' ').title()}")
+                iter_lines.append("")
+
+                # metadata
+                if interaction.metadata:
+                    meta_items = [f"{k}={v}" for k, v in interaction.metadata.items()
+                                  if k not in ["word_count"]]
+                    iter_lines.append(f"**Meta:** {', '.join(meta_items)}")
+                    iter_lines.append("")
+
+                # user prompt (collapsible)
+                iter_lines.append("<details>")
+                iter_lines.append("<summary>User Prompt</summary>")
+                iter_lines.append("")
+                iter_lines.append("```")
+                iter_lines.append(interaction.user_prompt)
+                iter_lines.append("```")
+                iter_lines.append("</details>")
+                iter_lines.append("")
+
+                # parsed output
+                iter_lines.append("### Decision")
+                iter_lines.append("")
+                iter_lines.append("```json")
+                iter_lines.append(json.dumps(interaction.parsed_output, indent=2))
+                iter_lines.append("```")
+                iter_lines.append("")
+                iter_lines.append("---")
+                iter_lines.append("")
+
+            filename = f"phase2_iter{iter_num:02d}.md"
+            with open(os.path.join(output_dir, filename), 'w', encoding='utf-8') as f:
+                f.write("\n".join(iter_lines))
+
+        # 3. Phase 3 files - claims adjudication (may have multiple iterations for appeals/resubmissions)
+        phase_3_interactions = [i for i in self.interactions if i.phase == "phase_3_claims"]
+        if phase_3_interactions:
+            # group by iteration (claims can be pended/appealed)
+            p3_iterations = {}
+            for interaction in phase_3_interactions:
+                iter_num = interaction.metadata.get("iteration", interaction.metadata.get("appeal_round", 1))
+                if iter_num not in p3_iterations:
+                    p3_iterations[iter_num] = []
+                p3_iterations[iter_num].append(interaction)
+
+            for iter_num, iter_interactions in sorted(p3_iterations.items()):
+                p3_lines = []
+                p3_lines.append(f"# Phase 3 - Claims (Round {iter_num})")
+                p3_lines.append("")
+
+                for interaction in iter_interactions:
+                    p3_lines.append(f"## {interaction.agent.capitalize()} - {interaction.action.replace('_', ' ').title()}")
+                    p3_lines.append("")
+
+                    if interaction.metadata:
+                        meta_items = [f"{k}={v}" for k, v in interaction.metadata.items()
+                                      if k not in ["word_count"]]
+                        p3_lines.append(f"**Meta:** {', '.join(meta_items)}")
+                        p3_lines.append("")
+
+                    p3_lines.append("<details>")
+                    p3_lines.append("<summary>User Prompt</summary>")
+                    p3_lines.append("")
+                    p3_lines.append("```")
+                    p3_lines.append(interaction.user_prompt)
+                    p3_lines.append("```")
+                    p3_lines.append("</details>")
+                    p3_lines.append("")
+
+                    p3_lines.append("### Decision")
+                    p3_lines.append("")
+                    p3_lines.append("```json")
+                    p3_lines.append(json.dumps(interaction.parsed_output, indent=2))
+                    p3_lines.append("```")
+                    p3_lines.append("")
+                    p3_lines.append("---")
+                    p3_lines.append("")
+
+                # single iteration -> phase3_claims.md, multiple -> phase3_round01.md etc
+                if len(p3_iterations) == 1:
+                    filename = "phase3_claims.md"
+                else:
+                    filename = f"phase3_round{iter_num:02d}.md"
+                with open(os.path.join(output_dir, filename), 'w', encoding='utf-8') as f:
+                    f.write("\n".join(p3_lines))
+
+        # 4. Summary file
+        self.save_summary(os.path.join(output_dir, "summary.md"))
+
+    def save_summary(self, filepath: str):
+        """save compact decision trace summary - much smaller than full audit log
+
+        focuses on:
+        - simulation config and patient info
+        - key decisions by each agent with brief reasoning
+        - outcomes and financial results
+        """
+        lines = []
+
+        # header
+        lines.append(f"# Decision Trace: {self.case_id}")
+        lines.append("")
+        lines.append(f"**Run:** {self.simulation_start} → {self.simulation_end or 'In Progress'}")
+        lines.append("")
+
+        # agent configs (compact)
+        if self.summary.get("behavioral_parameters"):
+            params = self.summary["behavioral_parameters"]
+            lines.append("## Agent Configuration")
+            lines.append("")
+            if "provider" in params:
+                prov = params["provider"]
+                lines.append(f"**Provider:** risk={prov.get('risk_tolerance', 'mod')}, care={prov.get('patient_care_weight', 'mod')}, docs={prov.get('documentation_style', 'mod')}")
+            if "payor" in params:
+                pay = params["payor"]
+                lines.append(f"**Payor:** cost={pay.get('cost_focus', 'mod')}, denial={pay.get('denial_threshold', 'mod')}, ai={pay.get('ai_reliance', 'mod')}")
+            lines.append("")
+
+        # decision trace by phase
+        lines.append("## Decision Trace")
+        lines.append("")
+
+        # group interactions by phase
+        phase_2_interactions = [i for i in self.interactions if i.phase == "phase_2_pa"]
+        phase_3_interactions = [i for i in self.interactions if i.phase == "phase_3_claims"]
+
+        # phase 2 summary
+        if phase_2_interactions:
+            lines.append("### Phase 2: Prior Authorization")
+            lines.append("")
+            lines.append("| Iter | Agent | Action | Key Decision | Outcome |")
+            lines.append("|------|-------|--------|--------------|---------|")
+
+            for interaction in phase_2_interactions:
+                iter_num = interaction.metadata.get("iteration", "?")
+                agent = interaction.agent.upper()[:4]
+                action = interaction.action.replace("_request", "").replace("_review", "")
+
+                # extract key decision info from parsed output
+                parsed = interaction.parsed_output or {}
+                if interaction.agent == "provider":
+                    conf = parsed.get("confidence", interaction.metadata.get("confidence", "?"))
+                    req_type = parsed.get("request_type", interaction.metadata.get("request_type", "?"))
+                    key_decision = f"conf={conf:.1f}" if isinstance(conf, float) else f"conf={conf}"
+                    outcome = req_type
+                else:
+                    status = parsed.get("authorization_status", "?")
+                    reason = parsed.get("denial_reason", "")[:30] if parsed.get("denial_reason") else ""
+                    key_decision = status.upper()
+                    outcome = reason + "..." if reason else status
+
+                lines.append(f"| {iter_num} | {agent} | {action} | {key_decision} | {outcome} |")
+
+            lines.append("")
+
+        # phase 3 summary
+        if phase_3_interactions:
+            lines.append("### Phase 3: Claims Adjudication")
+            lines.append("")
+            lines.append("| Agent | Action | Key Decision | Amount |")
+            lines.append("|-------|--------|--------------|--------|")
+
+            for interaction in phase_3_interactions:
+                agent = interaction.agent.upper()[:4]
+                action = interaction.action.replace("claim_", "")
+                parsed = interaction.parsed_output or {}
+
+                if interaction.agent == "provider":
+                    # extract diagnosis and amount
+                    claim = parsed.get("claim_submission", parsed)
+                    codes = claim.get("diagnosis_codes", [])
+                    dx = codes[0].get("icd10", "?") if codes else "?"
+                    amount = claim.get("total_amount_billed", "?")
+                    key_decision = f"Dx: {dx}"
+                    amt_str = f"${amount:,.0f}" if isinstance(amount, (int, float)) else str(amount)
+                else:
+                    status = parsed.get("claim_status", "?")
+                    key_decision = status.upper()
+                    amt = parsed.get("approved_amount", "")
+                    amt_str = f"${amt:,.0f}" if isinstance(amt, (int, float)) else "-"
+
+                lines.append(f"| {agent} | {action} | {key_decision} | {amt_str} |")
+
+            lines.append("")
+
+        # outcome summary
+        lines.append("## Outcome")
+        lines.append("")
+        if self.summary:
+            lines.append(f"- **Total Interactions:** {self.summary.get('total_interactions', 0)}")
+            if "interactions_by_phase" in self.summary:
+                p2_count = self.summary["interactions_by_phase"].get("phase_2_pa", 0)
+                p3_count = self.summary["interactions_by_phase"].get("phase_3_claims", 0)
+                lines.append(f"- **Phase 2 Iterations:** {p2_count // 2}")  # div by 2 for provider+payor
+                lines.append(f"- **Phase 3 Steps:** {p3_count}")
+
+        # write
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write("\n".join(lines))
+
+    def save_to_markdown_compact(self, filepath: str, include_prompts: bool = False):
+        """save audit log with reduced verbosity
+
+        args:
+            filepath: output file path
+            include_prompts: if False (default), omit system prompts and show only user prompt summary
+        """
+        lines = []
+
+        # header
+        lines.append(f"# Audit Log: {self.case_id}")
+        lines.append("")
+        lines.append(f"**Simulation Start:** {self.simulation_start}")
+        lines.append(f"**Simulation End:** {self.simulation_end or 'In Progress'}")
+        lines.append("")
+
+        # summary (same as before)
+        if self.summary:
+            lines.append("## Summary")
+            lines.append("")
+            lines.append(f"- **Total Interactions:** {self.summary.get('total_interactions', 0)}")
+
+            if "interactions_by_phase" in self.summary:
+                lines.append("- **By Phase:** " + ", ".join(f"{k}: {v}" for k, v in self.summary["interactions_by_phase"].items()))
+
+            if "behavioral_parameters" in self.summary:
+                params = self.summary["behavioral_parameters"]
+                if "provider" in params:
+                    prov = params["provider"]
+                    lines.append(f"- **Provider:** risk={prov.get('risk_tolerance')}, care={prov.get('patient_care_weight')}, docs={prov.get('documentation_style')}")
+                if "payor" in params:
+                    pay = params["payor"]
+                    lines.append(f"- **Payor:** cost={pay.get('cost_focus')}, denial={pay.get('denial_threshold')}, ai={pay.get('ai_reliance')}")
+            lines.append("")
+
+        lines.append("---")
+        lines.append("")
+
+        # interactions - compact format
+        for i, interaction in enumerate(self.interactions, 1):
+            phase_name = self._format_phase_name(interaction.phase)
+            lines.append(f"## {i}. {phase_name} - {interaction.agent.capitalize()}")
+            lines.append("")
+            lines.append(f"**Action:** {interaction.action.replace('_', ' ').title()}")
+
+            # metadata (compact)
+            if interaction.metadata:
+                meta_items = [f"{k}={v}" for k, v in interaction.metadata.items()
+                              if k not in ["word_count", "cache_hit"]]
+                if meta_items:
+                    lines.append(f"**Meta:** {', '.join(meta_items)}")
+            lines.append("")
+
+            # user prompt (optional, truncated)
+            if include_prompts:
+                lines.append("<details>")
+                lines.append("<summary>User Prompt (click to expand)</summary>")
+                lines.append("")
+                lines.append("```")
+                # truncate long prompts
+                prompt = interaction.user_prompt
+                if len(prompt) > 2000:
+                    prompt = prompt[:2000] + "\n... [truncated]"
+                lines.append(prompt)
+                lines.append("```")
+                lines.append("</details>")
+                lines.append("")
+
+            # parsed output only (skip raw LLM response - it's redundant)
+            lines.append("### Decision")
+            lines.append("")
+            lines.append("```json")
+            lines.append(json.dumps(interaction.parsed_output, indent=2))
+            lines.append("```")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write("\n".join(lines))
 
 
 # rebuild models to resolve forward references

@@ -248,3 +248,8 @@ COPD_RESPIRATORY_FAILURE_GREY = {
         "tags": ["upcoding", "grey_zone", "respiratory_failure", "COPD", "DRG_gaming"]
     }
 }
+
+
+def get_copd_respiratory_failure_grey():
+    """return the COPD respiratory failure grey zone case"""
+    return COPD_RESPIRATORY_FAILURE_GREY

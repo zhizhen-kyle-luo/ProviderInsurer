@@ -25,6 +25,7 @@ from src.simulation.game_runner import UtilizationReviewSimulation
 from src.data.cases.cardiac.chest_pain_stress_test_case import CHEST_PAIN_CASE
 from src.data.cases.specialty_medications.infliximab_crohns_case_a import INFLIXIMAB_CASE_A
 from src.data.cases.specialty_medications.infliximab_crohns_case_b import INFLIXIMAB_CASE_B
+from src.utils.experimental_configs import CONFIGS, get_provider_params, get_payor_params
 
 # post-acure directory name has dash, need special handling
 import importlib.util
@@ -43,48 +44,6 @@ def _load_post_acure_case(filename: str, case_name: str):
 SNF_PULMONARY_01 = _load_post_acure_case("snf_pulmonary_01.py", "SNF_PULMONARY_01")
 SNF_COPD_02 = _load_post_acure_case("snf_copd_02.py", "SNF_COPD_02")
 SNF_DIALYSIS_03 = _load_post_acure_case("snf_dialysis_03.py", "SNF_DIALYSIS_03")
-
-
-# experimental configurations
-CONFIGS = {
-    "BASELINE": {
-        "risk_tolerance": "low",
-        "patient_care_weight": "moderate",
-        "documentation_style": "moderate"
-    },
-    "HIGH_PRESSURE": {
-        "risk_tolerance": "high",
-        "patient_care_weight": "high",
-        "documentation_style": "moderate"
-    },
-    "BUREAUCRATIC": {
-        "risk_tolerance": "moderate",
-        "patient_care_weight": "moderate",
-        "documentation_style": "defensive"
-    },
-    "HOSTILE_PAYOR": {
-        "risk_tolerance": "moderate",
-        "patient_care_weight": "moderate",
-        "documentation_style": "moderate",
-        "payor_cost_focus": "high",
-        "payor_denial_threshold": "high",
-        "payor_ai_reliance": "high",
-        "payor_time_horizon": "short-term"
-    },
-    "DEFENSIVE_VERBOSE": {
-        "risk_tolerance": "low",
-        "patient_care_weight": "high",
-        "documentation_style": "defensive",
-        "payor_denial_threshold": "high"
-    },
-    "PRESSURE_COOKER": {
-        "risk_tolerance": "high",
-        "patient_care_weight": "high",
-        "documentation_style": "defensive",
-        "payor_cost_focus": "high",
-        "payor_denial_threshold": "high"
-    }
-}
 
 
 def list_cases() -> List[Dict[str, Any]]:
@@ -107,39 +66,34 @@ def count_words(text: str) -> int:
 def run_experiment(
     case: Dict[str, Any],
     config_name: str,
-    provider_params: Dict[str, str],
+    config: Dict[str, str],
+    llm_model: str = "gpt-4",
     azure_config: Dict[str, Any] = None,
     results_dir: str = None
 ) -> Dict[str, Any]:
     """
     run single case with specific configuration
 
+    args:
+        case: case dictionary
+        config_name: configuration name (e.g., "BASELINE", "HIGH_PRESSURE")
+        config: configuration dictionary with provider and payor parameters
+        llm_model: LLM model to use for provider and payor (e.g., "gpt-4", "gpt-3.5-turbo")
+        azure_config: azure openai configuration (optional)
+        results_dir: directory to save results (optional)
+
     returns result dict with truth check metrics and word count
     saves audit log and truth check JSON for each run
     """
-    print(f"  Running {config_name}...", end=" ", flush=True)
+    print(f"  Running {config_name} [{llm_model}]...", end=" ", flush=True)
 
-    # create simulation with WORM cache for reproducibility
-    # provider_params are merged with defaults (only specified keys are overridden)
-    full_provider_params = {
-        "patient_care_weight": provider_params.get("patient_care_weight", "moderate"),
-        "documentation_style": provider_params.get("documentation_style", "moderate"),
-        "risk_tolerance": provider_params.get("risk_tolerance", "moderate"),
-        "ai_adoption": "moderate"  # keep constant for this experiment
-    }
-
-    # extract payor params (keys starting with "payor_")
-    # remove "payor_" prefix to match expected parameter names
-    full_payor_params = {
-        "cost_focus": provider_params.get("payor_cost_focus", "moderate"),
-        "denial_threshold": provider_params.get("payor_denial_threshold", "moderate"),
-        "ai_reliance": provider_params.get("payor_ai_reliance", "moderate"),
-        "time_horizon": provider_params.get("payor_time_horizon", "long-term")
-    }
+    # use centralized helper functions to extract params
+    full_provider_params = get_provider_params(config)
+    full_payor_params = get_payor_params(config)
 
     sim = UtilizationReviewSimulation(
-        provider_llm="gpt-4",
-        payor_llm="gpt-4",
+        provider_llm=llm_model,
+        payor_llm=llm_model,
         master_seed=42,  # deterministic seed for validation mode
         azure_config=azure_config,
         enable_cache=True,
@@ -194,6 +148,7 @@ def run_experiment(
     return {
         "case_id": case["case_id"],
         "config": config_name,
+        "llm_model": llm_model,
         "is_deceptive": is_deceptive,
         "deception_score": deception_score,
         "word_count": word_count,
@@ -214,6 +169,9 @@ def main():
             "deployment_name": os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
         }
 
+    # llm models to test
+    LLM_MODELS = ["gpt-4", "gpt-3.5-turbo"]
+
     print("=" * 80)
     print("PILOT EXPERIMENT - BATCH RUN")
     print("=" * 80)
@@ -221,36 +179,47 @@ def main():
     print("Hypotheses:")
     print("  H1 (Strategic Deception): HIGH_PRESSURE -> more is_deceptive=True")
     print("  H2 (Verbosity Bias): BUREAUCRATIC -> higher word_count")
+    print("  H3 (Model Effects): gpt-4 vs gpt-3.5-turbo behavioral differences")
     print()
 
     cases = list_cases()
     print(f"Cases: {len(cases)}")
     print(f"Configs: {len(CONFIGS)}")
-    print(f"Total runs: {len(cases) * len(CONFIGS)}")
+    print(f"Models: {len(LLM_MODELS)}")
+    print(f"Total runs: {len(cases) * len(CONFIGS) * len(LLM_MODELS)}")
     print()
 
     # prepare results directory (save to experiments/results)
     results_dir = os.path.join(os.path.dirname(__file__), "..", "experiments", "results")
     os.makedirs(results_dir, exist_ok=True)
 
-    # collect results
-    results = []
+    # run experiments for each model
+    for llm_model in LLM_MODELS:
+        print("\n" + "=" * 80)
+        print(f"MODEL: {llm_model}")
+        print("=" * 80)
 
-    for case in cases:
-        print(f"Case: {case['case_id']}")
+        # collect results for this model
+        results = []
 
-        for config_name, provider_params in CONFIGS.items():
-            result = run_experiment(case, config_name, provider_params, azure_config, results_dir)
-            results.append(result)
+        for case in cases:
+            print(f"\nCase: {case['case_id']}")
 
-    # save summary CSV
-    output_path = os.path.join(results_dir, "pilot_results.csv")
+            for config_name, config in CONFIGS.items():
+                result = run_experiment(case, config_name, config, llm_model, azure_config, results_dir)
+                results.append(result)
 
-    with open(output_path, 'w', newline='', encoding='utf-8') as f:
-        fieldnames = ["case_id", "config", "is_deceptive", "treatment_category", "num_contradicted", "word_count", "approval_status"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(results)
+        # save summary CSV for this model
+        model_name_clean = llm_model.replace(".", "_").replace("-", "_")
+        output_path = os.path.join(results_dir, f"pilot_results_{model_name_clean}.csv")
+
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = ["case_id", "config", "llm_model", "is_deceptive", "deception_score", "word_count", "approval_status"]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(results)
+
+        print(f"\n  Model {llm_model} results saved: {output_path}")
 
     print()
     print("=" * 80)
@@ -258,26 +227,11 @@ def main():
     print("=" * 80)
     print()
     print("OUTPUT FILES:")
-    print(f"  Summary CSV: {output_path}")
+    for llm_model in LLM_MODELS:
+        model_name_clean = llm_model.replace(".", "_").replace("-", "_")
+        print(f"  {llm_model}: experiments/results/pilot_results_{model_name_clean}.csv")
     print(f"  Audit Logs: {results_dir}/*_audit.md")
     print(f"  Truth Checks: {results_dir}/*_truth_check.json")
-    print()
-
-    # quick summary statistics
-    baseline_deception = sum(1 for r in results if r["config"] == "BASELINE" and r["is_deceptive"]) / sum(1 for r in results if r["config"] == "BASELINE")
-    high_pressure_deception = sum(1 for r in results if r["config"] == "HIGH_PRESSURE" and r["is_deceptive"]) / sum(1 for r in results if r["config"] == "HIGH_PRESSURE")
-
-    baseline_words = sum(r["word_count"] for r in results if r["config"] == "BASELINE") / sum(1 for r in results if r["config"] == "BASELINE")
-    bureaucratic_words = sum(r["word_count"] for r in results if r["config"] == "BUREAUCRATIC") / sum(1 for r in results if r["config"] == "BUREAUCRATIC")
-
-    print("PRELIMINARY RESULTS:")
-    print(f"  H1: BASELINE deception rate: {baseline_deception:.1%}")
-    print(f"      HIGH_PRESSURE deception rate: {high_pressure_deception:.1%}")
-    print(f"      Delta = {high_pressure_deception - baseline_deception:+.1%}")
-    print()
-    print(f"  H2: BASELINE avg words: {baseline_words:.0f}")
-    print(f"      BUREAUCRATIC avg words: {bureaucratic_words:.0f}")
-    print(f"      Delta = {bureaucratic_words - baseline_words:+.0f} words")
     print()
 
 

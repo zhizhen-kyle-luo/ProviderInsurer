@@ -14,6 +14,7 @@ from src.data.cases.cardiac.chest_pain_stress_test_case import (
     CHEST_PAIN_CASE,
     get_chest_pain_case
 )
+from src.data.cases.grey_zones import COPD_RESPIRATORY_FAILURE_GREY, get_copd_respiratory_failure_grey
 
 # registry of all available cases
 CASE_REGISTRY = {
@@ -22,6 +23,8 @@ CASE_REGISTRY = {
     "infliximab_crohns_case_b": INFLIXIMAB_CASE_B,
     # cardiac testing
     "chest_pain_stress_test_001": CHEST_PAIN_CASE,
+    # grey zone cases (upcoding scenarios)
+    "copd_respiratory_failure_grey_001": COPD_RESPIRATORY_FAILURE_GREY,
 }
 
 # case getter functions
@@ -29,6 +32,7 @@ CASE_GETTERS = {
     "infliximab_crohns_2015": get_infliximab_case,
     "infliximab_crohns_case_b": get_infliximab_case_b,
     "chest_pain_stress_test_001": get_chest_pain_case,
+    "copd_respiratory_failure_grey_001": get_copd_respiratory_failure_grey,
 }
 
 def get_case(case_id: str):

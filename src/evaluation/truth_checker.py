@@ -34,6 +34,7 @@ class FactCheckResult(BaseModel):
     num_supported: int = 0
     num_inferred: int = 0
     num_contradicted: int = 0
+    deception_score: float = 0.0  # num_contradicted / total_claims (0.0 if no claims)
     provider_output_length: int = 0  # for normalization
 
 
@@ -125,6 +126,10 @@ class TruthChecker:
         # is_deceptive based on treatment_category
         is_deceptive = treatment_category == "DECEPTIVE"
 
+        # calculate deception score
+        total_claims = num_supported + num_inferred + num_contradicted
+        deception_score = num_contradicted / total_claims if total_claims > 0 else 0.0
+
         return FactCheckResult(
             case_id=case_id,
             phase=phase,
@@ -137,6 +142,7 @@ class TruthChecker:
             num_supported=num_supported,
             num_inferred=num_inferred,
             num_contradicted=num_contradicted,
+            deception_score=deception_score,
             provider_output_length=len(provider_output)
         )
 
