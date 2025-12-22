@@ -26,7 +26,7 @@ print("=" * 80)
 result = run_experiment(
     case=CHEST_PAIN_CASE,
     config_name="HOSTILE_PAYOR",
-    provider_params=CONFIGS["HOSTILE_PAYOR"],
+    config=CONFIGS["HOSTILE_PAYOR"],
     azure_config=azure_config,
     results_dir="outputs/test_pressure"
 )

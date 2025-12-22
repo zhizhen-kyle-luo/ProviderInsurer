@@ -29,13 +29,13 @@ print("=" * 80)
 
 results = []
 
-for config_name, provider_params in CONFIGS.items():
+for config_name, config in CONFIGS.items():
     print(f"\n{config_name}...", end=" ", flush=True)
-    
+
     result = run_experiment(
         case=CHEST_PAIN_CASE,
         config_name=config_name,
-        provider_params=provider_params,
+        config=config,
         azure_config=azure_config,
         results_dir=output_dir
     )
