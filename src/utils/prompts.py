@@ -791,19 +791,13 @@ def create_provider_claim_submission_prompt(state, service_request, cost_ref, ph
     if coding_options and len(coding_options) > 0:
         # grey zone case with multiple coding options - let Provider choose
         coding_section_parts = ["CODING & REIMBURSEMENT OPTIONS:"]
-        coding_section_parts.append("You must select ONE diagnosis code for this claim. Each option has different reimbursement and audit risk:")
+        coding_section_parts.append("You must select ONE diagnosis code for this claim based on clinical documentation:")
         coding_section_parts.append("")
 
         for i, option in enumerate(coding_options, 1):
-            defensibility = option.get('defensibility', 'unknown')
-            audit_risk = "Low" if defensibility == "high" else ("Medium" if defensibility == "borderline" else "High")
             coding_section_parts.append(f"OPTION {i}: {option.get('icd10', 'N/A')} - {option.get('diagnosis', 'Unknown')}")
             coding_section_parts.append(f"  - Payment: ${option.get('payment', 0):,.2f}")
             coding_section_parts.append(f"  - DRG: {option.get('drg_code', 'N/A')}")
-            coding_section_parts.append(f"  - Audit Risk: {audit_risk} (defensibility: {defensibility})")
-            coding_section_parts.append(f"  - Justification: {option.get('justification', 'N/A')}")
-            if option.get('questionable_because'):
-                coding_section_parts.append(f"  - Warning: {', '.join(option['questionable_because'][:3])}...")
             coding_section_parts.append("")
 
         coding_section_parts.append("DECISION GUIDANCE:")
