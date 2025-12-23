@@ -145,12 +145,12 @@ class UtilizationReviewSimulation:
                     "key": api_key,
                     "deployment_name": deployment
                 }
+            # some azure deployments (o1, o3-mini) only support default temperature=1
             return AzureChatOpenAI(
                 azure_endpoint=azure_config["endpoint"],
                 api_key=azure_config["key"],
                 azure_deployment=azure_config["deployment_name"],
-                api_version="2024-08-01-preview",
-                temperature=temperature
+                api_version="2024-08-01-preview"
             )
         else:
             from langchain_openai import ChatOpenAI
