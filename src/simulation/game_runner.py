@@ -485,6 +485,11 @@ Test result for {test_name}:"""
           - if confidence >= threshold: request treatment PA
 
         continues until: treatment approved OR max iterations OR agent stops
+
+        stage semantics:
+          - stage 1: initial_determination (automated/checklist review)
+          - stage 2: internal_appeal (medical director review)
+          - stage 3: independent_review (final clinical review, no pend)
         """
         import json
 
@@ -494,11 +499,15 @@ Test result for {test_name}:"""
         treatment_approved = False
         approved_provider_request = None
 
+        # stage mapping for iteration semantics
+        stage_map = {1: "initial_determination", 2: "internal_appeal", 3: "independent_review"}
+
         for iteration_num in range(1, self.max_iterations + 1):
+            stage = stage_map.get(iteration_num, "unknown")
             # provider generates request based on confidence
             provider_system_prompt = create_provider_prompt(self.provider_params)
             provider_user_prompt = create_unified_provider_request_prompt(
-                state, case, iteration_num, prior_iterations, self.provider_params
+                state, case, iteration_num, prior_iterations, self.provider_params, stage=stage
             )
 
             full_prompt = f"{provider_system_prompt}\n\n{provider_user_prompt}"
@@ -571,6 +580,7 @@ Test result for {test_name}:"""
                 parsed_output=provider_request,
                 metadata={
                     "iteration": iteration_num,
+                    "stage": stage,
                     "confidence": confidence,
                     "request_type": request_type,
                     "cache_hit": cache_hit
@@ -580,10 +590,14 @@ Test result for {test_name}:"""
             # friction counting: provider action
             if state.friction_metrics:
                 state.friction_metrics.provider_actions += 1
-                # count probing tests
-                tests = provider_request.get("requested_service", {}).get("tests_requested", [])
-                if tests:
+                # count probing tests: robust extraction
+                svc = provider_request.get("requested_service", {}) or {}
+                tests = svc.get("tests_requested")
+                if isinstance(tests, list) and tests:
                     state.friction_metrics.probing_tests_count += len(tests)
+                elif request_type == "diagnostic_test":
+                    # count single diagnostic test request
+                    state.friction_metrics.probing_tests_count += 1
                 # escalation depth tracks iteration
                 state.friction_metrics.escalation_depth = max(
                     state.friction_metrics.escalation_depth, iteration_num - 1
@@ -592,7 +606,7 @@ Test result for {test_name}:"""
             # payor reviews request
             payor_system_prompt = create_payor_prompt(self.payor_params)
             payor_user_prompt = create_unified_payor_review_prompt(
-                state, provider_request, iteration_num
+                state, provider_request, iteration_num, stage=stage
             )
 
             full_prompt = f"{payor_system_prompt}\n\n{payor_user_prompt}"
@@ -627,6 +641,7 @@ Test result for {test_name}:"""
                 parsed_output=payor_decision,
                 metadata={
                     "iteration": iteration_num,
+                    "stage": stage,
                     "request_type": request_type,
                     "cache_hit": payor_cache_hit
                 }
