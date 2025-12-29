@@ -384,16 +384,24 @@ Test result for {test_name}:"""
         admission = self._build_admission_from_patient_data(case)
         clinical_presentation = self._build_clinical_presentation_from_patient_data(case)
 
+        # load case-specific policies or fallback to generic
+        case_id_lower = case["case_id"].lower()
+        if "copd" in case_id_lower or "respiratory" in case_id_lower:
+            provider_policy = COPDPolicies.GOLD_STANDARD
+            payor_policy = COPDPolicies.INTERQUAL_STRICT
+        else:
+            provider_policy = {"policy_name": "Standard Clinical Guidelines", "hospitalization_indications": []}
+            payor_policy = {"policy_name": "Standard Medical Policy", "inpatient_criteria": {"must_meet_one_of": []}}
+
         state = EncounterState(
             case_id=case["case_id"],
             admission_date=admission.admission_date,
             admission=admission,
             clinical_presentation=clinical_presentation,
             pa_type=pa_type,
-            # friction model: initialize metrics and load asymmetric policy views
             friction_metrics=FrictionMetrics(),
-            provider_policy_view=COPDPolicies.GOLD_STANDARD,
-            payor_policy_view=COPDPolicies.INTERQUAL_STRICT
+            provider_policy_view=provider_policy,
+            payor_policy_view=payor_policy
         )
 
         # unified phase 2 workflow (all case types)
