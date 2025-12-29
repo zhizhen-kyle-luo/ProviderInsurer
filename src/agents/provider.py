@@ -16,6 +16,74 @@ class ProviderAgent(GameAgent):
         super().__init__(llm, "Provider", config)
         self.cost_calculator = CPTCostCalculator()
 
+    def determine_action(
+        self,
+        state: EncounterState,
+        iteration: int,
+        prior_iterations: List[ClinicalIteration]
+    ) -> Dict[str, Any]:
+        """
+        Determine next action in friction model: order_tests, request_treatment, or abandon.
+
+        Uses provider's fuzzy clinical guidelines (GOLD) to guide decision.
+        Provider does NOT know the Payor's strict thresholds.
+
+        Returns dict with:
+        - action_type: Literal["order_tests", "request_treatment", "abandon"]
+        - tests_ordered: List[str] (if action_type == "order_tests")
+        - treatment_request: Dict (if action_type == "request_treatment")
+        - reasoning: str
+        """
+        policy_view = state.provider_policy_view or {}
+        policy_name = policy_view.get("policy_name", "Clinical Guidelines")
+        criteria = policy_view.get("hospitalization_indications", [])
+
+        prompt = f"""{self.SYSTEM_PROMPT}
+
+FRICTION MODEL - Provider Decision (Iteration {iteration})
+
+YOUR POLICY REFERENCE: {policy_name}
+ADMISSION CRITERIA (your view):
+{self._format_criteria(criteria)}
+
+IMPORTANT WARNING:
+The Insurer uses a HIDDEN, STRICTER policy with specific numeric thresholds.
+Your clinical judgment may not align with their coverage criteria.
+Gather evidence that demonstrates objective severity metrics.
+
+PATIENT PRESENTATION:
+{self._format_clinical_presentation(state)}
+
+PRIOR ITERATIONS:
+{self._format_prior_iterations(prior_iterations)}
+
+DETERMINE YOUR NEXT ACTION:
+1. "order_tests" - Order diagnostic tests to gather evidence for coverage
+2. "request_treatment" - Submit prior authorization request for treatment
+3. "abandon" - Stop pursuing authorization (patient won't receive care)
+
+DECISION FACTORS:
+- Do you have sufficient objective evidence (labs, vitals, imaging)?
+- Will additional tests strengthen your case against a strict auditor?
+- Is further iteration likely to succeed or just add friction?
+
+RESPONSE FORMAT (JSON):
+{{
+    "action_type": "order_tests" | "request_treatment" | "abandon",
+    "tests_ordered": ["<test_name>", ...],  // if order_tests
+    "treatment_request": {{  // if request_treatment
+        "diagnosis": "<primary diagnosis>",
+        "treatment": "<requested treatment>",
+        "justification": "<clinical justification>"
+    }},
+    "differential_diagnoses": ["<dx1>", "<dx2>"],
+    "reasoning": "<clinical reasoning for this action>"
+}}"""
+
+        messages = [HumanMessage(content=prompt)]
+        response = self.llm.invoke(messages)
+        return self._parse_response(response.content)
+
     def order_tests(
         self,
         state: EncounterState,
@@ -24,42 +92,10 @@ class ProviderAgent(GameAgent):
         prior_iterations: List[ClinicalIteration]
     ) -> Dict[str, Any]:
         """
-        Order diagnostic tests during concurrent review.
-
-        Returns dict with:
-        - tests_ordered: List[str]
-        - differential: List[str]
-        - confidence: float (0-1)
-        - reasoning: str
+        Legacy method - Order diagnostic tests during concurrent review.
+        Delegates to determine_action for friction model compatibility.
         """
-        prompt = f"""{self.SYSTEM_PROMPT}
-
-CONCURRENT UTILIZATION REVIEW - Iteration {iteration}
-
-PATIENT PRESENTATION:
-{self._format_clinical_presentation(state)}
-
-PRIOR TEST ORDERS:
-{self._format_prior_iterations(prior_iterations)}
-
-CURRENT CONFIDENCE: {confidence:.2f}
-
-Your task: Order next round of tests to establish medical necessity for inpatient admission.
-Focus on documenting severity indicators that justify inpatient level of care.
-
-RESPONSE FORMAT (JSON):
-{{
-    "tests_ordered": ["<test_name>", ...],
-    "differential": ["<diagnosis 1>", "<diagnosis 2>"],
-    "confidence": <0.0-1.0>,
-    "reasoning": "<clinical reasoning>"
-}}
-
-If workup complete, return empty tests_ordered list."""
-
-        messages = [HumanMessage(content=prompt)]
-        response = self.llm.invoke(messages)
-        return self._parse_response(response.content)
+        return self.determine_action(state, iteration, prior_iterations)
 
     def submit_appeal(
         self,
@@ -75,9 +111,13 @@ If workup complete, return empty tests_ordered list."""
         - severity_documentation: str
         - guideline_references: List[str]
         """
+        policy_view = state.provider_policy_view or {}
+
         prompt = f"""{self.SYSTEM_PROMPT}
 
 APPEAL SUBMISSION - Peer-to-Peer Review
+
+YOUR POLICY REFERENCE: {policy_view.get('policy_name', 'Clinical Guidelines')}
 
 DENIAL REASON:
 {denial.denial_reason}
@@ -88,11 +128,11 @@ PATIENT CLINICAL DATA:
 AVAILABLE EVIDENCE:
 {self._format_clinical_evidence(state)}
 
-Your task: Submit peer-to-peer appeal with specific clinical evidence demonstrating
-medical necessity for inpatient level of care.
+CRITICAL: The Insurer denied based on strict numeric thresholds you may not know.
+Your appeal must cite SPECIFIC objective values that demonstrate severity.
 
 APPEAL REQUIREMENTS:
-- Cite specific lab values and vital signs
+- Cite specific lab values and vital signs with numbers
 - Document severity indicators and organ dysfunction
 - Reference clinical guidelines or criteria
 - Explain why observation level is insufficient
@@ -100,7 +140,7 @@ APPEAL REQUIREMENTS:
 RESPONSE FORMAT (JSON):
 {{
     "appeal_type": "peer_to_peer",
-    "additional_evidence": "<specific clinical data>",
+    "additional_evidence": "<specific clinical data with values>",
     "severity_documentation": "<severity indicators>",
     "guideline_references": ["<guideline>", ...]
 }}"""
@@ -108,6 +148,11 @@ RESPONSE FORMAT (JSON):
         messages = [HumanMessage(content=prompt)]
         response = self.llm.invoke(messages)
         return self._parse_response(response.content)
+
+    def _format_criteria(self, criteria: List[str]) -> str:
+        if not criteria:
+            return "No specific criteria provided"
+        return "\n".join([f"- {c}" for c in criteria])
 
     def _format_clinical_presentation(self, state: EncounterState) -> str:
         presentation = state.clinical_presentation
@@ -127,10 +172,10 @@ Medical History: {', '.join(presentation.medical_history)}"""
         lines = []
         for iter in iterations:
             lines.append(f"Iteration {iter.iteration_number}:")
+            lines.append(f"  Action: {iter.action_type}")
             lines.append(f"  Tests ordered: {iter.tests_ordered}")
             lines.append(f"  Approved: {iter.tests_approved}")
             lines.append(f"  Denied: {iter.tests_denied}")
-            lines.append(f"  Confidence: {iter.provider_confidence:.2f}")
         return "\n".join(lines)
 
     def _format_clinical_evidence(self, state: EncounterState) -> str:
@@ -168,9 +213,9 @@ Medical History: {', '.join(presentation.medical_history)}"""
             pass
 
         return {
+            "action_type": "abandon",
             "tests_ordered": [],
-            "differential": [],
-            "confidence": 0.5,
+            "differential_diagnoses": [],
             "reasoning": "Error parsing response"
         }
 
