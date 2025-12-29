@@ -409,8 +409,14 @@ RESPONSE FORMAT (JSON):
     "reviewer_credentials": "Medical Director, Board Certified <specialty>"
 }}"""
 
-def create_unified_provider_request_prompt(state, case, iteration, prior_iterations, provider_params=None):
-    """unified provider prompt: decides diagnostic test PA or treatment PA based on confidence"""
+def create_unified_provider_request_prompt(state, case, iteration, prior_iterations, provider_params=None, stage=None):
+    """unified provider prompt: decides diagnostic test PA or treatment PA based on confidence
+
+    stage semantics:
+    - initial_determination: standard clinical note, gather evidence
+    - internal_appeal: address prior denial reason explicitly
+    - independent_review: final packet, maximize clarity and objective values
+    """
     import json
 
     # format prior iterations for context
@@ -437,6 +443,15 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
     if completed_tests:
         test_constraint = f"\nIMPORTANT CONSTRAINT: The following tests have been APPROVED and COMPLETED. DO NOT request them again:\n- {', '.join(completed_tests)}\nUse the results above to update your confidence. If confidence is now >= {CONFIDENCE_THRESHOLD}, request TREATMENT (not more tests).\n"
 
+    # stage-specific provider instructions
+    stage_instruction = ""
+    if stage == "initial_determination":
+        stage_instruction = "ROUND 1 - INITIAL DETERMINATION: Submit your best clinical justification based on initial presentation and any available objective data.\n"
+    elif stage == "internal_appeal":
+        stage_instruction = "ROUND 2 - INTERNAL APPEAL: You are appealing a prior denial. Address the specific denial reason explicitly and provide additional clinical evidence that addresses the payor's concerns.\n"
+    elif stage == "independent_review":
+        stage_instruction = "ROUND 3 - FINAL INDEPENDENT REVIEW: This is your final opportunity to present evidence. Ensure all objective values (labs, vitals, imaging) are clearly documented with specific numbers. Maximize clarity and completeness.\n"
+
     # inject provider policy view if available
     policy_section = ""
     if hasattr(state, 'provider_policy_view') and state.provider_policy_view:
@@ -455,7 +470,7 @@ Gather objective evidence to demonstrate clinical necessity.
 
     base_prompt = f"""ITERATION {iteration}/{MAX_ITERATIONS}
 
-{policy_section}{CONFIDENCE_GUIDELINES}
+{stage_instruction}{policy_section}{CONFIDENCE_GUIDELINES}
 
 {prior_context}
 {test_constraint}
@@ -543,8 +558,14 @@ This extensive documentation burden is necessary to avoid automatic denial."""
     
     return base_prompt
 
-def create_unified_payor_review_prompt(state, provider_request, iteration):
-    """unified payor prompt: reviews any PA request (diagnostic or treatment)"""
+def create_unified_payor_review_prompt(state, provider_request, iteration, stage=None):
+    """unified payor prompt: reviews any PA request (diagnostic or treatment)
+
+    stage semantics:
+    - initial_determination: automated/checklist review, strict thresholds, can deny/pend
+    - internal_appeal: medical director review, can set requires_peer_to_peer, still policy-based
+    - independent_review: final decision, strongly discourage pending, must choose approved or denied
+    """
     import json
 
     request_type = provider_request.get('request_type')
@@ -597,9 +618,36 @@ CRITICAL: Deny if numeric thresholds are not met exactly. Do NOT approve based o
 
 """
 
+    # stage-specific payor instructions
+    stage_instruction = ""
+    if stage == "initial_determination":
+        stage_instruction = """ROUND 1 - INITIAL DETERMINATION (Automated Review):
+Reviewer: AI algorithm or UM Nurse
+Mode: Strict checklist review
+Decision options: approved | denied | pending_info
+Guidance: Apply thresholds strictly. Deny if numeric values not met. Pend only if objective values are missing but could satisfy criteria if provided.
+
+"""
+    elif stage == "internal_appeal":
+        stage_instruction = """ROUND 2 - INTERNAL APPEAL (Medical Director Review):
+Reviewer: Medical director (can set requires_peer_to_peer: true)
+Mode: Policy-based review with narrative consideration
+Decision options: approved | denied | pending_info
+Guidance: Provider is appealing prior denial. Consider if new clinical evidence addresses initial concerns. Still apply policy strictly, but can discuss peer-to-peer if clinically justified.
+
+"""
+    elif stage == "independent_review":
+        stage_instruction = """ROUND 3 - FINAL INDEPENDENT REVIEW (Clinical Review Officer):
+Reviewer: Independent reviewer (external to initial decision)
+Mode: Final determination - no endless pend
+Decision options: approved | denied (strongly discourage pending_info)
+Guidance: This is the final decision point. Issue APPROVED or DENIED with specific rationale. Only pend if absolutely impossible to make final determination. Focus on whether objective values meet policy thresholds.
+
+"""
+
     base_prompt = f"""ITERATION {iteration}/{MAX_ITERATIONS}
 
-{policy_section}PROVIDER REQUEST:
+{stage_instruction}{policy_section}PROVIDER REQUEST:
 {diagnosis_summary}
 
 {request_summary}
