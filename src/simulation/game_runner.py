@@ -502,6 +502,12 @@ Test result for {test_name}:"""
         # stage mapping for iteration semantics
         stage_map = {1: "initial_determination", 2: "internal_appeal", 3: "independent_review"}
 
+        # verify policy views are loaded (critical for information asymmetry)
+        if not state.provider_policy_view:
+            print(f"[WARNING] provider_policy_view is empty - LLM will guess clinical criteria")
+        if not state.payor_policy_view:
+            print(f"[WARNING] payor_policy_view is empty - LLM will guess coverage criteria")
+
         for iteration_num in range(1, self.max_iterations + 1):
             stage = stage_map.get(iteration_num, "unknown")
             # provider generates request based on confidence
@@ -629,6 +635,24 @@ Test result for {test_name}:"""
                     "criteria_used": "unknown",
                     "reviewer_type": "AI algorithm"
                 }
+
+            # stage 3 enforcement: independent review must issue final decision (no endless pend)
+            if stage == "independent_review" and payor_decision.get("authorization_status") == "pending_info":
+                payor_decision["authorization_status"] = "denied"
+                payor_decision["denial_reason"] = (
+                    payor_decision.get("denial_reason", "") +
+                    " [COERCED: independent review cannot pend - insufficient objective documentation]"
+                )
+                payor_decision["stage_3_coerced"] = True
+
+            # enforce stage-consistent reviewer types
+            if stage == "initial_determination":
+                if payor_decision.get("reviewer_type") not in ["AI algorithm", "UM Nurse", "Nurse reviewer"]:
+                    payor_decision["reviewer_type"] = "AI algorithm"
+            elif stage == "internal_appeal":
+                payor_decision["reviewer_type"] = "Medical director"
+            elif stage == "independent_review":
+                payor_decision["reviewer_type"] = "Independent reviewer"
 
             # log payor decision
             self.audit_logger.log_interaction(
