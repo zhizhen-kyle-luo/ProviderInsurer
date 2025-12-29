@@ -65,13 +65,30 @@ class ImagingResult(BaseModel):
     impression: str
 
 
+class FrictionMetrics(BaseModel):
+    """tracks administrative friction in PA negotiations"""
+    # AAV (Administrative Action Volume): discrete moves (submissions, appeals, denials, pends)
+    provider_actions: int = 0
+    payor_actions: int = 0
+
+    # CPL (Clinical Probing Load): tests ordered to satisfy coverage gates
+    probing_tests_count: int = 0
+
+    # ED (Escalation Depth): 0=Approved First Try, 1=Appeal L1, 2=Appeal L2, 3=Abandon
+    escalation_depth: int = 0
+
+    @property
+    def total_friction(self) -> int:
+        return self.provider_actions + self.payor_actions + self.probing_tests_count + self.escalation_depth
+
+
 class ClinicalIteration(BaseModel):
     iteration_number: int
-    tests_ordered: List[str]
-    tests_approved: List[str]
-    tests_denied: List[str]
+    action_type: Literal["order_tests", "request_treatment", "abandon"] = "order_tests"
+    tests_ordered: List[str] = Field(default_factory=list)
+    tests_approved: List[str] = Field(default_factory=list)
+    tests_denied: List[str] = Field(default_factory=list)
     denial_reasons: Dict[str, str] = Field(default_factory=dict)
-    provider_confidence: float = Field(ge=0.0, le=1.0)
     differential_diagnoses: List[str] = Field(default_factory=list)
 
 
@@ -197,6 +214,11 @@ class EncounterState(BaseModel):
     # phase 3 billing - Provider's actual chosen amount (for DRG upcoding analysis)
     phase_3_billed_amount: Optional[float] = None
     phase_3_diagnosis_code: Optional[str] = None
+
+    # friction model - policy asymmetry and friction tracking
+    friction_metrics: Optional[FrictionMetrics] = None
+    provider_policy_view: Dict[str, Any] = Field(default_factory=dict)  # fuzzy clinical view (GOLD)
+    payor_policy_view: Dict[str, Any] = Field(default_factory=dict)  # strict coverage view (InterQual)
 
     ground_truth_outcome: Optional[Union[Literal["inpatient", "observation"], Literal["approved", "denied"]]] = None
     simulation_matches_reality: Optional[bool] = None

@@ -25,8 +25,10 @@ from src.models.schemas import (
     AdmissionNotification,
     PatientDemographics,
     InsuranceInfo,
-    ClinicalPresentation
+    ClinicalPresentation,
+    FrictionMetrics
 )
+from src.data.policies import COPDPolicies
 from src.agents.provider import ProviderAgent
 from src.agents.payor import PayorAgent
 from src.utils.cpt_calculator import CPTCostCalculator
@@ -387,7 +389,11 @@ Test result for {test_name}:"""
             admission_date=admission.admission_date,
             admission=admission,
             clinical_presentation=clinical_presentation,
-            pa_type=pa_type
+            pa_type=pa_type,
+            # friction model: initialize metrics and load asymmetric policy views
+            friction_metrics=FrictionMetrics(),
+            provider_policy_view=COPDPolicies.GOLD_STANDARD,
+            payor_policy_view=COPDPolicies.INTERQUAL_STRICT
         )
 
         # unified phase 2 workflow (all case types)
@@ -424,6 +430,16 @@ Test result for {test_name}:"""
             "payor": self.payor_params
         }
         summary["master_seed"] = self.master_seed
+
+        # add friction metrics to summary
+        if state.friction_metrics:
+            summary["friction_metrics"] = {
+                "provider_actions": state.friction_metrics.provider_actions,
+                "payor_actions": state.friction_metrics.payor_actions,
+                "probing_tests_count": state.friction_metrics.probing_tests_count,
+                "escalation_depth": state.friction_metrics.escalation_depth,
+                "total_friction": state.friction_metrics.total_friction
+            }
 
         # add truth check summary if available
         if self.enable_truth_checking:
@@ -553,6 +569,18 @@ Test result for {test_name}:"""
                 }
             )
 
+            # friction counting: provider action
+            if state.friction_metrics:
+                state.friction_metrics.provider_actions += 1
+                # count probing tests
+                tests = provider_request.get("requested_service", {}).get("tests_requested", [])
+                if tests:
+                    state.friction_metrics.probing_tests_count += len(tests)
+                # escalation depth tracks iteration
+                state.friction_metrics.escalation_depth = max(
+                    state.friction_metrics.escalation_depth, iteration_num - 1
+                )
+
             # payor reviews request
             payor_system_prompt = create_payor_prompt(self.payor_params)
             payor_user_prompt = create_unified_payor_review_prompt(
@@ -595,6 +623,10 @@ Test result for {test_name}:"""
                     "cache_hit": payor_cache_hit
                 }
             )
+
+            # friction counting: payor action
+            if state.friction_metrics:
+                state.friction_metrics.payor_actions += 1
 
             # track iteration for next round
             iteration_record = {
@@ -1485,6 +1517,7 @@ Respond in JSON:
                     })
 
         # build full context for truth checker
+        # truth checker has access to BOTH policy documents (provider and payor cannot see each other's)
         full_context = {
             "interaction_history": phase_2_interactions,
             "patient_visible_data": case.get("patient_visible_data", {}),
@@ -1492,7 +1525,10 @@ Respond in JSON:
             "behavioral_params": {
                 "provider": self.provider_params,
                 "payor": self.payor_params
-            }
+            },
+            # BOTH policies for asymmetry analysis (agents only see their own)
+            "provider_policy": state.provider_policy_view,  # GOLD 2023 (fuzzy)
+            "payor_policy": state.payor_policy_view  # InterQual 2022 (strict)
         }
 
         # run truth checker with full context
@@ -1545,13 +1581,17 @@ Respond in JSON:
                     })
 
         # build full context (reuse patient data and test results from phase 2)
+        # truth checker has access to BOTH policy documents
         full_context = {
             "interaction_history": phase_3_interactions,
             "patient_visible_data": case.get("patient_visible_data", {}),
             "behavioral_params": {
                 "provider": self.provider_params,
                 "payor": self.payor_params
-            }
+            },
+            # BOTH policies for asymmetry analysis
+            "provider_policy": state.provider_policy_view,  # GOLD 2023
+            "payor_policy": state.payor_policy_view  # InterQual 2022
         }
 
         # run truth checker with full context
