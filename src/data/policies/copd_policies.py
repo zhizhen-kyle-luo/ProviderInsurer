@@ -37,6 +37,9 @@ class COPDPolicies:
 
     # THE PAYOR'S VIEW (Rigid, Metric-Driven, Cost-Averse)
     # Source: InterQual 2022 Physician Admission Guide, Page 1, lines 48-57
+    # NOTE: InterQual uses "structured checklist" criteria - combination of numeric thresholds
+    # (SpO2, PaO2, pH, PCO2) AND objective clinical descriptors (cyanosis, paradoxical motion,
+    # increased work of breathing). NOT purely numeric, but more rigid than GOLD's fuzzy guidelines.
     INTERQUAL_STRICT = {
         "policy_name": "InterQual 2022 COPD Criteria",
         "source": "InterQual Physician Admission Guide (Adult) 2022",
@@ -60,10 +63,11 @@ class COPDPolicies:
             ],
             "must_meet_one_of": [
                 {"metric": "SpO2", "threshold": "<= 89%"},
-                {"metric": "PaO2", "threshold": "<= 55 mmHg"},
+                {"metric": "PaO2", "threshold": "<= 55 mmHg", "with": "pH > 7.45"},
                 {"metric": "PCO2", "threshold": "> 45 mmHg", "with": "pH < 7.35"},
                 {"metric": "ventilation", "values": ["impending intubation", "NIPPV", "mechanical ventilation"]},
-                {"metric": "physical_signs", "values": ["cyanosis", "paradoxical motion"]}
+                {"metric": "physical_signs", "values": ["cyanosis", "paradoxical motion"]},
+                {"metric": "work_of_breathing", "description": "increased work of breathing with functional descriptors"}
             ],
             "risk_factors": [
                 "Age > 65",

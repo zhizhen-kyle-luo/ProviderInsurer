@@ -670,10 +670,12 @@ EVALUATION CRITERIA:
 
 RESPONSE FORMAT (JSON):
 {{
-    "authorization_status": "approved" or "denied",
-    "denial_reason": "<specific reason if denied, including what's missing or why unnecessary>",
+    "authorization_status": "approved" or "denied" or "pending_info",
+    "denial_reason": "<specific reason if denied or pended, including what's missing>",
+    "missing_documentation": ["<doc1>", "<doc2>"],  // optional, if pending for missing info
     "criteria_used": "<guidelines or policies applied>",
-    "reviewer_type": "AI algorithm" or "Nurse reviewer" or "Medical director"
+    "reviewer_type": "AI algorithm" or "Nurse reviewer" or "Medical director" or "Independent reviewer",
+    "requires_peer_to_peer": true or false  // optional, set true if peer-to-peer recommended
 }}"""
     
     return base_prompt
