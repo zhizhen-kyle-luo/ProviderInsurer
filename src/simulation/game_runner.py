@@ -384,16 +384,24 @@ Test result for {test_name}:"""
         admission = self._build_admission_from_patient_data(case)
         clinical_presentation = self._build_clinical_presentation_from_patient_data(case)
 
+        # load case-specific policies or fallback to generic
+        case_id_lower = case["case_id"].lower()
+        if "copd" in case_id_lower or "respiratory" in case_id_lower:
+            provider_policy = COPDPolicies.GOLD_STANDARD
+            payor_policy = COPDPolicies.INTERQUAL_STRICT
+        else:
+            provider_policy = {"policy_name": "Standard Clinical Guidelines", "hospitalization_indications": []}
+            payor_policy = {"policy_name": "Standard Medical Policy", "inpatient_criteria": {"must_meet_one_of": []}}
+
         state = EncounterState(
             case_id=case["case_id"],
             admission_date=admission.admission_date,
             admission=admission,
             clinical_presentation=clinical_presentation,
             pa_type=pa_type,
-            # friction model: initialize metrics and load asymmetric policy views
             friction_metrics=FrictionMetrics(),
-            provider_policy_view=COPDPolicies.GOLD_STANDARD,
-            payor_policy_view=COPDPolicies.INTERQUAL_STRICT
+            provider_policy_view=provider_policy,
+            payor_policy_view=payor_policy
         )
 
         # unified phase 2 workflow (all case types)
@@ -477,6 +485,11 @@ Test result for {test_name}:"""
           - if confidence >= threshold: request treatment PA
 
         continues until: treatment approved OR max iterations OR agent stops
+
+        stage semantics:
+          - stage 1: initial_determination (automated/checklist review)
+          - stage 2: internal_appeal (medical director review)
+          - stage 3: independent_review (final clinical review, no pend)
         """
         import json
 
@@ -486,11 +499,21 @@ Test result for {test_name}:"""
         treatment_approved = False
         approved_provider_request = None
 
+        # stage mapping for iteration semantics
+        stage_map = {1: "initial_determination", 2: "internal_appeal", 3: "independent_review"}
+
+        # verify policy views are loaded (critical for information asymmetry)
+        if not state.provider_policy_view:
+            print(f"[WARNING] provider_policy_view is empty - LLM will guess clinical criteria")
+        if not state.payor_policy_view:
+            print(f"[WARNING] payor_policy_view is empty - LLM will guess coverage criteria")
+
         for iteration_num in range(1, self.max_iterations + 1):
+            stage = stage_map.get(iteration_num, "unknown")
             # provider generates request based on confidence
             provider_system_prompt = create_provider_prompt(self.provider_params)
             provider_user_prompt = create_unified_provider_request_prompt(
-                state, case, iteration_num, prior_iterations, self.provider_params
+                state, case, iteration_num, prior_iterations, self.provider_params, stage=stage
             )
 
             full_prompt = f"{provider_system_prompt}\n\n{provider_user_prompt}"
@@ -563,6 +586,7 @@ Test result for {test_name}:"""
                 parsed_output=provider_request,
                 metadata={
                     "iteration": iteration_num,
+                    "stage": stage,
                     "confidence": confidence,
                     "request_type": request_type,
                     "cache_hit": cache_hit
@@ -572,10 +596,14 @@ Test result for {test_name}:"""
             # friction counting: provider action
             if state.friction_metrics:
                 state.friction_metrics.provider_actions += 1
-                # count probing tests
-                tests = provider_request.get("requested_service", {}).get("tests_requested", [])
-                if tests:
+                # count probing tests: robust extraction
+                svc = provider_request.get("requested_service", {}) or {}
+                tests = svc.get("tests_requested")
+                if isinstance(tests, list) and tests:
                     state.friction_metrics.probing_tests_count += len(tests)
+                elif request_type == "diagnostic_test":
+                    # count single diagnostic test request
+                    state.friction_metrics.probing_tests_count += 1
                 # escalation depth tracks iteration
                 state.friction_metrics.escalation_depth = max(
                     state.friction_metrics.escalation_depth, iteration_num - 1
@@ -584,7 +612,7 @@ Test result for {test_name}:"""
             # payor reviews request
             payor_system_prompt = create_payor_prompt(self.payor_params)
             payor_user_prompt = create_unified_payor_review_prompt(
-                state, provider_request, iteration_num
+                state, provider_request, iteration_num, stage=stage
             )
 
             full_prompt = f"{payor_system_prompt}\n\n{payor_user_prompt}"
@@ -608,6 +636,24 @@ Test result for {test_name}:"""
                     "reviewer_type": "AI algorithm"
                 }
 
+            # stage 3 enforcement: independent review must issue final decision (no endless pend)
+            if stage == "independent_review" and payor_decision.get("authorization_status") == "pending_info":
+                payor_decision["authorization_status"] = "denied"
+                payor_decision["denial_reason"] = (
+                    payor_decision.get("denial_reason", "") +
+                    " [COERCED: independent review cannot pend - insufficient objective documentation]"
+                )
+                payor_decision["stage_3_coerced"] = True
+
+            # enforce stage-consistent reviewer types
+            if stage == "initial_determination":
+                if payor_decision.get("reviewer_type") not in ["AI algorithm", "UM Nurse", "Nurse reviewer"]:
+                    payor_decision["reviewer_type"] = "AI algorithm"
+            elif stage == "internal_appeal":
+                payor_decision["reviewer_type"] = "Medical director"
+            elif stage == "independent_review":
+                payor_decision["reviewer_type"] = "Independent reviewer"
+
             # log payor decision
             self.audit_logger.log_interaction(
                 phase="phase_2_pa",
@@ -619,6 +665,7 @@ Test result for {test_name}:"""
                 parsed_output=payor_decision,
                 metadata={
                     "iteration": iteration_num,
+                    "stage": stage,
                     "request_type": request_type,
                     "cache_hit": payor_cache_hit
                 }
