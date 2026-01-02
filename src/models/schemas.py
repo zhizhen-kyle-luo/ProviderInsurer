@@ -74,12 +74,52 @@ class FrictionMetrics(BaseModel):
     # CPL (Clinical Probing Load): tests ordered to satisfy coverage gates
     probing_tests_count: int = 0
 
-    # ED (Escalation Depth): 0=Approved First Try, 1=Appeal L1, 2=Appeal L2, 3=Abandon
+    # ED (Escalation Depth): 0=Approved First Try, 1=First Appeal, 2=Second Appeal, 3=Abandon
     escalation_depth: int = 0
 
     @property
     def total_friction(self) -> int:
         return self.provider_actions + self.payor_actions + self.probing_tests_count + self.escalation_depth
+
+
+class SubmissionPacket(BaseModel):
+    """
+    what provider has submitted for insurer review (visible at all levels)
+    this is the official record that even independent reviewers can see
+    """
+    clinical_notes: str = ""
+    diagnosis_codes: List[Dict[str, Any]] = Field(default_factory=list)
+    procedure_codes: List[str] = Field(default_factory=list)
+    supporting_evidence: List[str] = Field(default_factory=list)
+    test_results: Dict[str, Any] = Field(default_factory=dict)
+    prior_authorization_reference: Optional[str] = None
+    appeal_arguments: List[str] = Field(default_factory=list)
+    submitted_at_level: int = 0
+
+
+class InternalNotes(BaseModel):
+    """
+    plan-internal notes visible only to Level 0 and Level 1 reviewers
+    Level 2 (independent review) must NOT see these
+    """
+    gating_results: Dict[str, bool] = Field(default_factory=dict)
+    missing_required_fields: List[str] = Field(default_factory=list)
+    policy_match_score: Optional[str] = None
+    prior_denial_rationale_template: Optional[str] = None
+    internal_flags: List[str] = Field(default_factory=list)
+    copilot_recommendations: List[str] = Field(default_factory=list)
+    reviewer_notes: str = ""
+
+
+class LevelDecisionRecord(BaseModel):
+    """record of a decision made at a specific level"""
+    level: int
+    role: str
+    decision: Literal["APPROVE", "DENY", "REQUEST_INFO"]
+    rationale: str
+    criteria_cited: List[str] = Field(default_factory=list)
+    request_info_cycles_at_level: int = 0
+    internal_notes_available: bool = False
 
 
 class ClinicalIteration(BaseModel):
@@ -209,7 +249,6 @@ class EncounterState(BaseModel):
     claim_rejected: bool = False
     claim_abandoned_via_pend: bool = False
     pend_iterations: int = 0
-    resubmission_cost_incurred: float = 0.0
 
     # phase 3 billing - Provider's actual chosen amount (for DRG upcoding analysis)
     phase_3_billed_amount: Optional[float] = None
@@ -222,6 +261,14 @@ class EncounterState(BaseModel):
 
     ground_truth_outcome: Optional[Union[Literal["inpatient", "observation"], Literal["approved", "denied"]]] = None
     simulation_matches_reality: Optional[bool] = None
+
+    # level-specific tracking for Medicare Advantage workflow (0-indexed: L0=triage, L1=reconsideration, L2=IRE)
+    current_level: int = 0
+    level_decision_history: List["LevelDecisionRecord"] = Field(default_factory=list)
+    submission_packet: Optional["SubmissionPacket"] = None
+    internal_notes: Optional["InternalNotes"] = None
+    independent_review_reached: bool = False  # true when escalated to Level 2 (IRE)
+    request_info_cycles_by_level: Dict[int, int] = Field(default_factory=dict)
 
     # audit log for LLM interactions
     audit_log: Optional["AuditLog"] = None
@@ -301,7 +348,7 @@ class LLMInteraction(BaseModel):
     """Single LLM prompt-response interaction."""
     interaction_id: str
     timestamp: str
-    phase: Literal["phase_1_presentation", "phase_2_pa", "phase_2_pa_appeal", "phase_3_claims", "phase_4_financial"]
+    phase: Literal["phase_1_presentation", "phase_2_pa", "phase_2_utilization_review", "phase_2_pa_appeal", "phase_3_claims", "phase_4_financial"]
     agent: Literal["provider", "payor", "environment"]
     action: str  # e.g., "order_tests", "concurrent_review", "submit_appeal", "review_appeal"
     system_prompt: str
