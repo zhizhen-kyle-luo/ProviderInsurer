@@ -1,64 +1,102 @@
 # simulation configuration
-MAX_ITERATIONS = 3  # phase 2: Initial Claim -> Appeal L1 -> Appeal L2
-MAX_PHASE_3_ITERATIONS = 10  # phase 3: claims adjudication max appeal iterations
-CONFIDENCE_THRESHOLD = 0.9
-NOISE_PROBABILITY = 0.15
+MAX_ITERATIONS = 3  # 3-level workflow: both Phase 2 (PA) and Phase 3 (Claims) use same 3-level structure
+NOISE_PROBABILITY = 0
 
-# phase 3 claim adjudication costs
-CLAIM_REJECTION_COST = 100.0          # formal appeal cost
-CLAIM_REJECTION_SUCCESS_RATE = 0.75   # 75% overturn rate
+# bounded pend loop constraints (no arbitrary costs - purely structural)
+MAX_REQUEST_INFO_PER_LEVEL = 2  # max REQUEST_INFO cycles before forced decision
 
-CLAIM_PEND_RESUBMIT_COST = 25.0       # resubmission admin cost
-CLAIM_PEND_SUCCESS_RATE = 0.40        # 40% approval after resubmit
+# internal reasoning for provider documentation (empty by design - internal only, not sent to insurer)
+INTERNAL_REASONING = ""
 
-MAX_PEND_ITERATIONS = 10               # safety limit to prevent infinite loops
+# provider actions (discrete, no numeric influence)
+PROVIDER_ACTIONS = ["CONTINUE", "APPEAL", "ABANDON"]
 
-# confidence score guidelines for provider agent
-CONFIDENCE_GUIDELINES = """
-CONFIDENCE SCORE (0.0-1.0):
-represents your diagnostic certainty for proposing treatment
+# payor actions (discrete, no numeric influence)
+PAYOR_ACTIONS = ["APPROVE", "DENY", "REQUEST_INFO"]
 
-0.0-0.3: very uncertain diagnosis
-  - need basic diagnostic workup (CBC, basic metabolic panel, vital signs)
-  - multiple differentials remain plausible
-  - insufficient data to narrow diagnosis
+# level definitions for 3-level Medicare Advantage-inspired workflow (0-indexed)
+# Level 0: UM triage / checklist-driven initial determination
+# Level 1: internal reconsideration by higher authority (medical director-like)
+# Level 2: independent external review (IRE/IRO), terminal, no internal notes access
+WORKFLOW_LEVELS = {
+    0: {
+        "name": "initial_determination",
+        "role": "triage",
+        "role_label": "UM Triage Reviewer",
+        "can_pend": True,
+        "terminal": False,
+        "independent": False,
+        "sees_internal_notes": True,
+        "copilot_active": True,
+        "review_style": "checklist-driven, request info for missing required fields",
+        "description": "Initial UM review. Prioritize REQUEST_INFO when required fields are missing. Be checklist-driven. Deny if clear policy mismatch."
+    },
+    1: {
+        "name": "internal_reconsideration",
+        "role": "reconsideration",
+        "role_label": "Medical Director Reviewer",
+        "can_pend": True,
+        "terminal": False,
+        "independent": False,
+        "sees_internal_notes": True,
+        "copilot_active": True,
+        "review_style": "clinical interpretation, fresh eyes, less pend-prone",
+        "description": "Internal reconsideration by higher authority. Allow more clinical interpretation. Less likely to REQUEST_INFO if enough evidence exists. Fresh reviewer semantics."
+    },
+    2: {
+        "name": "independent_review",
+        "role": "independent",
+        "role_label": "Independent Review Entity (IRE)",
+        "can_pend": False,
+        "terminal": True,
+        "independent": True,
+        "sees_internal_notes": False,
+        "copilot_active": False,
+        "review_style": "record-based binding decision, cite criteria explicitly",
+        "description": "Independent external review. Decide based on submitted record only. Cite criteria. No REQUEST_INFO allowed. Produces binding final disposition."
+    }
+}
 
-0.3-0.6: working diagnosis forming
-  - initial test results available
-  - narrowing differential based on objective findings
-  - need confirmatory testing to establish diagnosis
+# mapping from stage names to level numbers (0-indexed)
+LEVEL_NAME_MAP = {
+    "initial_determination": 0,
+    "internal_appeal": 1,
+    "internal_reconsideration": 1,
+    "independent_review": 2
+}
 
-0.6-0.9: strong clinical suspicion
-  - key diagnostic criteria met
-  - may need confirmatory testing (imaging, biopsy, specialized labs)
-  - high probability of specific diagnosis but not definitive
-
-0.9-1.0: confident diagnosis
-  - diagnostic criteria satisfied per clinical guidelines
-  - objective evidence supports diagnosis
-  - ready to propose definitive treatment
-  - evidence sufficient for treatment PA request
-
-DECISION LOGIC:
-- if confidence < 0.9: request diagnostic test PA to build confidence
-- if confidence >= 0.9: request treatment PA (medication, procedure, admission)
-
-IMPORTANT: generate your own confidence score based on available clinical data
-"""
 
 # default behavioral parameters
 DEFAULT_PROVIDER_PARAMS = {
     'patient_care_weight': 'high',
     'documentation_style': 'moderate',
     'risk_tolerance': 'moderate',
-    'ai_adoption': 'moderate'
+    'oversight_intensity': 'medium'
 }
 
 DEFAULT_PAYOR_PARAMS = {
-    'cost_focus': 'moderate',
-    'ai_reliance': 'high',
-    'denial_threshold': 'moderate',
-    'time_horizon': 'short-term'
+    'strictness': 'moderate',  # merged cost_focus + denial_threshold
+    'time_horizon': 'short-term',
+    'oversight_intensity': 'medium'
+}
+
+# oversight intensity budget definitions (enforceable constraints)
+OVERSIGHT_BUDGETS = {
+    'low': {
+        'max_edit_passes': 1,
+        'max_tokens_changed': 50,
+        'max_evidence_checks': 1
+    },
+    'medium': {
+        'max_edit_passes': 1,
+        'max_tokens_changed': 200,
+        'max_evidence_checks': 3
+    },
+    'high': {
+        'max_edit_passes': 2,
+        'max_tokens_changed': 600,
+        'max_evidence_checks': 6
+    }
 }
 
 # behavioral parameter definitions
@@ -78,33 +116,28 @@ PROVIDER_PARAM_DEFINITIONS = {
         'moderate': 'treat urgent cases without approval then appeal later, calculated risk-taking',
         'high': 'frequently treat before approval, willing to absorb costs if denied'
     },
-    'ai_adoption': {
-        'low': 'manual documentation, minimal AI assistance, traditional clinical writing',
-        'moderate': 'AI assists with templates and suggestions, provider reviews and edits all content',
-        'high': 'heavily AI-generated documentation with minimal human editing, efficiency-focused'
+    'oversight_intensity': {
+        'low': 'minimal human review of AI drafts, accept with minor tweaks only',
+        'medium': 'standard review cycle, can fix contradictions and add missing evidence',
+        'high': 'thorough multi-pass review, extensive editing allowed, verify all claims against evidence'
     }
 }
 
 PAYOR_PARAM_DEFINITIONS = {
-    'cost_focus': {
-        'low': 'approve most medically reasonable requests, minimize denials and administrative friction',
-        'moderate': 'balance cost control with medical necessity, follow guidelines strictly',
-        'high': 'aggressive cost reduction, deny unless clearly necessary, challenge borderline cases'
-    },
-    'ai_reliance': {
-        'low': 'human medical directors review all PA requests, AI used only for data retrieval',
-        'moderate': 'AI flags questionable cases, humans make all final authorization decisions',
-        'high': 'AI makes most routine decisions autonomously, humans only review appeals and complex cases'
-    },
-    'denial_threshold': {
-        'low': 'liberal interpretation of medical necessity, approve if clinically reasonable',
-        'moderate': 'strictly follow published guidelines, require documented medical necessity',
-        'high': 'conservative interpretation, require extensive documentation even for guideline-supported cases'
+    'strictness': {
+        'low': 'approve most medically reasonable requests, liberal interpretation of medical necessity, minimize denials and administrative friction',
+        'moderate': 'balance cost control with medical necessity, follow guidelines strictly, require documented medical necessity',
+        'high': 'aggressive cost reduction, conservative interpretation, deny unless clearly necessary, require extensive documentation even for guideline-supported cases'
     },
     'time_horizon': {
         'short-term': 'minimize immediate costs, deny expensive treatments, ignore long-term member health consequences',
         'medium-term': 'balance quarterly results with member retention, consider 1-2 year outcomes',
         'long-term': 'invest in prevention and member satisfaction, consider multi-year cost-effectiveness'
+    },
+    'oversight_intensity': {
+        'low': 'minimal human review of AI decisions, automated processing with rare overrides',
+        'medium': 'standard review cycle, medical director spot-checks AI decisions',
+        'high': 'thorough multi-pass review, extensive human verification of all AI recommendations'
     }
 }
 
@@ -117,7 +150,7 @@ def create_provider_prompt(params=None):
     patient_care_def = PROVIDER_PARAM_DEFINITIONS['patient_care_weight'][params['patient_care_weight']]
     doc_style_def = PROVIDER_PARAM_DEFINITIONS['documentation_style'][params['documentation_style']]
     risk_def = PROVIDER_PARAM_DEFINITIONS['risk_tolerance'][params['risk_tolerance']]
-    ai_def = PROVIDER_PARAM_DEFINITIONS['ai_adoption'][params['ai_adoption']]
+    oversight_def = PROVIDER_PARAM_DEFINITIONS['oversight_intensity'].get(params.get('oversight_intensity', 'medium'), '')
 
     return f"""You are a PROVIDER agent (hospital/clinic) in Fee-for-Service Medicare Advantage.
 
@@ -125,7 +158,7 @@ BEHAVIORAL PARAMETERS:
 - Patient care priority: {params['patient_care_weight']} ({patient_care_def})
 - Documentation style: {params['documentation_style']} ({doc_style_def})
 - Risk tolerance: {params['risk_tolerance']} ({risk_def})
-- AI adoption: {params['ai_adoption']} ({ai_def})
+- Oversight intensity: {params.get('oversight_intensity', 'medium')} ({oversight_def})
 
 CRITICAL CONTEXT - WHAT YOUR DECISIONS MEAN:
 
@@ -169,18 +202,16 @@ def create_payor_prompt(params=None):
         params = DEFAULT_PAYOR_PARAMS
 
     # get explicit definitions for current parameter values
-    cost_focus_def = PAYOR_PARAM_DEFINITIONS['cost_focus'][params['cost_focus']]
-    ai_reliance_def = PAYOR_PARAM_DEFINITIONS['ai_reliance'][params['ai_reliance']]
-    denial_threshold_def = PAYOR_PARAM_DEFINITIONS['denial_threshold'][params['denial_threshold']]
+    strictness_def = PAYOR_PARAM_DEFINITIONS['strictness'][params['strictness']]
     time_horizon_def = PAYOR_PARAM_DEFINITIONS['time_horizon'][params['time_horizon']]
+    oversight_def = PAYOR_PARAM_DEFINITIONS['oversight_intensity'].get(params.get('oversight_intensity', 'medium'), '')
 
     base_prompt = f"""You are an INSURER agent (Medicare Advantage plan) managing costs using AI systems.
 
 BEHAVIORAL PARAMETERS:
-- Cost focus: {params['cost_focus']} ({cost_focus_def})
-- AI reliance: {params['ai_reliance']} ({ai_reliance_def})
-- Denial threshold: {params['denial_threshold']} ({denial_threshold_def})
+- Strictness: {params['strictness']} ({strictness_def})
 - Time horizon: {params['time_horizon']} ({time_horizon_def})
+- Oversight intensity: {params.get('oversight_intensity', 'medium')} ({oversight_def})
 
 CRITICAL CONTEXT - WHAT YOUR DECISIONS MEAN:
 
@@ -225,8 +256,8 @@ REPUTATION CONSIDERATIONS:
 - Provider word-of-mouth → Affects network recruitment
 - But pressure exists to maintain profitability"""
 
-    # add hostile instructions if cost focus is high
-    if params.get('cost_focus') == 'high':
+    # add hostile instructions if strictness is high
+    if params.get('strictness') == 'high':
         hostile_instructions = """
 
 SPECIAL INSTRUCTION - AGGRESSIVE COST CONTAINMENT MODE:
@@ -257,7 +288,6 @@ SPECIFIC TACTICS:
 
 def create_pa_request_generation_prompt(state, med_request, case):
     """create task prompt for provider to generate PA request"""
-    import json
 
     return f"""TASK: Generate PRIOR AUTHORIZATION request for specialty medication (Phase 2)
 
@@ -350,7 +380,6 @@ RESPONSE FORMAT (JSON):
 
 def create_pa_appeal_submission_prompt(state, med_request, case):
     """create task prompt for provider PA appeal submission"""
-    import json
     denial_reason = state.medication_authorization.denial_reason if state.medication_authorization else "Unknown"
 
     return f"""TASK: Appeal a PA DENIAL for specialty medication (Phase 2)
@@ -427,7 +456,6 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
         for i, iter_data in enumerate(prior_iterations, 1):
             prior_context += f"\nIteration {i}:\n"
             prior_context += f"  Your request: {iter_data['provider_request_type']}\n"
-            prior_context += f"  Your confidence: {iter_data['provider_confidence']}\n"
             prior_context += f"  Payor decision: {iter_data['payor_decision']}\n"
             if iter_data.get('payor_denial_reason'):
                 prior_context += f"  Denial reason: {iter_data['payor_denial_reason']}\n"
@@ -441,7 +469,7 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
     # build constraint message
     test_constraint = ""
     if completed_tests:
-        test_constraint = f"\nIMPORTANT CONSTRAINT: The following tests have been APPROVED and COMPLETED. DO NOT request them again:\n- {', '.join(completed_tests)}\nUse the results above to update your confidence. If confidence is now >= {CONFIDENCE_THRESHOLD}, request TREATMENT (not more tests).\n"
+        test_constraint = f"\nIMPORTANT CONSTRAINT: The following tests have been APPROVED and COMPLETED. DO NOT request them again:\n- {', '.join(completed_tests)}\nUse these results to support your clinical decision.\n"
 
     # stage-specific provider instructions
     stage_instruction = ""
@@ -470,7 +498,7 @@ Gather objective evidence to demonstrate clinical necessity.
 
     base_prompt = f"""ITERATION {iteration}/{MAX_ITERATIONS}
 
-{stage_instruction}{policy_section}{CONFIDENCE_GUIDELINES}
+{stage_instruction}{policy_section}{INTERNAL_REASONING}
 
 {prior_context}
 {test_constraint}
@@ -485,9 +513,10 @@ PATIENT INFORMATION:
 MEDICATION REQUEST (if applicable):
 {json.dumps(case.get('medication_request', {}), indent=2) if case.get('medication_request') else 'No medication specified yet'}
 
-TASK: Based on your current diagnostic confidence, decide your next action:
-- If confidence < {CONFIDENCE_THRESHOLD}: Request diagnostic test PA to build confidence
-- If confidence >= {CONFIDENCE_THRESHOLD}: Request treatment PA (medication, procedure, admission)
+TASK: Choose your next action from the discrete action space:
+- CONTINUE: Provide additional clinical documentation to support your case
+- APPEAL: Formally appeal a denial with new evidence
+- ABANDON: Withdraw the request (patient will not receive this service)
 
 CLINICAL DOCUMENTATION:
 Update your clinical notes each iteration as you narrow your differential diagnosis. Notes should:
@@ -558,15 +587,22 @@ This extensive documentation burden is necessary to avoid automatic denial."""
     
     return base_prompt
 
-def create_unified_payor_review_prompt(state, provider_request, iteration, stage=None):
+def create_unified_payor_review_prompt(state, provider_request, iteration, stage=None, level=None):
     """unified payor prompt: reviews any PA request (diagnostic or treatment)
 
-    stage semantics:
-    - initial_determination: automated/checklist review, strict thresholds, can deny/pend
-    - internal_appeal: medical director review, can set requires_peer_to_peer, still policy-based
-    - independent_review: final decision, strongly discourage pending, must choose approved or denied
+    uses WORKFLOW_LEVELS for level-specific semantics (0-indexed):
+    - Level 0 (initial_determination): triage, checklist-driven, can REQUEST_INFO
+    - Level 1 (internal_reconsideration): medical director, fresh eyes, can REQUEST_INFO
+    - Level 2 (independent_review): IRE, terminal, cannot REQUEST_INFO, no internal notes
     """
-    import json
+
+    # resolve level from stage name if not provided directly
+    if level is None and stage:
+        level = LEVEL_NAME_MAP.get(stage, 0)
+    elif level is None:
+        level = 0
+
+    level_config = WORKFLOW_LEVELS.get(level, WORKFLOW_LEVELS[0])
 
     request_type = provider_request.get('request_type')
     requested_service = provider_request.get('requested_service', {})
@@ -618,30 +654,34 @@ CRITICAL: Deny if numeric thresholds are not met exactly. Do NOT approve based o
 
 """
 
-    # stage-specific payor instructions
-    stage_instruction = ""
-    if stage == "initial_determination":
-        stage_instruction = """ROUND 1 - INITIAL DETERMINATION (Automated Review):
-Reviewer: AI algorithm or UM Nurse
-Mode: Strict checklist review
-Decision options: approved | denied | pending_info
-Guidance: Apply thresholds strictly. Deny if numeric values not met. Pend only if objective values are missing but could satisfy criteria if provided.
+    # level-specific payor instructions from WORKFLOW_LEVELS
+    role_label = level_config["role_label"]
+    review_style = level_config["review_style"]
+    level_description = level_config["description"]
+    can_pend = level_config["can_pend"]
+    is_terminal = level_config["terminal"]
+    is_independent = level_config["independent"]
+
+    if can_pend:
+        decision_options = "approved | denied | pending_info"
+    else:
+        decision_options = "approved | denied"
+
+    stage_instruction = f"""LEVEL {level} - {level_config['name'].upper()} ({role_label}):
+Reviewer: {role_label}
+Mode: {review_style}
+Decision options: {decision_options}
+{level_description}
 
 """
-    elif stage == "internal_appeal":
-        stage_instruction = """ROUND 2 - INTERNAL APPEAL (Medical Director Review):
-Reviewer: Medical director (can set requires_peer_to_peer: true)
-Mode: Policy-based review with narrative consideration
-Decision options: approved | denied | pending_info
-Guidance: Provider is appealing prior denial. Consider if new clinical evidence addresses initial concerns. Still apply policy strictly, but can discuss peer-to-peer if clinically justified.
+    if is_terminal:
+        stage_instruction += """CRITICAL: This is a TERMINAL review level. You MUST issue a final APPROVED or DENIED decision.
+REQUEST_INFO (pending_info) is NOT available at this level.
 
 """
-    elif stage == "independent_review":
-        stage_instruction = """ROUND 3 - FINAL INDEPENDENT REVIEW (Clinical Review Officer):
-Reviewer: Independent reviewer (external to initial decision)
-Mode: Final determination - no endless pend
-Decision options: approved | denied (strongly discourage pending_info)
-Guidance: This is the final decision point. Issue APPROVED or DENIED with specific rationale. Only pend if absolutely impossible to make final determination. Focus on whether objective values meet policy thresholds.
+    if is_independent:
+        stage_instruction += """NOTE: As an independent external reviewer, you do NOT have access to plan-internal notes.
+Your decision must be based solely on the submitted clinical record.
 
 """
 
@@ -670,14 +710,15 @@ EVALUATION CRITERIA:
 
 RESPONSE FORMAT (JSON):
 {{
-    "authorization_status": "approved" or "denied" or "pending_info",
-    "denial_reason": "<specific reason if denied or pended, including what's missing>",
-    "missing_documentation": ["<doc1>", "<doc2>"],  // optional, if pending for missing info
+    "authorization_status": "{decision_options.replace(' | ', '" or "')}",
+    "denial_reason": "<specific reason if denied{' or pended' if can_pend else ''}>",
+    {"'missing_documentation': ['<doc1>', '<doc2>'],  // if pending for missing info" if can_pend else ""}
     "criteria_used": "<guidelines or policies applied>",
-    "reviewer_type": "AI algorithm" or "Nurse reviewer" or "Medical director" or "Independent reviewer",
+    "reviewer_type": "{role_label}",
+    "level": {level},
     "requires_peer_to_peer": true or false  // optional, set true if peer-to-peer recommended
 }}"""
-    
+
     return base_prompt
 
 def create_claim_adjudication_prompt(state, service_request, cost_ref, case, phase_2_evidence=None, pa_type="specialty_medication", provider_billed_amount=None):
@@ -832,7 +873,6 @@ def create_provider_claim_submission_prompt(state, service_request, cost_ref, ph
         coding_options: list of dicts with diagnosis/payment choices for DRG upcoding scenarios
             Each option should have: diagnosis, icd10, payment, defensibility, justification
     """
-    import json
     from src.models.schemas import PAType
 
     # build clinical documentation
@@ -958,96 +998,84 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_claim_appeal_decision_prompt(state, denial_reason, service_request, cost_ref, pa_type="specialty_medication"):
-    """create provider decision prompt after claim REJECTED (formal denial) - works for all PA types
+def create_provider_claim_appeal_decision_prompt(state, denial_reason, service_request, pa_type="specialty_medication"):
+    """create provider decision prompt after claim DENIED - uses discrete action space
 
-    note: this is for REJECTED claims only. PENDED claims use create_provider_pend_response_prompt
+    provider actions: CONTINUE (augment record), APPEAL (escalate to next level), ABANDON (exit)
     """
     from src.models.schemas import PAType
 
     if pa_type == PAType.SPECIALTY_MEDICATION:
-        service_name = service_request.get('medication_name', 'medication')
-        service_details = f"""TREATMENT DELIVERED:
+        service_details = f"""SERVICE:
 - Medication: {service_request.get('medication_name')}
 - Dosage: {service_request.get('dosage')}"""
-        total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
     else:
-        # extract service_name from new schema, with fallback to old schema
         service_name = service_request.get('service_name', service_request.get('treatment_name', service_request.get('procedure_name', 'procedure')))
-        service_details = f"""SERVICE DELIVERED:
+        service_details = f"""SERVICE:
 - Procedure/Service: {service_name}"""
-        total_billed = cost_ref.get('procedure_cost', 7800)
 
-    return f"""CRITICAL DECISION: CLAIM WAS REJECTED (Phase 3)
+    return f"""CLAIM DENIED - CHOOSE YOUR ACTION
 
 SITUATION:
-- You already treated the patient and incurred costs
-- PA was APPROVED in Phase 2, but claim was FORMALLY REJECTED in Phase 3
-- Amount at stake: ${total_billed:.2f}
+- Treatment was provided and PA was previously approved
+- Claim has been DENIED in claims adjudication
 
-REJECTION REASON:
+DENIAL REASON:
 {denial_reason}
 
 {service_details}
 
-YOUR OPTIONS:
-1. WRITE-OFF: Absorb the cost yourself (direct financial loss to practice)
-2. APPEAL: Fight the formal rejection with additional documentation
-   - Cost: ${CLAIM_REJECTION_COST:.2f} (formal appeal process)
-   - Historical success rate: {int(CLAIM_REJECTION_SUCCESS_RATE * 100)}% (appeals overturn rejections)
-   - Time: 30-60 days for review
-3. BILL PATIENT: Transfer cost to patient (often uncollectible, damages relationship)
+YOUR DISCRETE ACTION SPACE:
+1. CONTINUE: Augment the clinical record with additional evidence at current level
+   - Stay in same review lane, provide more documentation
+   - Reviewer will reconsider with supplemented record
 
-FINANCIAL IMPACT:
-- Write-off: You lose ${total_billed:.2f} immediately
-- Appeal: Admin cost ${CLAIM_REJECTION_COST:.2f}, {int(CLAIM_REJECTION_SUCCESS_RATE * 100)}% chance to recover ${total_billed:.2f}
-- Bill Patient: Patient may not pay, may damage relationship and reputation
+2. APPEAL: Escalate to next administrative authority
+   - Changes who reviews the case
+   - Triggers next procedural layer (e.g., independent review)
 
-APPEAL SUCCESS FACTORS:
-- Was rejection based on documentation? (Appeal likely to succeed)
-- Was rejection based on medical necessity? (Appeal uncertain)
-- Was rejection based on billing errors? (Appeal likely to succeed if correctable)
-- PA was already approved, so you have precedent on your side
+3. ABANDON: Exit the dispute
+   - Accept the denial, stop contesting
+   - Patient responsibility or write-off
 
-Expected value of appeal: ${total_billed * CLAIM_REJECTION_SUCCESS_RATE - CLAIM_REJECTION_COST:.2f}
-
-Your task: Decide how to handle this rejected claim based on your behavioral parameters.
+CONSIDERATIONS:
+- PA was approved in Phase 2 - you have precedent
+- Was denial based on documentation gaps? (CONTINUE may help)
+- Was denial based on medical necessity interpretation? (APPEAL may change outcome)
+- Is the administrative burden worth continued pursuit? (ABANDON is always an option)
 
 RESPONSE FORMAT (JSON):
 {{
-    "decision": "write_off" or "appeal" or "bill_patient",
-    "rationale": "<why you chose this option given your incentives>",
-    "expected_outcome": "<what you expect to happen>",
-    "admin_time_investment": <hours if appealing, 0 otherwise>
+    "action": "CONTINUE" | "APPEAL" | "ABANDON",
+    "rationale": "<why this action given your behavioral parameters>",
+    "additional_evidence": ["<evidence1>", ...] // if CONTINUE
 }}"""
 
 
-def create_provider_pend_response_prompt(state, pend_decision, service_request, cost_ref, pend_iteration, pa_type="specialty_medication"):
-    """create provider decision prompt after claim pended (RFI) - works for all PA types"""
+def create_provider_pend_response_prompt(state, pend_decision, service_request, pend_iteration, pa_type="specialty_medication"):
+    """create provider decision prompt after claim PENDED (REQUEST_INFO) - uses discrete action space
+
+    provider actions: CONTINUE (provide requested docs), ABANDON (exit)
+    note: at pend stage, APPEAL is not yet available - must first respond to REQUEST_INFO
+    """
     from src.models.schemas import PAType
 
     if pa_type == PAType.SPECIALTY_MEDICATION:
-        service_name = service_request.get('medication_name', 'medication')
-        service_details = f"""TREATMENT DELIVERED:
+        service_details = f"""SERVICE:
 - Medication: {service_request.get('medication_name')}
 - Dosage: {service_request.get('dosage')}"""
-        claim_amount = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
     else:
         service_name = service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
-        service_details = f"""SERVICE DELIVERED:
+        service_details = f"""SERVICE:
 - Procedure/Service: {service_name}"""
-        claim_amount = cost_ref.get('procedure_cost', 7800)
 
-    expected_value_resubmit = claim_amount * CLAIM_PEND_SUCCESS_RATE - CLAIM_PEND_RESUBMIT_COST
-
-    return f"""CLAIM PENDED - DECISION REQUIRED (Iteration {pend_iteration}/{MAX_PEND_ITERATIONS})
+    return f"""CLAIM PENDED (REQUEST_INFO) - Iteration {pend_iteration}/{MAX_REQUEST_INFO_PER_LEVEL}
 
 SITUATION:
-- Claim amount: ${claim_amount:.2f}
 - Claim status: PENDED (Request for Information)
-- You have already provided treatment and incurred costs
+- Treatment was provided, PA was previously approved
 
-PEND REASON:
+REQUEST_INFO REASON:
 {pend_decision.get('pend_reason', 'Additional documentation requested')}
 
 REQUESTED DOCUMENTATION:
@@ -1055,41 +1083,32 @@ REQUESTED DOCUMENTATION:
 
 {service_details}
 
-YOUR OPTIONS:
-1. RESUBMIT: Provide requested docs
-   - Cost: ${CLAIM_PEND_RESUBMIT_COST:.2f} (staff time to gather and resubmit documentation)
-   - Historical success rate: {int(CLAIM_PEND_SUCCESS_RATE * 100)}% (claim gets paid)
-   - Risk: May get PENDED AGAIN for different reason (regulatory arbitrage tactic)
+YOUR DISCRETE ACTION SPACE:
+1. CONTINUE: Provide the requested documentation
+   - Stay in same review lane, augment the record
+   - Reviewer will reconsider with supplemented information
+   - Note: Max {MAX_REQUEST_INFO_PER_LEVEL} REQUEST_INFO cycles per level
 
-2. ABANDON: Write off the claim
-   - Cost: ${claim_amount:.2f} (direct loss - you already provided service)
-   - Note: Industry data shows many providers abandon pended claims due to admin burden
+2. ABANDON: Exit the dispute
+   - Accept non-payment, stop contesting
+   - Patient becomes responsible or write-off
 
-COST-BENEFIT ANALYSIS:
-- Expected value of resubmission: ${expected_value_resubmit:.2f}
-- Current iteration: {pend_iteration}/{MAX_PEND_ITERATIONS} (max pends before forced rejection)
-- PA was APPROVED in Phase 2, so medical necessity was already established
-
-STRATEGIC CONSIDERATIONS:
-- Insurer uses PEND to avoid reporting formal denials to regulators
-- Each pend iteration costs you admin time with no guarantee of payment
-- If you abandon, insurer achieves non-payment without regulatory penalty
-- Your behavioral parameters (patient care weight, risk tolerance) should guide decision
-
-Your task: Decide whether to resubmit documentation or abandon claim based on your incentives.
+CONSIDERATIONS:
+- PA was approved in Phase 2 - medical necessity was established
+- Can you provide the requested documentation?
+- Is the administrative burden worth continued pursuit?
+- Iteration {pend_iteration}/{MAX_REQUEST_INFO_PER_LEVEL} at this level
 
 RESPONSE FORMAT (JSON):
 {{
-    "decision": "resubmit" | "abandon",
-    "rationale": "<why you chose this option given cost-benefit analysis and behavioral parameters>",
-    "documents_to_add": ["<doc1>", "<doc2>", ...],  // if resubmitting
-    "expected_outcome": "<what you expect to happen>"
+    "action": "CONTINUE" | "ABANDON",
+    "rationale": "<why this action given your behavioral parameters>",
+    "documents_to_add": ["<doc1>", "<doc2>", ...] // if CONTINUE
 }}"""
 
 
 def create_provider_claim_resubmission_prompt(state, pend_decision, service_request, phase_2_evidence=None, pa_type="specialty_medication"):
     """create provider resubmission packet prompt (responding to pended claim) - works for all PA types"""
-    import json
     from src.models.schemas import PAType
 
     # build comprehensive evidence
@@ -1157,7 +1176,6 @@ RESPONSE FORMAT (JSON):
 
 def create_provider_claim_appeal_prompt(state, denial_reason, service_request, phase_2_evidence=None, pa_type="specialty_medication", appeal_history=None):
     """create provider claim appeal submission prompt - works for all PA types"""
-    import json
     from src.models.schemas import PAType
 
     # build appeal history warning
@@ -1311,47 +1329,42 @@ def create_payor_claim_resubmission_review_prompt(state, resubmission_packet, pe
 - Procedure/Service: {service_name}"""
         claim_amount = cost_ref.get('procedure_cost', 7800)
 
-    return f"""TASK: Review RESUBMITTED CLAIM (Phase 3 - Pend Iteration {pend_iteration}/{MAX_PEND_ITERATIONS})
+    # check if at pend limit (must make final decision)
+    at_pend_limit = pend_iteration >= MAX_REQUEST_INFO_PER_LEVEL
 
-CONTEXT: Provider resubmitted claim in response to your pend request. You previously pended (not rejected) this claim.
+    if at_pend_limit:
+        action_section = """YOUR DISCRETE ACTION SPACE (FINAL DECISION REQUIRED):
+You have reached the maximum REQUEST_INFO cycles ({0}/{0}). You MUST make a final decision.
 
-ORIGINAL PEND REASON:
-{pend_decision.get('pend_reason', 'Additional documentation requested')}
+1. APPROVE: Documentation sufficient, authorize payment
+2. DENY: Formally deny the claim
 
-REQUESTED DOCUMENTS:
-{', '.join(pend_decision.get('requested_documents', ['Additional clinical documentation']))}
+NOTE: REQUEST_INFO (pend again) is NOT available at this iteration.""".format(MAX_REQUEST_INFO_PER_LEVEL)
 
-PROVIDER'S RESUBMISSION PACKET:
-{json.dumps(resubmission_packet, indent=2)}
+        response_format = """RESPONSE FORMAT (JSON):
+{{
+    "claim_status": "approved" | "rejected",
 
-{service_details}
-- Claim amount: ${claim_amount:.2f}
+    // if approved:
+    "approved_amount": <dollar amount>,
 
-PA HISTORY:
-- PA Status in Phase 2: {state.medication_authorization.authorization_status if state.medication_authorization else 'approved'}
-- PA Criteria Used: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity'}
-- Current pend iteration: {pend_iteration}/{MAX_PEND_ITERATIONS}
+    // if rejected:
+    "rejection_reason": "<specific reason for formal denial>",
+    "denial_code": "<standard reason code>",
 
-DECISION FACTORS:
-- Does resubmission address your pend reason adequately?
-- Is the additional documentation sufficient?
-- Do you have grounds to PEND AGAIN for a different reason?
-- Cost-benefit: Approving payment vs. continuing pend cycle
-
-STRATEGIC OPTIONS:
+    "criteria_used": "<billing guidelines>",
+    "reviewer_type": "Claims adjudicator" | "Medical reviewer",
+    "rationale": "<why you chose approve/reject>"
+}}"""
+    else:
+        action_section = """YOUR DISCRETE ACTION SPACE:
 1. APPROVE: Documentation now sufficient, authorize payment
-2. REJECT: Formally deny (triggers costly appeals, counts toward denial rate in regulatory reporting)
-3. PEND AGAIN: Request different/additional documentation (provider may abandon, avoids formal denial metrics)
+2. DENY: Formally deny the claim
+3. REQUEST_INFO (pend): Request additional documentation (max {0} cycles per level)
 
-STRATEGIC CONSIDERATIONS:
-- If pend iteration reaches {MAX_PEND_ITERATIONS}/{MAX_PEND_ITERATIONS}, claim will be FORCED to rejection
-- Each pend increases provider abandonment probability (saves you money without formal denial)
-- But excessive pending may trigger provider to escalate or leave network
-- PENDED claims are NOT reported to regulators, REJECTED claims ARE reported
+Current iteration: {1}/{0}""".format(MAX_REQUEST_INFO_PER_LEVEL, pend_iteration)
 
-Your task: Review resubmission and decide: approve, reject, or pend again.
-
-RESPONSE FORMAT (JSON):
+        response_format = """RESPONSE FORMAT (JSON):
 {{
     "claim_status": "approved" | "rejected" | "pended",
 
@@ -1370,3 +1383,31 @@ RESPONSE FORMAT (JSON):
     "reviewer_type": "Claims adjudicator" | "Medical reviewer",
     "rationale": "<why you chose approve/reject/pend>"
 }}"""
+
+    return f"""TASK: Review RESUBMITTED CLAIM (Phase 3 - Pend Iteration {pend_iteration}/{MAX_REQUEST_INFO_PER_LEVEL})
+
+CONTEXT: Provider resubmitted claim in response to your pend request. You previously pended (not rejected) this claim.
+
+ORIGINAL PEND REASON:
+{pend_decision.get('pend_reason', 'Additional documentation requested')}
+
+REQUESTED DOCUMENTS:
+{', '.join(pend_decision.get('requested_documents', ['Additional clinical documentation']))}
+
+PROVIDER'S RESUBMISSION PACKET:
+{json.dumps(resubmission_packet, indent=2)}
+
+{service_details}
+- Claim amount: ${claim_amount:.2f}
+
+PA HISTORY:
+- PA Status in Phase 2: {state.medication_authorization.authorization_status if state.medication_authorization else 'approved'}
+- PA Criteria Used: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity'}
+
+DECISION FACTORS:
+- Does resubmission address your pend reason adequately?
+- Is the additional documentation sufficient?
+
+{action_section}
+
+{response_format}"""
