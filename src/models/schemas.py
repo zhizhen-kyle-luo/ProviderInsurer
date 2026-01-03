@@ -35,8 +35,6 @@ class AdmissionNotification(BaseModel):
     admission_source: str  # free text: "ER", "Direct", "Transfer", or ""
     chief_complaint: str
     preliminary_diagnoses: List[str]
-    expected_drg: Optional[str] = None
-    expected_los_days: Optional[int] = None
 
 
 class ClinicalPresentation(BaseModel):
@@ -226,12 +224,8 @@ class EncounterState(BaseModel):
     financial_settlement: Optional[FinancialSettlement] = None
     final_authorized_level: Optional[Literal["inpatient", "observation", "outpatient"]] = None
 
-    # unified authorization request (replaces medication_request/procedure_request)
+    # unified authorization request (includes both request and payer decision)
     authorization_request: Optional['AuthorizationRequest'] = None
-
-    # authorization decision and financial settlement
-    medication_authorization: Optional[MedicationAuthorizationDecision] = None
-    medication_financial: Optional[MedicationFinancialSettlement] = None
 
     denial_occurred: bool = False
     appeal_filed: bool = False
@@ -292,10 +286,10 @@ class TestOrdered(BaseModel):
 # unified authorization request model (aligns with X12 278 / FHIR PAS standards)
 class AuthorizationRequest(BaseModel):
     """
-    unified PA request for all service types (medications, procedures, admissions)
-    aligns with CMS 2025 interoperability rule and X12 278 EDI transaction standard
+    unified PA request and decision for all service types (medications, procedures, admissions)
+    aligns with X12 278 EDI transaction standard where request and decision travel together
     """
-    # common fields (always present)
+    # REQUEST fields (provider submits these)
     request_type: str  # "medication", "procedure", "admission", "imaging", "dme"
     service_name: str  # drug name, procedure name, etc.
     clinical_rationale: str
@@ -317,52 +311,12 @@ class AuthorizationRequest(BaseModel):
     prior_therapies_failed: List[str] = Field(default_factory=list)
     step_therapy_completed: bool = False
 
-
-# deprecated - use AuthorizationRequest instead (kept for backward compatibility)
-class MedicationRequest(BaseModel):
-    medication_name: str
-    ndc_code: Optional[str] = None
-    j_code: Optional[str] = None
-    dosage: str
-    frequency: str
-    duration: str
-    icd10_codes: List[str] = Field(default_factory=list)
-    clinical_rationale: str
-    prior_therapies_failed: List[str] = Field(default_factory=list)
-    step_therapy_completed: bool = False
-
-
-# deprecated - use AuthorizationRequest instead (kept for backward compatibility)
-class ProcedureRequest(BaseModel):
-    procedure_name: str
-    cpt_code: Optional[str] = None
-    clinical_indication: str
-    icd10_codes: List[str] = Field(default_factory=list)
-
-
-class MedicationAuthorizationDecision(BaseModel):
-    reviewer_type: str
-    authorization_status: Literal["approved", "rejected", "pended", "denied", "pending_info"]  # keep denied/pending_info for backward compat
+    # DECISION fields (payer fills these in - mirrors X12 278 response)
+    authorization_status: Optional[str] = None  # "approved", "denied", "pended", "partial"
     denial_reason: Optional[str] = None
-    criteria_used: str
-    step_therapy_required: bool = False
-    missing_documentation: List[str] = Field(default_factory=list)
-    approved_quantity: Optional[str] = None
-    approved_duration_days: Optional[int] = None
-    requires_peer_to_peer: bool = False
-
-
-class MedicationFinancialSettlement(BaseModel):
-    medication_name: str
-    j_code: Optional[str] = None
-    acquisition_cost: float
-    administration_fee: float = 0.0
-    total_billed: float
-    payer_payment: float
-    patient_copay: float
-    prior_auth_cost: float = 0.0
-    appeal_cost: float = 0.0
-    total_administrative_cost: float
+    appeal_notes: Optional[str] = None
+    approved_quantity: Optional[str] = None  # how many units/doses approved
+    missing_documentation: List[str] = Field(default_factory=list)  # only populated for pended status
 
 
 # Audit Log Schemas for LLM Interaction Tracking
