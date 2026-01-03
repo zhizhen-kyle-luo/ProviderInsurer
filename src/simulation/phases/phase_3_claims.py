@@ -45,7 +45,7 @@ def run_phase_3_claims(
     applies to all case types: medication, cardiac testing, imaging, etc.
     """
     # only process claims if pa was approved
-    if not state.medication_authorization or state.medication_authorization.authorization_status != "approved":
+    if not state.authorization_request or state.authorization_request.authorization_status != "approved":
         return state
 
     # extract service request data based on PA type
@@ -185,11 +185,11 @@ def run_phase_3_claims(
         claim_status = "rejected"
         claim_decision["claim_status"] = "rejected"
 
-    state.medication_authorization.authorization_status = claim_status
+    state.authorization_request.authorization_status = claim_status
 
     if claim_status == "rejected":
         state.claim_rejected = True
-        state.medication_authorization.denial_reason = claim_decision.get("rejection_reason", claim_decision.get("denial_reason"))
+        state.authorization_request.denial_reason = claim_decision.get("rejection_reason", claim_decision.get("denial_reason"))
     elif claim_status == "pended":
         state.claim_pended = True
 
@@ -349,11 +349,11 @@ def _handle_rejected_claim(
 
             # check appeal outcome
             if appeal_decision.get("appeal_outcome") == "approved":
-                state.medication_authorization.authorization_status = "approved"
+                state.authorization_request.authorization_status = "approved"
                 state.appeal_successful = True
                 claim_approved = True
             elif appeal_decision.get("appeal_outcome") == "partial":
-                state.medication_authorization.authorization_status = "partial"
+                state.authorization_request.authorization_status = "partial"
                 state.appeal_successful = True
                 claim_approved = True
             else:
@@ -491,7 +491,7 @@ def _handle_pended_claim(
         # if provider abandons, mark and exit
         if provider_pend_decision.get("action") == "ABANDON":
             state.claim_abandoned_via_pend = True
-            state.medication_authorization.authorization_status = "pended"
+            state.authorization_request.authorization_status = "pended"
             claim_resolved = True
             break
 
@@ -566,23 +566,23 @@ def _handle_pended_claim(
         resubmission_status = resubmission_review.get("claim_status")
 
         if resubmission_status == "approved":
-            state.medication_authorization.authorization_status = "approved"
+            state.authorization_request.authorization_status = "approved"
             claim_resolved = True
         elif resubmission_status == "rejected":
-            state.medication_authorization.authorization_status = "rejected"
+            state.authorization_request.authorization_status = "rejected"
             state.claim_rejected = True
-            state.medication_authorization.denial_reason = resubmission_review.get("rejection_reason", "Claim rejected after resubmission")
+            state.authorization_request.denial_reason = resubmission_review.get("rejection_reason", "Claim rejected after resubmission")
             claim_resolved = True
         elif resubmission_status == "pended":
             current_pend_decision = resubmission_review
         else:
-            state.medication_authorization.authorization_status = "approved"
+            state.authorization_request.authorization_status = "approved"
             claim_resolved = True
 
     # if max pends reached and still pended, force rejection
     if pend_iteration >= MAX_REQUEST_INFO_PER_LEVEL and not claim_resolved:
-        state.medication_authorization.authorization_status = "rejected"
+        state.authorization_request.authorization_status = "rejected"
         state.claim_rejected = True
-        state.medication_authorization.denial_reason = "Maximum resubmission attempts exceeded"
+        state.authorization_request.denial_reason = "Maximum resubmission attempts exceeded"
 
     return state

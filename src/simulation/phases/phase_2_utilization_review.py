@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage
 
 from src.models.schemas import (
     EncounterState,
-    MedicationAuthorizationDecision
+    AuthorizationRequest
 )
 from src.utils.prompts import (
     create_provider_prompt,
@@ -397,16 +397,17 @@ def run_phase_2_utilization_review(
                 # treatment approved - DONE
                 treatment_approved = True
                 approved_provider_request = provider_request
-                state.medication_authorization = MedicationAuthorizationDecision(
-                    reviewer_type=payor_decision.get("reviewer_type", "AI algorithm"),
-                    authorization_status="approved",
-                    denial_reason=None,
-                    criteria_used=payor_decision.get("criteria_used", "Medical necessity"),
-                    step_therapy_required=False,
-                    missing_documentation=[],
-                    approved_duration_days=90,
-                    requires_peer_to_peer=False
-                )
+                # set decision on authorization_request (create if needed)
+                if not state.authorization_request:
+                    state.authorization_request = AuthorizationRequest(
+                        request_type="medication",
+                        service_name="",
+                        clinical_rationale=""
+                    )
+                state.authorization_request.authorization_status = "approved"
+                state.authorization_request.denial_reason = None
+                state.authorization_request.missing_documentation = []
+                state.authorization_request.approved_quantity = payor_decision.get("approved_quantity")
                 break
             elif request_type == "diagnostic_test":
                 # diagnostic test approved - generate test result
@@ -427,16 +428,14 @@ def run_phase_2_utilization_review(
 
     # if treatment never approved, mark as denied
     if not treatment_approved:
-        state.medication_authorization = MedicationAuthorizationDecision(
-            reviewer_type="AI algorithm",
-            authorization_status="denied",
-            denial_reason="max iterations reached without approval",
-            criteria_used="Medical necessity",
-            step_therapy_required=False,
-            missing_documentation=[],
-            approved_duration_days=None,
-            requires_peer_to_peer=False
-        )
+        if not state.authorization_request:
+            state.authorization_request = AuthorizationRequest(
+                request_type="medication",
+                service_name="",
+                clinical_rationale=""
+            )
+        state.authorization_request.authorization_status = "denied"
+        state.authorization_request.denial_reason = "max iterations reached without approval"
         state.denial_occurred = True
 
     # collect all evidence from phase 2 for phase 3
