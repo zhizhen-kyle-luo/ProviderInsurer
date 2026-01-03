@@ -395,8 +395,8 @@ class UtilizationReviewSimulation:
 
         # phase 3: claims adjudication (if treatment was approved and delivered)
         # applies to ALL PA types
-        if (state.medication_authorization and
-            state.medication_authorization.authorization_status == "approved"):
+        if (state.authorization_request and
+            state.authorization_request.authorization_status == "approved"):
             state = run_phase_3_claims(self, state, case, case_type)
 
             # truth checking after phase 3 appeals (if enabled and appeal was filed)
@@ -404,7 +404,7 @@ class UtilizationReviewSimulation:
                 state = run_truth_check_phase3(self, state, case)
 
         # phase 4: financial settlement
-        if state.medication_authorization:
+        if state.authorization_request:
             state = run_phase_4_financial(state, case)
 
         if "ground_truth" in case:

@@ -79,8 +79,8 @@ class MetricsAggregator:
         # collect all administrative costs
         admin_costs = []
         for state in states:
-            if state.medication_financial:
-                admin_costs.append(state.medication_financial.total_administrative_cost)
+            if state.financial_settlement:
+                admin_costs.append(state.financial_settlement.total_administrative_cost)
             elif state.financial_settlement:
                 # inpatient cases may have different cost structure
                 # for now, skip or handle differently if needed
