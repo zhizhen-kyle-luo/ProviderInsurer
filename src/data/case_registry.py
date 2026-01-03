@@ -1,53 +1,34 @@
 """
-case registry - central import and registration of all simulation cases
+case registry - central loading of all simulation cases from JSON files
 """
+import json
+from pathlib import Path
 
-from src.data.cases.specialty_medications.infliximab_crohns_case import (
-    INFLIXIMAB_CASE,
-    get_infliximab_case
-)
-from src.data.cases.specialty_medications.infliximab_crohns_case_b import (
-    INFLIXIMAB_CASE_B,
-    get_infliximab_case_b
-)
-from src.data.cases.cardiac.chest_pain_stress_test_case import (
-    CHEST_PAIN_CASE,
-    get_chest_pain_case
-)
-from src.data.cases.grey_zones import COPD_RESPIRATORY_FAILURE_GREY, get_copd_respiratory_failure_grey
-
-# registry of all available cases
-CASE_REGISTRY = {
-    # specialty medications
-    "infliximab_crohns_2015": INFLIXIMAB_CASE,
-    "infliximab_crohns_case_b": INFLIXIMAB_CASE_B,
-    # cardiac testing
-    "chest_pain_stress_test_001": CHEST_PAIN_CASE,
-    # grey zone cases (upcoding scenarios)
-    "copd_respiratory_failure_grey_001": COPD_RESPIRATORY_FAILURE_GREY,
-}
-
-# case getter functions
-CASE_GETTERS = {
-    "infliximab_crohns_2015": get_infliximab_case,
-    "infliximab_crohns_case_b": get_infliximab_case_b,
-    "chest_pain_stress_test_001": get_chest_pain_case,
-    "copd_respiratory_failure_grey_001": get_copd_respiratory_failure_grey,
+CASES_DIR = Path(__file__).parent / "cases"
+CASE_PATHS = {
+    "infliximab_crohns_2015": CASES_DIR / "specialty_medications" / "infliximab_crohns_case_a.json",
+    "infliximab_crohns_case_b": CASES_DIR / "specialty_medications" / "infliximab_crohns_case_b.json",
+    "chest_pain_stress_test_001": CASES_DIR / "cardiac" / "chest_pain_stress_test_001.json",
+    "copd_respiratory_failure_grey_001": CASES_DIR / "grey_zones" / "copd_respiratory_failure.json",
+    "snf_copd_02": CASES_DIR / "post-acute" / "snf_copd_02.json",
+    "snf_dialysis_03": CASES_DIR / "post-acute" / "snf_dialysis_03.json",
+    "snf_pulmonary_01": CASES_DIR / "post-acute" / "snf_pulmonary_01.json",
 }
 
 def get_case(case_id: str):
-    """retrieve case by id"""
-    if case_id not in CASE_GETTERS:
-        raise ValueError(f"case {case_id} not found in registry. available: {list(CASE_GETTERS.keys())}")
-    return CASE_GETTERS[case_id]()
+    """retrieve case by id from JSON file"""
+    if case_id not in CASE_PATHS:
+        raise ValueError(f"case {case_id} not found in registry. available: {list(CASE_PATHS.keys())}")
 
-def list_cases():
-    """list all available case ids"""
-    return list(CASE_REGISTRY.keys())
+    case_path = CASE_PATHS[case_id]
+    with open(case_path, 'r') as f:
+        return json.load(f)
 
-def get_cases_by_type(pa_type: str):
-    """get all cases of a specific PA type"""
-    return [
-        case_id for case_id, case_data in CASE_REGISTRY.items()
-        if case_data.get("pa_type") == pa_type
-    ]
+def get_cases_by_type(case_type: str):
+    """get all cases of a specific case type"""
+    matching_cases = []
+    for case_id in CASE_PATHS:
+        case_data = get_case(case_id)
+        if case_data.get("case_type") == case_type or case_data.get("pa_type") == case_type:
+            matching_cases.append(case_id)
+    return matching_cases
