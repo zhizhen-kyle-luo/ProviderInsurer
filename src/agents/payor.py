@@ -8,4 +8,4 @@ class PayorAgent(GameAgent):
 
     def __init__(self, llm, config: Dict[str, Any] = None):
         super().__init__(llm, "Payor", config)
-        self.cost_calculator = CPTCostCalculator()
+        # self.cost_calculator = CPTCostCalculator()
