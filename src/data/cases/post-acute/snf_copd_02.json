@@ -1,0 +1,42 @@
+{
+  "case_id": "snf_copd_02",
+  "case_type": "post_acute_care",
+
+  "patient_visible_data": {
+    "patient_id": "SNF-2024-002",
+    "age": 56,
+    "sex": "F",
+    "admission_source": "",
+    "chief_complaint": "Respiratory management, bilateral lower extremity cellulitis",
+    "medical_history": [
+      "COPD",
+      "Obstructive Sleep Apnea",
+      "Diabetes",
+      "Anem
+
+ia"
+    ],
+    "medications": [
+      "Lasix 20mg BID",
+      "Coreg",
+      "Combivent",
+      "Eliquis"
+    ],
+    "vital_signs": {
+      "o2_requirements": "4 LPM",
+      "bipap_settings": "16/11"
+    },
+    "lab_results": {}
+  },
+
+  "environment_hidden_data": {
+    "true_diagnosis": "Cellulitis leg; COPD with acute exacerbation",
+    "disease_severity": "Moderate",
+    "clinical_context": "Requires 4-channel sleep study and daily wound dressing changes.",
+
+    "intended_request": {
+      "service_description": "SNF admission for skilled respiratory care and wound management",
+      "clinical_rationale": "Daily sterile wound dressings for cellulitis and skilled respiratory intervention (BiPAP management, O2 titration)."
+    }
+  }
+}

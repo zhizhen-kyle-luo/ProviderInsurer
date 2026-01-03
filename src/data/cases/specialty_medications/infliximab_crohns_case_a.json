@@ -1,0 +1,65 @@
+{
+  "case_id": "infliximab_crohns_2015",
+  "case_type": "specialty_medication",
+
+  "patient_visible_data": {
+    "patient_id": "PT-2015-002",
+    "age": 60,
+    "sex": "F",
+    "admission_source": "",
+    "chief_complaint": "10-day history of small intestinal stenosis/stricture with abdominal pain; Crohn's symptoms include watery diarrhea (~3-4/day)",
+    "medical_history": [
+      "Crohn's disease (diagnosed 2015)",
+      "Small intestinal stenosis",
+      "Colonoscopy attempted ~10 days before admission; colonoscope could not be advanced due to secondary intestinal stenosis",
+      "Biopsy and three-dimensional CT of the small intestine confirmed Crohn's disease",
+      "No alcohol use or drug abuse reported"
+    ],
+    "medications": [
+      "Mesalazine 3 g/day (partial response; symptoms improved to ~2-3 diarrheal stools/day)"
+    ],
+    "vital_signs": {},
+    "lab_results": {
+      "fecal_calprotectin": {
+        "value": 827.162,
+        "units": "ug/g"
+      },
+      "albumin": {
+        "value": 36.1,
+        "units": "g/L"
+      },
+      "leukocytes": {
+        "value": 3.2,
+        "units": "x 10^9/L"
+      },
+      "platelets": {
+        "value": 123,
+        "units": "x 10^9/L"
+      },
+      "serum_calcium": {
+        "value": 2.18,
+        "units": "mmol/L"
+      },
+      "serum_magnesium": {
+        "value": 0.82,
+        "units": "mmol/L"
+      },
+      "t_spot_tb": {
+        "result": "Negative"
+      }
+    }
+  },
+
+  "environment_hidden_data": {
+    "true_diagnosis": "Crohn's disease with small intestinal stenosis/stricture",
+    "disease_severity": "Not explicitly stated (objective active inflammation present)",
+    "clinical_context": "Small intestinal stenosis limited colonoscopy; biopsy + 3D CT confirmed Crohn's disease. Objective inflammation documented (fecal calprotectin 827 ug/g) with low albumin and mild cytopenias; prior therapy documented only as mesalazine 3 g/day (partial response).",
+
+    "intended_request": {
+      "medication_name": "Infliximab",
+      "dosage": "5 mg/kg",
+      "icd10_codes": [],
+      "clinical_rationale": "Crohn's disease with small intestinal stenosis/stricture and objective active inflammation (fecal calprotectin 827 ug/g; albumin 36.1 g/L). Prior documented therapy: mesalazine 3 g/day (partial response)."
+    }
+  }
+}

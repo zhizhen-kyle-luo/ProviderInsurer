@@ -1,0 +1,36 @@
+{
+  "case_id": "snf_dialysis_03",
+  "case_type": "post_acute_care",
+
+  "patient_visible_data": {
+    "patient_id": "SNF-2024-003",
+    "age": 59,
+    "sex": "M",
+    "admission_source": "",
+    "chief_complaint": "Dialysis requirements, cardiac management",
+    "medical_history": [
+      "Acute CHF",
+      "Acute-on-chronic renal failure (Dialysis)",
+      "UTI"
+    ],
+    "medications": [
+      "IV Cefepime"
+    ],
+    "vital_signs": {
+      "o2_requirements": "4 LPM"
+    },
+    "clinical_notes": "Hemodynamic instability requiring frequent medication titration.",
+    "lab_results": {}
+  },
+
+  "environment_hidden_data": {
+    "true_diagnosis": "ESRD with acute CHF exacerbation",
+    "disease_severity": "Severe",
+    "clinical_context": "Dialysis 3x/week. Cachexic morphology. True vitals: BP 90/60 mmHg (Labile), HR 110 bpm.",
+
+    "intended_request": {
+      "service_description": "SNF admission for dialysis coordination and hemodynamic monitoring",
+      "clinical_rationale": "Hemodynamic instability requiring monitoring >3x/day. Dialysis 3x/week coordination."
+    }
+  }
+}
