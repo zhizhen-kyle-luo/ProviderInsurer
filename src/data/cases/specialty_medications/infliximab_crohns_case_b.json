@@ -1,0 +1,46 @@
+{
+  "case_id": "infliximab_crohns_case_b",
+  "case_type": "specialty_medication",
+
+  "patient_visible_data": {
+    "patient_id": "PT-2024-CD-002",
+    "age": 64,
+    "sex": "F",
+    "admission_source": "Direct",
+    "chief_complaint": "Recurrent abdominal pain and obstructive symptoms",
+    "medical_history": [
+      "Ileal Crohn's disease (diagnosed >20 years ago)",
+      "History of ileocecal resection (2004)",
+      "Arterial hypertension",
+      "Recurrent subocclusive episodes"
+    ],
+    "medications": [
+      "Azathioprine 2 mg/kg/day",
+      "Amlodipine 5mg",
+      "Captopril"
+    ],
+    "vital_signs": {
+      "temperature": "37.1 C",
+      "heart_rate": "78 bpm",
+      "blood_pressure": "128/76 mmHg",
+      "respiratory_rate": "16/min"
+    },
+    "presenting_symptoms": "Long-standing Crohn's disease with recent recurrence of obstructive symptoms. Colonoscopy reveals inflammatory stenosis at anastomosis site.",
+    "lab_results": {}
+  },
+
+  "environment_hidden_data": {
+    "true_diagnosis": "Recurrent ileal Crohn's disease with anastomotic stenosis",
+    "disease_severity": "Moderate-to-severe",
+    "clinical_context": "Post-surgical recurrence refractory to immunomodulator maintenance (Azathioprine). Requires biologic escalation.",
+
+    "intended_request": {
+      "medication_name": "Infliximab",
+      "dosage": "5 mg/kg",
+      "frequency": "Weeks 0, 2, 6 then every 8 weeks",
+      "duration": "12 months",
+      "icd10_codes": ["K50.012", "K56.60"],
+      "clinical_rationale": "Patient has failed maintenance therapy with Azathioprine. documented endoscopic recurrence with stenosis. Combination therapy (Infliximab + Azathioprine) indicated for high-risk phenotype."
+    }
+  }
+}

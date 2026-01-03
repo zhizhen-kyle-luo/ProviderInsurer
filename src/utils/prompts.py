@@ -721,7 +721,7 @@ RESPONSE FORMAT (JSON):
 
     return base_prompt
 
-def create_claim_adjudication_prompt(state, service_request, cost_ref, case, phase_2_evidence=None, pa_type="specialty_medication", provider_billed_amount=None):
+def create_claim_adjudication_prompt(state, service_request, cost_ref, case, phase_2_evidence=None, case_type="specialty_medication", provider_billed_amount=None):
     """create task prompt for claim review - works for all PA types
 
     Args:
@@ -729,7 +729,7 @@ def create_claim_adjudication_prompt(state, service_request, cost_ref, case, pha
             If provided, use this instead of cost_ref defaults
     """
     import json
-    from src.models.schemas import PAType
+    from src.models.schemas import CaseType
 
     # build comprehensive clinical documentation from phase 2 evidence
     clinical_doc_parts = []
@@ -789,7 +789,7 @@ def create_claim_adjudication_prompt(state, service_request, cost_ref, case, pha
     combined_clinical_doc = "\n".join(clinical_doc_parts) if clinical_doc_parts else "No documentation provided"
 
     # build service details based on PA type
-    if pa_type == PAType.SPECIALTY_MEDICATION:
+    if case_type == CaseType.SPECIALTY_MEDICATION:
         service_name = service_request.get('medication_name', 'medication')
         service_details = f"""CLAIM SUBMITTED:
 - Medication: {service_request.get('medication_name')}
@@ -866,14 +866,14 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_claim_submission_prompt(state, service_request, cost_ref, phase_2_evidence=None, pa_type="specialty_medication", coding_options=None):
+def create_provider_claim_submission_prompt(state, service_request, cost_ref, phase_2_evidence=None, case_type="specialty_medication", coding_options=None):
     """create provider claim submission prompt (phase 3) - works for all PA types
 
     Args:
         coding_options: list of dicts with diagnosis/payment choices for DRG upcoding scenarios
             Each option should have: diagnosis, icd10, payment, defensibility, justification
     """
-    from src.models.schemas import PAType
+    from src.models.schemas import CaseType
 
     # build clinical documentation
     clinical_doc_parts = []
@@ -901,7 +901,7 @@ def create_provider_claim_submission_prompt(state, service_request, cost_ref, ph
     combined_clinical_doc = "\n".join(clinical_doc_parts) if clinical_doc_parts else "No additional documentation"
 
     # build service details based on PA type
-    if pa_type == PAType.SPECIALTY_MEDICATION:
+    if case_type == CaseType.SPECIALTY_MEDICATION:
         service_name = service_request.get('medication_name', 'medication')
         service_details = f"""TREATMENT DELIVERED:
 - Medication: {service_request.get('medication_name')}
@@ -936,7 +936,7 @@ def create_provider_claim_submission_prompt(state, service_request, cost_ref, ph
         coding_section = "\n".join(coding_section_parts)
     else:
         # standard case with fixed billing
-        if pa_type == PAType.SPECIALTY_MEDICATION:
+        if case_type == CaseType.SPECIALTY_MEDICATION:
             total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
             coding_section = f"""BILLING INFORMATION:
 - Drug Acquisition Cost: ${cost_ref.get('drug_acquisition_cost', 7800):.2f}
@@ -998,14 +998,14 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_claim_appeal_decision_prompt(state, denial_reason, service_request, pa_type="specialty_medication"):
+def create_provider_claim_appeal_decision_prompt(state, denial_reason, service_request, case_type="specialty_medication"):
     """create provider decision prompt after claim DENIED - uses discrete action space
 
     provider actions: CONTINUE (augment record), APPEAL (escalate to next level), ABANDON (exit)
     """
-    from src.models.schemas import PAType
+    from src.models.schemas import CaseType
 
-    if pa_type == PAType.SPECIALTY_MEDICATION:
+    if case_type == CaseType.SPECIALTY_MEDICATION:
         service_details = f"""SERVICE:
 - Medication: {service_request.get('medication_name')}
 - Dosage: {service_request.get('dosage')}"""
@@ -1052,15 +1052,15 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_pend_response_prompt(state, pend_decision, service_request, pend_iteration, pa_type="specialty_medication"):
+def create_provider_pend_response_prompt(state, pend_decision, service_request, pend_iteration, case_type="specialty_medication"):
     """create provider decision prompt after claim PENDED (REQUEST_INFO) - uses discrete action space
 
     provider actions: CONTINUE (provide requested docs), ABANDON (exit)
     note: at pend stage, APPEAL is not yet available - must first respond to REQUEST_INFO
     """
-    from src.models.schemas import PAType
+    from src.models.schemas import CaseType
 
-    if pa_type == PAType.SPECIALTY_MEDICATION:
+    if case_type == CaseType.SPECIALTY_MEDICATION:
         service_details = f"""SERVICE:
 - Medication: {service_request.get('medication_name')}
 - Dosage: {service_request.get('dosage')}"""
@@ -1107,9 +1107,9 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_claim_resubmission_prompt(state, pend_decision, service_request, phase_2_evidence=None, pa_type="specialty_medication"):
+def create_provider_claim_resubmission_prompt(state, pend_decision, service_request, phase_2_evidence=None, case_type="specialty_medication"):
     """create provider resubmission packet prompt (responding to pended claim) - works for all PA types"""
-    from src.models.schemas import PAType
+    from src.models.schemas import CaseType
 
     # build comprehensive evidence
     evidence_parts = []
@@ -1135,7 +1135,7 @@ def create_provider_claim_resubmission_prompt(state, pend_decision, service_requ
 
     combined_evidence = "\n".join(evidence_parts) if evidence_parts else "See original claim documentation"
 
-    if pa_type == PAType.SPECIALTY_MEDICATION:
+    if case_type == CaseType.SPECIALTY_MEDICATION:
         service_details = f"""TREATMENT DELIVERED:
 - Medication: {service_request.get('medication_name')}
 - Dosage: {service_request.get('dosage')}"""
@@ -1174,9 +1174,9 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_provider_claim_appeal_prompt(state, denial_reason, service_request, phase_2_evidence=None, pa_type="specialty_medication", appeal_history=None):
+def create_provider_claim_appeal_prompt(state, denial_reason, service_request, phase_2_evidence=None, case_type="specialty_medication", appeal_history=None):
     """create provider claim appeal submission prompt - works for all PA types"""
-    from src.models.schemas import PAType
+    from src.models.schemas import CaseType
 
     # build appeal history warning
     history_text = ""
@@ -1210,7 +1210,7 @@ def create_provider_claim_appeal_prompt(state, denial_reason, service_request, p
     combined_evidence = "\n".join(evidence_parts) if evidence_parts else "See original PA documentation"
 
     # build service details based on PA type
-    if pa_type == PAType.SPECIALTY_MEDICATION:
+    if case_type == CaseType.SPECIALTY_MEDICATION:
         service_details = f"""TREATMENT DELIVERED:
 - Medication: {service_request.get('medication_name')}
 - Dosage: {service_request.get('dosage')}
@@ -1256,12 +1256,12 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_payor_claim_appeal_review_prompt(state, appeal_letter, denial_reason, service_request, cost_ref, phase_2_evidence=None, pa_type="specialty_medication"):
+def create_payor_claim_appeal_review_prompt(state, appeal_letter, denial_reason, service_request, cost_ref, phase_2_evidence=None, case_type="specialty_medication"):
     """create payor claim appeal review prompt - works for all PA types"""
     import json
-    from src.models.schemas import PAType
+    from src.models.schemas import CaseType
 
-    if pa_type == PAType.SPECIALTY_MEDICATION:
+    if case_type == CaseType.SPECIALTY_MEDICATION:
         service_details = f"""TREATMENT DETAILS:
 - Medication: {service_request.get('medication_name')}
 - Dosage: {service_request.get('dosage')}"""
@@ -1313,12 +1313,12 @@ RESPONSE FORMAT (JSON):
 }}"""
 
 
-def create_payor_claim_resubmission_review_prompt(state, resubmission_packet, pend_decision, service_request, cost_ref, pend_iteration, pa_type="specialty_medication"):
+def create_payor_claim_resubmission_review_prompt(state, resubmission_packet, pend_decision, service_request, cost_ref, pend_iteration, case_type="specialty_medication"):
     """create payor resubmission review prompt (after provider resubmits pended claim) - works for all PA types"""
     import json
-    from src.models.schemas import PAType
+    from src.models.schemas import CaseType
 
-    if pa_type == PAType.SPECIALTY_MEDICATION:
+    if case_type == CaseType.SPECIALTY_MEDICATION:
         service_details = f"""TREATMENT DETAILS:
 - Medication: {service_request.get('medication_name')}
 - Dosage: {service_request.get('dosage')}"""

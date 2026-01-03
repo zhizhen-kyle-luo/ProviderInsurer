@@ -1,37 +1,36 @@
 """
 Convert raw case dictionaries to structured Pydantic models
 """
-from datetime import datetime
+import json
+from pathlib import Path
 from src.models.schemas import (
     PatientDemographics,
     InsuranceInfo,
     AdmissionNotification,
     ClinicalPresentation,
-    LabResult,
-    ImagingResult,
-    MedicationRequest,
-    ProcedureRequest,
-    PAType
+    CaseType
 )
+
+
+def load_case_from_json(json_path):
+    """load case from JSON file"""
+    with open(json_path, 'r') as f:
+        return json.load(f)
 
 
 def convert_case_to_models(case_dict):
     """
     Convert raw case dictionary to structured models for simulation.
-
     This allows cases to be stored as simple dicts but converted to
     Pydantic models when needed by the simulation.
-
-    handles inpatient admission, specialty medication, and cardiac testing pa types.
-    supports both old (patient_presentation) and new (patient_visible_data) naming.
+    handles all case types with one unified workflow.
     """
-    # support both old and new naming conventions
-    patient_pres = case_dict.get("patient_visible_data") or case_dict.get("patient_presentation")
+    patient_pres = case_dict.get("patient_visible_data")
     if not patient_pres:
-        raise ValueError("case must have either 'patient_visible_data' or 'patient_presentation'")
+        raise ValueError("case must have either patient_visible_data")
 
-    insurance = case_dict["insurance_info"]
-    pa_type = case_dict.get("pa_type", PAType.INPATIENT_ADMISSION)
+    # all cases use medicare advantage (hardcoded in insurer prompt)
+    case_type = case_dict.get("case_type") or case_dict.get("pa_type", CaseType.INPATIENT_ADMISSION)
 
     patient_demographics = PatientDemographics(
         patient_id=patient_pres["patient_id"],
@@ -40,24 +39,18 @@ def convert_case_to_models(case_dict):
         mrn=patient_pres.get("patient_id")
     )
 
+    # default medicare advantage insurance (consistent with insurer prompt)
     insurance_info = InsuranceInfo(
-        plan_type=insurance["plan_type"],
-        payer_name=insurance["payer_name"],
+        plan_type="MA",
+        payer_name="Medicare Advantage",
         member_id=patient_demographics.patient_id,
-        authorization_required=insurance["authorization_required"]
+        authorization_required=True
     )
-
-    admission_date_str = patient_pres["admission_date"]
-    if isinstance(admission_date_str, str):
-        admission_date = datetime.strptime(admission_date_str, "%Y-%m-%d").date()
-    else:
-        admission_date = admission_date_str
 
     admission = AdmissionNotification(
         patient_demographics=patient_demographics,
         insurance=insurance_info,
-        admission_date=admission_date,
-        admission_source=patient_pres["admission_source"],
+        admission_source=patient_pres.get("admission_source", ""),
         chief_complaint=patient_pres["chief_complaint"],
         preliminary_diagnoses=[]
     )
@@ -72,33 +65,9 @@ def convert_case_to_models(case_dict):
 
     case_dict["admission"] = admission
     case_dict["clinical_presentation"] = clinical_presentation
-    case_dict["pa_type"] = pa_type
+    case_dict["case_type"] = case_type
 
-    # convert medication-specific data if present
-    if pa_type == PAType.SPECIALTY_MEDICATION and "medication_request" in case_dict:
-        med_req = case_dict["medication_request"]
-        medication_request = MedicationRequest(
-            medication_name=med_req["medication_name"],
-            j_code=med_req.get("j_code"),
-            dosage=med_req["dosage"],
-            frequency=med_req["frequency"],
-            duration=med_req["duration"],
-            icd10_codes=med_req.get("icd10_codes", []),
-            clinical_rationale=med_req["clinical_rationale"],
-            prior_therapies_failed=med_req.get("prior_therapies_failed", []),
-            step_therapy_completed=med_req.get("step_therapy_completed", False)
-        )
-        case_dict["medication_request_model"] = medication_request
-
-    # convert procedure-specific data if present
-    if pa_type == PAType.CARDIAC_TESTING and "procedure_request" in case_dict:
-        proc_req = case_dict["procedure_request"]
-        procedure_request = ProcedureRequest(
-            procedure_name=proc_req["procedure_name"],
-            cpt_code=proc_req.get("cpt_code"),
-            clinical_indication=proc_req["clinical_indication"],
-            icd10_codes=proc_req.get("icd10_codes", [])
-        )
-        case_dict["procedure_request_model"] = procedure_request
+    # provider creates authorization_request during simulation
+    # intended_request stays in environment_hidden_data for ground truth comparison only
 
     return case_dict

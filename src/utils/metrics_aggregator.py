@@ -2,7 +2,7 @@
 aggregate population-level metrics from simulation results for macro-validation
 """
 from typing import List, Dict, Any
-from src.models.schemas import EncounterState, PAType
+from src.models.schemas import EncounterState, CaseType
 
 
 class MetricsAggregator:
@@ -39,8 +39,8 @@ class MetricsAggregator:
         denied_count = sum(1 for state in states if state.denial_occurred)
         overall_pa_denial_rate = (denied_count / total_cases * 100) if total_cases > 0 else 0.0
 
-        # post-acute care denial rate (filter by pa_type)
-        post_acute_cases = [s for s in states if s.pa_type == PAType.POST_ACUTE_CARE]
+        # post-acute care denial rate (filter by case_type)
+        post_acute_cases = [s for s in states if s.case_type == CaseType.POST_ACUTE_CARE]
         post_acute_denied = sum(1 for s in post_acute_cases if s.denial_occurred)
         post_acute_total = len(post_acute_cases)
         post_acute_care_denial_rate = (post_acute_denied / post_acute_total * 100) if post_acute_total > 0 else None

@@ -5,8 +5,8 @@ from pydantic import BaseModel, Field
 import json
 
 
-# pa type discriminator for different authorization workflows
-class PAType:
+# case type discriminator for different authorization workflows
+class CaseType:
     INPATIENT_ADMISSION = "inpatient_admission"
     SPECIALTY_MEDICATION = "specialty_medication"
     OUTPATIENT_IMAGING = "outpatient_imaging"
@@ -32,8 +32,7 @@ class InsuranceInfo(BaseModel):
 class AdmissionNotification(BaseModel):
     patient_demographics: PatientDemographics
     insurance: InsuranceInfo
-    admission_date: date
-    admission_source: Literal["ER", "Direct", "Transfer"]
+    admission_source: str  # free text: "ER", "Direct", "Transfer", or ""
     chief_complaint: str
     preliminary_diagnoses: List[str]
     expected_drg: Optional[str] = None
@@ -214,13 +213,8 @@ class EncounterState(BaseModel):
     case_id: str
     encounter_id: str = Field(default_factory=lambda: f"ENC-{date.today().strftime('%Y%m%d')}")
 
-    # pa type discriminator
-    pa_type: str = PAType.INPATIENT_ADMISSION
-
-    admission_date: date
-    review_date: Optional[date] = None
-    appeal_date: Optional[date] = None
-    settlement_date: Optional[date] = None
+    # case type discriminator
+    case_type: str = CaseType.INPATIENT_ADMISSION
 
     admission: AdmissionNotification
     clinical_presentation: ClinicalPresentation
@@ -232,13 +226,12 @@ class EncounterState(BaseModel):
     financial_settlement: Optional[FinancialSettlement] = None
     final_authorized_level: Optional[Literal["inpatient", "observation", "outpatient"]] = None
 
-    # medication-specific fields
-    medication_request: Optional[MedicationRequest] = None
+    # unified authorization request (replaces medication_request/procedure_request)
+    authorization_request: Optional['AuthorizationRequest'] = None
+
+    # authorization decision and financial settlement
     medication_authorization: Optional[MedicationAuthorizationDecision] = None
     medication_financial: Optional[MedicationFinancialSettlement] = None
-
-    # procedure-specific fields
-    procedure_request: Optional[ProcedureRequest] = None
 
     denial_occurred: bool = False
     appeal_filed: bool = False
@@ -296,7 +289,36 @@ class TestOrdered(BaseModel):
     rationale: Optional[str] = None
 
 
-# specialty medication pa models
+# unified authorization request model (aligns with X12 278 / FHIR PAS standards)
+class AuthorizationRequest(BaseModel):
+    """
+    unified PA request for all service types (medications, procedures, admissions)
+    aligns with CMS 2025 interoperability rule and X12 278 EDI transaction standard
+    """
+    # common fields (always present)
+    request_type: str  # "medication", "procedure", "admission", "imaging", "dme"
+    service_name: str  # drug name, procedure name, etc.
+    clinical_rationale: str
+    diagnosis_codes: List[str] = Field(default_factory=list)  # ICD-10 codes
+
+    # coding (type-specific but all optional)
+    ndc_code: Optional[str] = None  # national drug code (for medications)
+    j_code: Optional[str] = None    # j-code (for infused medications)
+    cpt_code: Optional[str] = None  # current procedural terminology (for procedures)
+
+    # service details (all optional - include what's relevant)
+    dosage: Optional[str] = None
+    frequency: Optional[str] = None
+    duration: Optional[str] = None
+    visit_count: Optional[int] = None
+    site_of_service: Optional[str] = None
+
+    # step therapy / prior authorization history (optional)
+    prior_therapies_failed: List[str] = Field(default_factory=list)
+    step_therapy_completed: bool = False
+
+
+# deprecated - use AuthorizationRequest instead (kept for backward compatibility)
 class MedicationRequest(BaseModel):
     medication_name: str
     ndc_code: Optional[str] = None
@@ -310,7 +332,7 @@ class MedicationRequest(BaseModel):
     step_therapy_completed: bool = False
 
 
-# cardiac/procedure pa models
+# deprecated - use AuthorizationRequest instead (kept for backward compatibility)
 class ProcedureRequest(BaseModel):
     procedure_name: str
     cpt_code: Optional[str] = None

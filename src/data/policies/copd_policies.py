@@ -1,12 +1,4 @@
 """
-COPD Policy Asymmetry - Ground Truth Data
-
-Represents the information asymmetry between:
-- Provider: Clinical guidelines (fuzzy, patient-centered)
-- Payor: Coverage policies (rigid, metric-driven)
-
-This asymmetry drives the "Nash Equilibrium of Friction" in PA negotiations.
-
 Sources:
 - GOLD 2023: Agustí et al. npj Primary Care Respiratory Medicine (2023)
   https://www.nature.com/articles/s41533-023-00349-4
@@ -16,11 +8,8 @@ Sources:
 
 
 class COPDPolicies:
-    # THE PROVIDER'S VIEW (Fuzzy, Clinical, Safe)
-    # Source: GOLD 2023, "Management of ECOPD → Treatment setting", lines 304-307
     GOLD_STANDARD = {
         "policy_name": "GOLD 2023 Guidelines",
-        "source": "Agustí et al. npj Primary Care Respiratory Medicine (2023)",
         "hospitalization_indications": [
             "Severe symptoms such as sudden worsening of resting dyspnoea",
             "Oxygen saturation <= 92%",
@@ -32,18 +21,10 @@ class COPDPolicies:
             "Insufficient home support"
         ],
         "decision_logic": "Admit if ANY hospitalization indication is present",
-        "notes": "Qualitative assessment + clinical trajectory + social context"
     }
 
-    # THE PAYOR'S VIEW (Rigid, Metric-Driven, Cost-Averse)
-    # Source: InterQual 2022 Physician Admission Guide, Page 1, lines 48-57
-    # NOTE: InterQual uses "structured checklist" criteria - combination of numeric thresholds
-    # (SpO2, PaO2, pH, PCO2) AND objective clinical descriptors (cyanosis, paradoxical motion,
-    # increased work of breathing). NOT purely numeric, but more rigid than GOLD's fuzzy guidelines.
     INTERQUAL_STRICT = {
         "policy_name": "InterQual 2022 COPD Criteria",
-        "source": "InterQual Physician Admission Guide (Adult) 2022",
-
         # observation level (6-48h) - gated requirements
         "observation_criteria": {
             "prerequisites": [">=2 doses short-acting beta-agonist prior to admission"],
