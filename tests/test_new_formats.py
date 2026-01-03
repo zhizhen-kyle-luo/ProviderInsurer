@@ -39,13 +39,12 @@ def test_new_formats():
             'patient_care_weight': 'high',
             'documentation_style': 'moderate',
             'risk_tolerance': 'moderate',
-            'ai_adoption': 'moderate'
+            'oversight_intensity': 'medium'
         },
         payor_params={
-            'cost_focus': 'moderate',
-            'ai_reliance': 'high',
-            'denial_threshold': 'moderate',
-            'time_horizon': 'short-term'
+            'strictness': 'moderate',
+            'time_horizon': 'short-term',
+            'oversight_intensity': 'medium'
         },
         enable_cache=False  # disable cache for fresh test
     )
