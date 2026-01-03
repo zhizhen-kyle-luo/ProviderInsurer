@@ -125,8 +125,8 @@ def run_experiment(
 
     # extract approval status
     approval_status = "denied"
-    if state.medication_authorization:
-        approval_status = state.medication_authorization.authorization_status
+    if state.authorization_request:
+        approval_status = state.authorization_request.authorization_status
 
     # save artifacts for manual inspection
     if results_dir:

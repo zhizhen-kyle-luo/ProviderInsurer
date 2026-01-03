@@ -34,12 +34,12 @@ def print_phase_outcome(state, scenario_name):
     print(f"Case ID: {state.case_id}")
 
     # check phase 2 outcome
-    pa_status = state.medication_authorization.authorization_status if state.medication_authorization else None
+    pa_status = state.authorization_request.authorization_status if state.authorization_request else None
 
     if pa_status == "denied":
         print("\nResult: TOTAL DENIAL OF SERVICE (Phase 2)")
         print("  Access to care BLOCKED - patient never received treatment")
-        print(f"  Denial reason: {state.medication_authorization.denial_reason}")
+        print(f"  Denial reason: {state.authorization_request.denial_reason}")
         print("\n  Financial impact:")
         print("    Provider: $0 revenue (service not provided)")
         print("    Payor: $0 cost (denied before service)")
@@ -63,7 +63,7 @@ def print_phase_outcome(state, scenario_name):
 
         elif state.claim_rejected:
             print("\nPhase 3: CLAIM REJECTED (formal denial)")
-            print(f"  Rejection reason: {state.medication_authorization.denial_reason}")
+            print(f"  Rejection reason: {state.authorization_request.denial_reason}")
             print("  Provider can appeal but must absorb costs")
 
         else:
@@ -71,11 +71,11 @@ def print_phase_outcome(state, scenario_name):
             print("  Payment processed normally")
 
         # financial analysis
-        if state.medication_financial:
+        if state.financial_settlement:
             print(f"\n  Financial Settlement:")
-            print(f"    Total billed: ${state.medication_financial.total_billed:.2f}")
-            print(f"    Payor payment: ${state.medication_financial.payer_payment:.2f}")
-            print(f"    Admin costs: ${state.medication_financial.total_administrative_cost:.2f}")
+            print(f"    Total billed: ${state.financial_settlement.total_billed:.2f}")
+            print(f"    Payor payment: ${state.financial_settlement.payer_payment:.2f}")
+            print(f"    Admin costs: ${state.financial_settlement.total_administrative_cost:.2f}")
 
             if hasattr(state, 'resubmission_cost_incurred'):
                 print(f"    Pend resubmission cost: ${state.resubmission_cost_incurred:.2f}")
@@ -129,9 +129,9 @@ def main():
         state = sim.run_case(COPD_RESPIRATORY_FAILURE_GREY)
 
         # extract metrics
-        pa_status = state.medication_authorization.authorization_status if state.medication_authorization else "N/A"
-        total_billed = state.medication_financial.total_billed if state.medication_financial else 0.0
-        total_paid = state.medication_financial.payer_payment if state.medication_financial else 0.0
+        pa_status = state.authorization_request.authorization_status if state.authorization_request else "N/A"
+        total_billed = state.financial_settlement.total_billed if state.financial_settlement else 0.0
+        total_paid = state.financial_settlement.payer_payment if state.financial_settlement else 0.0
         iteration_count = len([i for i in state.audit_log.interactions if i.phase == "phase_2_pa"]) if state.audit_log else 0
 
         # determine final status
