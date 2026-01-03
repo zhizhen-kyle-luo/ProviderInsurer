@@ -16,7 +16,7 @@ from typing import Dict, Any, TYPE_CHECKING
 from datetime import timedelta
 from langchain_core.messages import HumanMessage
 
-from src.models.schemas import EncounterState, PAType
+from src.models.schemas import EncounterState, CaseType
 from src.utils.prompts import (
     create_provider_prompt,
     create_payor_prompt,
@@ -37,12 +37,12 @@ def run_phase_3_claims(
     sim: "UtilizationReviewSimulation",
     state: EncounterState,
     case: Dict[str, Any],
-    pa_type: str
+    case_type: str
 ) -> EncounterState:
     """
     phase 3: claims adjudication with provider decision and appeal loop
 
-    applies to ALL PA types: medication, cardiac testing, imaging, etc.
+    applies to all case types: medication, cardiac testing, imaging, etc.
     """
     # only process claims if pa was approved
     if not state.medication_authorization or state.medication_authorization.authorization_status != "approved":
@@ -51,7 +51,7 @@ def run_phase_3_claims(
     # extract service request data based on PA type
     phase_2_evidence = getattr(state, '_phase_2_evidence', {})
 
-    if pa_type == PAType.SPECIALTY_MEDICATION:
+    if case_type == CaseType.SPECIALTY_MEDICATION:
         service_request = case.get("medication_request", {})
         service_name = service_request.get('medication_name', 'medication')
     else:
@@ -62,7 +62,7 @@ def run_phase_3_claims(
         service_name = requested_service.get('service_name')
         if not service_name:
             req_details = approved_req.get('request_details', {})
-            if pa_type == PAType.CARDIAC_TESTING:
+            if case_type == CaseType.CARDIAC_TESTING:
                 service_name = req_details.get('treatment_name', req_details.get('procedure_name', 'procedure'))
             else:
                 service_name = req_details.get('treatment_name', req_details.get('test_name', 'service'))
@@ -81,7 +81,7 @@ def run_phase_3_claims(
     # STEP 1: provider submits claim
     provider_system_prompt = create_provider_prompt()
     provider_claim_prompt = create_provider_claim_submission_prompt(
-        state, service_request, cost_ref, phase_2_evidence, pa_type, coding_options
+        state, service_request, cost_ref, phase_2_evidence, case_type, coding_options
     )
 
     messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_claim_prompt}")]
@@ -97,7 +97,7 @@ def run_phase_3_claims(
         claim_submission = json.loads(response_text)
     except Exception:
         default_amount = cost_ref.get('drug_acquisition_cost', cost_ref.get('procedure_cost', 7800))
-        if pa_type == PAType.SPECIALTY_MEDICATION:
+        if case_type == CaseType.SPECIALTY_MEDICATION:
             default_amount += cost_ref.get('administration_fee', 150)
         claim_submission = {
             "claim_submission": {
@@ -117,7 +117,7 @@ def run_phase_3_claims(
         parsed_output=claim_submission,
         metadata={
             "service": service_name,
-            "pa_type": pa_type,
+            "case_type": case_type,
             "pa_approved": True,
             "cache_hit": provider_cache_hit,
             "coding_options_available": len(coding_options) if coding_options else 0
@@ -139,7 +139,7 @@ def run_phase_3_claims(
 
     payor_system_prompt = create_payor_prompt(sim.payor_params)
     payor_claim_prompt = create_claim_adjudication_prompt(
-        state, service_request, cost_ref, case, phase_2_evidence, pa_type, provider_billed_amount
+        state, service_request, cost_ref, case, phase_2_evidence, case_type, provider_billed_amount
     )
 
     messages = [HumanMessage(content=f"{payor_system_prompt}\n\n{payor_claim_prompt}")]
@@ -171,7 +171,7 @@ def run_phase_3_claims(
         parsed_output=claim_decision,
         metadata={
             "service": service_name,
-            "pa_type": pa_type,
+            "case_type": case_type,
             "claim_status": claim_decision.get("claim_status"),
             "cache_hit": payor_cache_hit
         }
@@ -197,14 +197,14 @@ def run_phase_3_claims(
     if claim_status == "rejected":
         state = _handle_rejected_claim(
             sim, state, claim_decision, service_request, phase_2_evidence,
-            pa_type, service_name, cost_ref, claim_date, provider_system_prompt, payor_system_prompt
+            case_type, service_name, cost_ref, claim_date, provider_system_prompt, payor_system_prompt
         )
 
     # STEP 3b: if claim PENDED (RFI), handle pend resubmission loop
     elif claim_status == "pended":
         state = _handle_pended_claim(
             sim, state, claim_decision, service_request, phase_2_evidence,
-            pa_type, cost_ref, provider_system_prompt, payor_system_prompt
+            case_type, cost_ref, provider_system_prompt, payor_system_prompt
         )
 
     return state
@@ -216,7 +216,7 @@ def _handle_rejected_claim(
     claim_decision: Dict[str, Any],
     service_request: Dict[str, Any],
     phase_2_evidence: Dict[str, Any],
-    pa_type: str,
+    case_type: str,
     service_name: str,
     cost_ref: Dict[str, Any],
     claim_date,
@@ -229,7 +229,7 @@ def _handle_rejected_claim(
 
     # provider decision: discrete action space (CONTINUE/APPEAL/ABANDON)
     provider_decision_prompt = create_provider_claim_appeal_decision_prompt(
-        state, denial_reason, service_request, pa_type
+        state, denial_reason, service_request, case_type
     )
 
     messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_decision_prompt}")]
@@ -270,7 +270,7 @@ def _handle_rejected_claim(
 
             # provider submits appeal (with history of previous attempts)
             provider_appeal_prompt = create_provider_claim_appeal_prompt(
-                state, denial_reason, service_request, phase_2_evidence, pa_type, appeal_history
+                state, denial_reason, service_request, phase_2_evidence, case_type, appeal_history
             )
 
             messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_appeal_prompt}")]
@@ -311,7 +311,7 @@ def _handle_rejected_claim(
             # payor reviews appeal
             payor_appeal_prompt = create_payor_claim_appeal_review_prompt(
                 state, appeal_letter.get("appeal_letter", appeal_letter),
-                denial_reason, service_request, cost_ref, phase_2_evidence, pa_type
+                denial_reason, service_request, cost_ref, phase_2_evidence, case_type
             )
 
             messages = [HumanMessage(content=f"{payor_system_prompt}\n\n{payor_appeal_prompt}")]
@@ -433,7 +433,7 @@ def _handle_pended_claim(
     claim_decision: Dict[str, Any],
     service_request: Dict[str, Any],
     phase_2_evidence: Dict[str, Any],
-    pa_type: str,
+    case_type: str,
     cost_ref: Dict[str, Any],
     provider_system_prompt: str,
     payor_system_prompt: str
@@ -455,7 +455,7 @@ def _handle_pended_claim(
 
         # provider decides: resubmit or abandon
         provider_pend_prompt = create_provider_pend_response_prompt(
-            state, current_pend_decision, service_request, pend_iteration, pa_type
+            state, current_pend_decision, service_request, pend_iteration, case_type
         )
 
         messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_pend_prompt}")]
@@ -497,7 +497,7 @@ def _handle_pended_claim(
 
         # provider prepares resubmission packet
         provider_resubmit_prompt = create_provider_claim_resubmission_prompt(
-            state, current_pend_decision, service_request, phase_2_evidence, pa_type
+            state, current_pend_decision, service_request, phase_2_evidence, case_type
         )
 
         messages = [HumanMessage(content=f"{provider_system_prompt}\n\n{provider_resubmit_prompt}")]
@@ -529,7 +529,7 @@ def _handle_pended_claim(
         # payor reviews resubmission
         payor_resubmit_prompt = create_payor_claim_resubmission_review_prompt(
             state, resubmission_packet.get("resubmission_packet", resubmission_packet),
-            current_pend_decision, service_request, cost_ref, pend_iteration, pa_type
+            current_pend_decision, service_request, cost_ref, pend_iteration, case_type
         )
 
         messages = [HumanMessage(content=f"{payor_system_prompt}\n\n{payor_resubmit_prompt}")]

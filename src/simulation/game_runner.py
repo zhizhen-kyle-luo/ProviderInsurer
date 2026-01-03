@@ -8,7 +8,7 @@ from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import HumanMessage
 from src.models.schemas import (
     EncounterState,
-    PAType,
+    CaseType,
     AdmissionNotification,
     PatientDemographics,
     InsuranceInfo,
@@ -350,7 +350,7 @@ class UtilizationReviewSimulation:
         Phase 3: Appeal process if denied
         Phase 4: Financial settlement
 
-        routes to appropriate workflow based on pa_type
+        routes to appropriate workflow based on case_type
         """
         # initialize audit logger for this case (before noise introduction)
         self.audit_logger = AuditLogger(case_id=case["case_id"])
@@ -361,7 +361,7 @@ class UtilizationReviewSimulation:
         # clear test result cache for new case
         self.test_result_cache = {}
 
-        pa_type = case.get("pa_type", PAType.INPATIENT_ADMISSION)
+        case_type = case.get("case_type") or case.get("pa_type", CaseType.INPATIENT_ADMISSION)
 
         # construct structured objects from Golden Schema (patient_visible_data)
         admission = self._build_admission_from_patient_data(case)
@@ -378,10 +378,9 @@ class UtilizationReviewSimulation:
 
         state = EncounterState(
             case_id=case["case_id"],
-            admission_date=admission.admission_date,
             admission=admission,
             clinical_presentation=clinical_presentation,
-            pa_type=pa_type,
+            case_type=case_type,
             friction_metrics=FrictionMetrics(),
             provider_policy_view=provider_policy,
             payor_policy_view=payor_policy
@@ -398,7 +397,7 @@ class UtilizationReviewSimulation:
         # applies to ALL PA types
         if (state.medication_authorization and
             state.medication_authorization.authorization_status == "approved"):
-            state = run_phase_3_claims(self, state, case, pa_type)
+            state = run_phase_3_claims(self, state, case, case_type)
 
             # truth checking after phase 3 appeals (if enabled and appeal was filed)
             if self.enable_truth_checking and self.truth_checker and state.appeal_filed:
