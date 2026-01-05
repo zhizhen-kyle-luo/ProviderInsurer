@@ -348,8 +348,8 @@ class UtilizationReviewSimulation:
         # load case-specific policies or fallback to generic
         case_id_lower = case["case_id"].lower()
         if "copd" in case_id_lower or "respiratory" in case_id_lower:
-            provider_policy = COPDPolicies.GOLD_STANDARD
-            payor_policy = COPDPolicies.INTERQUAL_STRICT
+            provider_policy = COPDPolicies.PROVIDER_GUIDELINES["gold_2023"]
+            payor_policy = COPDPolicies.PAYOR_POLICIES["interqual_2022"]
         else:
             provider_policy = {"policy_name": "Standard Clinical Guidelines", "hospitalization_indications": []}
             payor_policy = {"policy_name": "Standard Medical Policy", "inpatient_criteria": {"must_meet_one_of": []}}

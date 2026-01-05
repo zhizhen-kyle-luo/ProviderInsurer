@@ -78,7 +78,3 @@ class COPDPolicies:
             "decision_logic": "Gated by: treatment prerequisites -> numeric thresholds -> ventilation flags -> risk factors"
         }
     }
-
-    # Backward compatibility aliases (DEPRECATED - use PROVIDER_GUIDELINES / PAYOR_POLICIES instead)
-    GOLD_STANDARD = PROVIDER_GUIDELINES["gold_2023"]
-    INTERQUAL_STRICT = PAYOR_POLICIES["interqual_2022"]
