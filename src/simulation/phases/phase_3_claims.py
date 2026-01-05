@@ -35,27 +35,22 @@ def _provider_claim_submission_decision(
     """
     import json
     from langchain_core.messages import HumanMessage
-    from src.utils.prompts.config import DEFAULT_PROVIDER_PARAMS
+    from src.utils.prompts.config import DEFAULT_PROVIDER_PARAMS, PROVIDER_PARAM_DEFINITIONS
 
-    # if no authorization request exists, skip claims phase
     if not state.authorization_request:
         return "skip"
-
     pa_status = state.authorization_request.authorization_status
-
-    # if PA approved, always submit claim
     if pa_status == "approved":
         return "submit_claim"
 
     # PA was denied - provider must decide whether to submit claim anyway
     provider_params = getattr(state, 'provider_params', None) or DEFAULT_PROVIDER_PARAMS
     aggressiveness = provider_params.get('authorization_aggressiveness', 'medium')
-
     denial_reason = state.authorization_request.denial_reason if hasattr(state.authorization_request, 'denial_reason') else "Not specified"
 
     prompt = f"""PHASE 3: CLAIM SUBMISSION DECISION
 
-SITUATION: Your prior authorization (Phase 2) was DENIED, but the patient still received care.
+SITUATION: Your prior authorization (Phase 2) was DENIED, but the patient still received care under your decision.
 You must decide: Submit a claim for payment, or skip claim submission?
 
 PHASE 2 AUTHORIZATION STATUS:
@@ -64,7 +59,7 @@ PHASE 2 AUTHORIZATION STATUS:
 - Service: {state.authorization_request.service_name if state.authorization_request.service_name else 'N/A'}
 
 YOUR BEHAVIORAL PARAMETER:
-- Authorization aggressiveness: {aggressiveness}
+- Authorization aggressiveness: {aggressiveness} ({PROVIDER_PARAM_DEFINITIONS['authorization_aggressiveness'].get(aggressiveness, '')})
 
 CLINICAL CONTEXT:
 - Patient Age: {state.admission.patient_demographics.age}

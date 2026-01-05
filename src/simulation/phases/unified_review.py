@@ -473,6 +473,17 @@ def run_unified_multi_level_review(
         state.authorization_request.review_level = iteration_num
         state.denial_occurred = True
 
+        # CRITICAL: PA denied - provider decides whether to treat patient anyway
+        # this captures the financial-legal tension: risk nonpayment vs medical abandonment
+        if phase == "phase_2_utilization_review":
+            treatment_decision = _provider_treatment_decision_after_pa_denial(sim, state, case)
+            state.provider_treated_despite_denial = (treatment_decision == "treat_anyway")
+
+            if treatment_decision == "no_treat":
+                # provider chose not to treat - patient abandons care
+                # Phase 3 will not run (no services rendered, no claim to submit)
+                state.care_abandoned = True
+
     # collect all evidence for downstream use
     accumulated_test_results = {}
     for iteration in prior_iterations:
@@ -488,3 +499,104 @@ def run_unified_multi_level_review(
     })
 
     return state
+
+
+def _provider_treatment_decision_after_pa_denial(
+    sim: "UtilizationReviewSimulation",
+    state: EncounterState,
+    case: Dict[str, Any]
+) -> str:
+    """
+    After PA denial, provider decides whether to treat patient anyway.
+
+    Returns: "treat_anyway" or "no_treat"
+
+    This captures the financial-legal tension documented in utilization review literature:
+    - Treat anyway = risk nonpayment (OOP/charity/hope for retro approval)
+    - No treat = risk medical abandonment (legal liability)
+
+    This is a conditional branch after ABANDON action, not a new action in action space.
+    """
+    import json
+    from langchain_core.messages import HumanMessage
+    from src.utils.prompts.config import DEFAULT_PROVIDER_PARAMS, PROVIDER_PARAM_DEFINITIONS
+
+    provider_params = getattr(state, 'provider_params', None) or DEFAULT_PROVIDER_PARAMS
+    aggressiveness = provider_params.get('authorization_aggressiveness', 'medium')
+
+    denial_reason = state.authorization_request.denial_reason if state.authorization_request else "PA exhausted without approval"
+
+    prompt = f"""TREATMENT DECISION AFTER PA DENIAL
+
+SITUATION: Your prior authorization request was DENIED after exhausting all appeals.
+You must decide: Provide care anyway (risking nonpayment), or decline treatment?
+
+PA OUTCOME:
+- Status: denied
+- Denial Reason: {denial_reason}
+
+YOUR BEHAVIORAL PARAMETER:
+- Authorization aggressiveness: {aggressiveness} ({PROVIDER_PARAM_DEFINITIONS['authorization_aggressiveness'].get(aggressiveness, '')})
+
+CLINICAL CONTEXT:
+- Patient Age: {state.admission.patient_demographics.age}
+- Chief Complaint: {state.clinical_presentation.chief_complaint}
+- Medical History: {', '.join(state.clinical_presentation.medical_history)}
+
+TWO DECISIONS:
+1. treat_anyway: Provide care despite PA denial (patient pays OOP, or you provide charity care, or hope claim approved retroactively)
+2. no_treat: Do not provide care (patient abandons treatment, conserve resources, avoid uncompensated care risk)
+
+IMPORTANT CONTEXT:
+- Medical abandonment tort: Terminating care without proper notice can create legal liability
+- Financial risk: Treating without authorization means risking nonpayment
+- Patient impact: 78% of patients abandon treatment when PA denied (AMA survey)
+
+TASK: Decide whether to treat the patient despite PA denial.
+
+RESPONSE FORMAT (JSON):
+{{
+    "decision": "treat_anyway" or "no_treat",
+    "rationale": "<explain your reasoning considering clinical need, financial risk, and legal obligations>"
+}}
+
+Use your authorization aggressiveness parameter to guide this decision."""
+
+    response = sim.provider.llm.invoke([HumanMessage(content=prompt)])
+    response_text = response.content.strip()
+
+    # parse decision
+    try:
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].split("```")[0].strip()
+
+        decision_data = json.loads(response_text)
+        decision = decision_data.get("decision", "no_treat")
+        rationale = decision_data.get("rationale", "")
+
+        # log decision
+        sim.audit_logger.log_provider_action(
+            phase="phase_2_utilization_review",
+            action_type="treatment_decision_after_pa_denial",
+            description=f"provider decided to {decision} after PA exhausted",
+            outcome={
+                "decision": decision,
+                "rationale": rationale,
+                "pa_status": "denied",
+                "aggressiveness": aggressiveness
+            }
+        )
+
+        return decision if decision in ["treat_anyway", "no_treat"] else "no_treat"
+
+    except (json.JSONDecodeError, KeyError) as e:
+        # default to no_treat if parsing fails (conservative: avoid uncompensated care)
+        sim.audit_logger.log_provider_action(
+            phase="phase_2_utilization_review",
+            action_type="treatment_decision_parse_error",
+            description=f"failed to parse provider treatment decision, defaulting to no_treat: {str(e)}",
+            outcome={"error": str(e), "raw_response": response_text}
+        )
+        return "no_treat"
