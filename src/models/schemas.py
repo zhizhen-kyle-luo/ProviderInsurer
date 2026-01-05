@@ -317,6 +317,8 @@ class AuthorizationRequest(BaseModel):
     appeal_notes: Optional[str] = None
     approved_quantity: Optional[str] = None  # how many units/doses approved
     missing_documentation: List[str] = Field(default_factory=list)  # only populated for pended status
+    reviewer_type: Optional[str] = None  # "UM Triage Reviewer", "Medical Director", "IRE"
+    review_level: Optional[int] = None  # 0, 1, or 2 (Medicare appeals level)
 
 
 # Audit Log Schemas for LLM Interaction Tracking
@@ -709,7 +711,6 @@ class AuditLog(BaseModel):
                 # extract key decision info from parsed output
                 parsed = interaction.parsed_output or {}
                 if interaction.agent == "provider":
-                    conf = parsed.get("confidence", interaction.metadata.get("confidence", "?"))
                     req_type = parsed.get("request_type", interaction.metadata.get("request_type", "?"))
                     key_decision = f"conf={conf:.1f}" if isinstance(conf, float) else f"conf={conf}"
                     outcome = req_type
