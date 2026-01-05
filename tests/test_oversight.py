@@ -327,8 +327,8 @@ class TestProviderPromptActionSpace:
     @pytest.fixture
     def mock_state(self):
         state = MagicMock()
-        state.medication_authorization = MagicMock()
-        state.medication_authorization.authorization_status = "approved"
+        state.authorization_request = MagicMock()
+        state.authorization_request.authorization_status = "approved"
         return state
 
     def test_claim_appeal_decision_prompt_has_3_actions(self, mock_state):
@@ -367,9 +367,9 @@ class TestPayorPromptActionSpace:
     @pytest.fixture
     def mock_state(self):
         state = MagicMock()
-        state.medication_authorization = MagicMock()
-        state.medication_authorization.authorization_status = "approved"
-        state.medication_authorization.criteria_used = "Medical necessity"
+        state.authorization_request = MagicMock()
+        state.authorization_request.authorization_status = "approved"
+        state.authorization_request.criteria_used = "Medical necessity"
         return state
 
     def test_resubmission_review_at_limit_no_pend_option(self, mock_state):

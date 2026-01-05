@@ -137,14 +137,14 @@ def run_quadrant(quadrant_key, config):
 
     # extract financials
     total_billed = state.phase_3_billed_amount if state.phase_3_billed_amount else 0.0
-    total_paid = state.medication_financial.payer_payment if state.medication_financial else 0.0
+    total_paid = state.financial_settlement.payer_payment if state.financial_settlement else 0.0
     unpaid = total_billed - total_paid
 
     # diagnosis code
     dx_code = state.phase_3_diagnosis_code if state.phase_3_diagnosis_code else "N/A"
 
     # determine final status
-    pa_status = state.medication_authorization.authorization_status if state.medication_authorization else "N/A"
+    pa_status = state.authorization_request.authorization_status if state.authorization_request else "N/A"
     if pa_status == "denied":
         final_status = "DENIED"
     elif state.claim_pended and state.claim_abandoned_via_pend:

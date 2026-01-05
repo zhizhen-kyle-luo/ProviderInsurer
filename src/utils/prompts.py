@@ -69,14 +69,14 @@ LEVEL_NAME_MAP = {
 # default behavioral parameters
 DEFAULT_PROVIDER_PARAMS = {
     'patient_care_weight': 'high',
-    'documentation_style': 'moderate',
+    'documentation_style': 'moderate', #stupid
     'risk_tolerance': 'moderate',
     'oversight_intensity': 'medium'
 }
 
 DEFAULT_PAYOR_PARAMS = {
-    'strictness': 'moderate',  # merged cost_focus + denial_threshold
-    'time_horizon': 'short-term',
+    'strictness': 'moderate', #maybe stupid
+    'time_horizon': 'short-term', #stupid
     'oversight_intensity': 'medium'
 }
 
@@ -86,11 +86,6 @@ OVERSIGHT_BUDGETS = {
         'max_edit_passes': 1,
         'max_tokens_changed': 50,
         'max_evidence_checks': 1
-    },
-    'medium': {
-        'max_edit_passes': 1,
-        'max_tokens_changed': 200,
-        'max_evidence_checks': 3
     },
     'high': {
         'max_edit_passes': 2,
@@ -380,7 +375,7 @@ RESPONSE FORMAT (JSON):
 
 def create_pa_appeal_submission_prompt(state, med_request, case):
     """create task prompt for provider PA appeal submission"""
-    denial_reason = state.medication_authorization.denial_reason if state.medication_authorization else "Unknown"
+    denial_reason = state.authorization_request.denial_reason if state.authorization_request else "Unknown"
 
     return f"""TASK: Appeal a PA DENIAL for specialty medication (Phase 2)
 
@@ -416,7 +411,7 @@ CRITICAL CONTEXT: This is an appeal of a PRIOR AUTHORIZATION denial, not a claim
 You previously denied the PA. Now reconsider based on additional evidence.
 
 ORIGINAL PA DENIAL:
-{state.medication_authorization.denial_reason}
+{state.authorization_request.denial_reason}
 
 PROVIDER APPEAL:
 {provider_appeal.get('additional_evidence')}
@@ -825,7 +820,7 @@ PATIENT:
 - Amount Billed: ${total_billed:.2f}
 
 PA APPROVAL RATIONALE (from Phase 2):
-{state.medication_authorization.criteria_used if state.medication_authorization else 'PA approved'}
+{state.authorization_request.criteria_used if state.authorization_request else 'PA approved'}
 
 CLINICAL DOCUMENTATION:
 {combined_clinical_doc}
@@ -955,9 +950,9 @@ Now you must submit a claim to receive payment for services rendered.
 {service_details}
 
 PA APPROVAL FROM PHASE 2:
-- Status: {state.medication_authorization.authorization_status if state.medication_authorization else 'approved'}
-- Reviewer: {state.medication_authorization.reviewer_type if state.medication_authorization else 'AI algorithm'}
-- Criteria: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity guidelines'}
+- Status: {state.authorization_request.authorization_status if state.authorization_request else 'approved'}
+- Reviewer: {state.authorization_request.reviewer_type if state.authorization_request else 'AI algorithm'}
+- Criteria: {state.authorization_request.criteria_used if state.authorization_request else 'Medical necessity guidelines'}
 
 CLINICAL DOCUMENTATION:
 {combined_clinical_doc}
@@ -1237,8 +1232,8 @@ SUPPORTING EVIDENCE:
 {combined_evidence}
 
 PA APPROVAL REFERENCE:
-- PA was APPROVED in Phase 2 by {state.medication_authorization.reviewer_type if state.medication_authorization else 'AI algorithm'}
-- Criteria used: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity'}
+- PA was APPROVED in Phase 2 by {state.authorization_request.reviewer_type if state.authorization_request else 'AI algorithm'}
+- Criteria used: {state.authorization_request.criteria_used if state.authorization_request else 'Medical necessity'}
 
 Your task: Submit appeal with evidence addressing the specific denial reason.
 {f'CRITICAL: This is appeal #{len(appeal_history) + 1}. Review the PREVIOUS FAILED APPEALS above and use DIFFERENT arguments.' if appeal_history else ''}
@@ -1286,8 +1281,8 @@ PROVIDER'S APPEAL:
 - Amount in dispute: ${total_billed:.2f}
 
 PA HISTORY:
-- PA Status in Phase 2: {state.medication_authorization.authorization_status if state.medication_authorization else 'approved'}
-- PA Criteria Used: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity'}
+- PA Status in Phase 2: {state.authorization_request.authorization_status if state.authorization_request else 'approved'}
+- PA Criteria Used: {state.authorization_request.criteria_used if state.authorization_request else 'Medical necessity'}
 
 DECISION FACTORS:
 - Does appeal address the denial reason adequately?
@@ -1401,8 +1396,8 @@ PROVIDER'S RESUBMISSION PACKET:
 - Claim amount: ${claim_amount:.2f}
 
 PA HISTORY:
-- PA Status in Phase 2: {state.medication_authorization.authorization_status if state.medication_authorization else 'approved'}
-- PA Criteria Used: {state.medication_authorization.criteria_used if state.medication_authorization else 'Medical necessity'}
+- PA Status in Phase 2: {state.authorization_request.authorization_status if state.authorization_request else 'approved'}
+- PA Criteria Used: {state.authorization_request.criteria_used if state.authorization_request else 'Medical necessity'}
 
 DECISION FACTORS:
 - Does resubmission address your pend reason adequately?

@@ -8,7 +8,7 @@ PA approval does NOT guarantee payment
 from typing import Dict, Any
 from datetime import timedelta
 
-from src.models.schemas import EncounterState, MedicationFinancialSettlement
+from src.models.schemas import EncounterState
 
 
 def run_phase_4_financial(
@@ -27,8 +27,8 @@ def run_phase_4_financial(
 
     # payment based on CLAIM outcome (phase 3), not PA outcome (phase 2)
     claim_approved = (
-        state.medication_authorization and
-        state.medication_authorization.authorization_status == "approved"
+        state.authorization_request and
+        state.authorization_request.authorization_status == "approved"
     )
 
     if claim_approved:
@@ -69,17 +69,9 @@ def run_phase_4_financial(
 
     total_admin_cost = pa_review_cost + claim_review_cost + appeal_cost
 
-    state.medication_financial = MedicationFinancialSettlement(
-        medication_name=case.get("medication_request", {}).get("medication_name", "Unknown"),
-        j_code=case.get("medication_request", {}).get("j_code"),
-        acquisition_cost=acquisition_cost,
-        administration_fee=admin_fee,
-        total_billed=total_cost,
-        payer_payment=payer_payment,
-        patient_copay=patient_copay,
-        prior_auth_cost=pa_review_cost + claim_review_cost,
-        appeal_cost=appeal_cost,
-        total_administrative_cost=total_admin_cost
-    )
+    # financial settlement data for medication cases
+    # note: with unified schema, financial_settlement is optional and holds metadata as needed
+    # medication financial details: acquisition_cost, administration_fee, payer_payment, patient_copay, etc.
+    # these can be tracked in state audit_log if needed for analysis
 
     return state

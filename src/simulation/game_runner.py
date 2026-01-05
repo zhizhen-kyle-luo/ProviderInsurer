@@ -18,16 +18,13 @@ from src.models.schemas import (
 from src.data.policies import COPDPolicies
 from src.agents.provider import ProviderAgent
 from src.agents.payor import PayorAgent
-from src.utils.cpt_calculator import CPTCostCalculator
 from src.utils.audit_logger import AuditLogger
 from src.utils.worm_cache import WORMCache
 from src.utils.cached_llm import CachedLLM
-from src.evaluation.truth_checker import TruthChecker
 from src.utils.prompts import (
     DEFAULT_PROVIDER_PARAMS,
     DEFAULT_PAYOR_PARAMS,
-    MAX_ITERATIONS,
-    NOISE_PROBABILITY
+    MAX_ITERATIONS
 )
 from src.simulation.phases import (
     run_phase_2_utilization_review,
@@ -35,10 +32,6 @@ from src.simulation.phases import (
     run_phase_4_financial
 )
 from src.simulation.test_generation import generate_test_result
-from src.simulation.truth_checking_runner import (
-    run_truth_check_phase2,
-    run_truth_check_phase3
-)
 
 
 def _get_project_cache_dir() -> str:
@@ -61,24 +54,21 @@ class UtilizationReviewSimulation:
 
     def __init__(
         self,
-        provider_llm: str = "azure",
-        payor_llm: str = "azure",
-        provider_copilot_llm: str = None,  # None = use base model (strong), "azure" = use copilot deployment (weak)
-        payor_copilot_llm: str = None,     # None = use base model (strong), "azure" = use copilot deployment (weak)
+        provider_llm: str = "azure",        # "azure" = strong base, "azure_weak" = weak base
+        payor_llm: str = "azure",           # "azure" = strong base, "azure_weak" = weak base
+        provider_copilot_llm: str = None,   # None = use base model, "azure" = use copilot deployment
+        payor_copilot_llm: str = None,      # None = use base model, "azure" = use copilot deployment
         master_seed: int = None,
         max_iterations: int = None,
         azure_config: Dict[str, Any] = None,
         cache_dir: str = None,
         enable_cache: bool = True,
-        enable_truth_checking: bool = False,
-        truth_checker_llm: str = "azure",
         provider_params: Dict[str, str] = None,
         payor_params: Dict[str, str] = None
     ):
         self.master_seed = master_seed if master_seed is not None else int(time.time())
         self.rng = random.Random(self.master_seed)
         self.max_iterations = max_iterations if max_iterations is not None else MAX_ITERATIONS
-        self.enable_truth_checking = enable_truth_checking
 
         # store behavioral parameters for prompts
         self.provider_params = provider_params if provider_params is not None else DEFAULT_PROVIDER_PARAMS
@@ -91,30 +81,13 @@ class UtilizationReviewSimulation:
         provider_model = self._create_llm(provider_llm, azure_config)
         payor_model = self._create_llm(payor_llm, azure_config)
 
-        # copilot models for draft generation (automation strength knob)
-        # if copilot_llm is None, use same model as base (strong copilot)
-        # if copilot_llm is "azure", use AZURE_COPILOT_DEPLOYMENT_NAME (weak copilot)
-        if provider_copilot_llm:
-            # weak copilot: use separate copilot deployment
-            provider_copilot_model = self._create_llm(
-                provider_copilot_llm, azure_config, copilot_role="provider"
-            )
-            provider_copilot_model_name = provider_copilot_llm
-        else:
-            # strong copilot: use same model as base (no copilot_role)
-            provider_copilot_model = provider_model
-            provider_copilot_model_name = provider_llm
-
-        if payor_copilot_llm:
-            # weak copilot: use separate copilot deployment
-            payor_copilot_model = self._create_llm(
-                payor_copilot_llm, azure_config, copilot_role="payor"
-            )
-            payor_copilot_model_name = payor_copilot_llm
-        else:
-            # strong copilot: use same model as base (no copilot_role)
-            payor_copilot_model = payor_model
-            payor_copilot_model_name = payor_llm
+        # setup copilot models (strong if None, weak if specified)
+        provider_copilot_model, provider_copilot_model_name = self._setup_copilot_model(
+            provider_copilot_llm, provider_model, provider_llm, azure_config
+        )
+        payor_copilot_model, payor_copilot_model_name = self._setup_copilot_model(
+            payor_copilot_llm, payor_model, payor_llm, azure_config
+        )
 
         if self.cache:
             provider_model = CachedLLM(provider_model, self.cache, agent_name="provider")
@@ -134,47 +107,55 @@ class UtilizationReviewSimulation:
         # create deterministic LLM for test result generation (temperature=0)
         self.test_result_llm = self._create_llm(provider_llm, azure_config, temperature=0)
 
-        # initialize truth checker if enabled
-        if enable_truth_checking:
-            truth_checker_model = self._create_llm(truth_checker_llm, azure_config, temperature=0)
-            self.truth_checker = TruthChecker(truth_checker_model)
-        else:
-            self.truth_checker = None
+        # truth checker disabled (module is commented out)
+        self.truth_checker = None
 
         self.provider = ProviderAgent(provider_model)
         self.payor = PayorAgent(payor_model)
-        self.cost_calculator = CPTCostCalculator()
         self.test_result_cache = {}
+
+    def _setup_copilot_model(self, copilot_llm, base_model, base_llm_name, azure_config):
+        """
+        setup copilot model for an agent
+        if copilot_llm is None: strong copilot (use base model)
+        if copilot_llm is specified: weak copilot (use separate deployment)
+        """
+        if copilot_llm:
+            # weak copilot: use separate deployment
+            copilot_model = self._create_llm(copilot_llm, azure_config)
+            copilot_model_name = copilot_llm
+        else:
+            # strong copilot: use same model as base
+            copilot_model = base_model
+            copilot_model_name = base_llm_name
+        return copilot_model, copilot_model_name
 
     def _create_llm(
         self,
         model_name: str,
         azure_config: Dict[str, Any] = None,
-        temperature: float = 0.7,
-        copilot_role: str = None
+        temperature: float = 0.7
     ):
         """
-        create LLM instance. for copilots, REQUIRES explicit env var:
-        - AZURE_PROVIDER_COPILOT_DEPLOYMENT_NAME (provider copilot)
-        - AZURE_PAYOR_COPILOT_DEPLOYMENT_NAME (payor copilot)
-        - AZURE_COPILOT_DEPLOYMENT_NAME (shared copilot - for both)
-        no fallback to base deployment (will error if not set)
+        create LLM instance supporting both strong and weak models
+
+        model_name options:
+        - "azure" → AZURE_OPENAI_DEPLOYMENT_NAME (strong)
+        - "azure_weak" → AZURE_WEAK_DEPLOYMENT_NAME (weak)
+
+        copilot_role is only set when creating copilot models;
+        uses same deployment selection logic as base models
         """
-        if azure_config or model_name == "azure":
+        if azure_config or model_name in ["azure", "azure_weak"]:
             import os
-            if model_name == "azure" and not azure_config:
+            if model_name in ["azure", "azure_weak"] and not azure_config:
                 endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
                 api_key = os.getenv("AZURE_OPENAI_API_KEY")
 
-                # for copilots, check role-specific env var first, then shared
-                # NO FALLBACK to base - must be explicitly set
-                if copilot_role:
-                    role_upper = copilot_role.upper()
-                    deployment = (
-                        os.getenv(f"AZURE_{role_upper}_COPILOT_DEPLOYMENT_NAME") or
-                        os.getenv("AZURE_COPILOT_DEPLOYMENT_NAME")
-                    )
-                    api_version = os.getenv("AZURE_COPILOT_API_VERSION", "2024-12-01-preview")
+                # select deployment based on model_name (both base and copilot models use same logic)
+                if model_name == "azure_weak":
+                    deployment = os.getenv("AZURE_WEAK_DEPLOYMENT_NAME")
+                    api_version = os.getenv("AZURE_WEAK_API_VERSION", "2025-03-01-preview")
                 else:
                     deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
                     api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
@@ -185,11 +166,8 @@ class UtilizationReviewSimulation:
                 if not api_key:
                     missing.append("AZURE_OPENAI_API_KEY")
                 if not deployment:
-                    if copilot_role:
-                        role_upper = copilot_role.upper()
-                        missing.append(
-                            f"AZURE_{role_upper}_COPILOT_DEPLOYMENT_NAME or AZURE_COPILOT_DEPLOYMENT_NAME"
-                        )
+                    if model_name == "azure_weak":
+                        missing.append("AZURE_WEAK_DEPLOYMENT_NAME")
                     else:
                         missing.append("AZURE_OPENAI_DEPLOYMENT_NAME")
 
@@ -213,79 +191,79 @@ class UtilizationReviewSimulation:
             from langchain_openai import ChatOpenAI
             return ChatOpenAI(model=model_name, temperature=temperature)
 
-    def _introduce_noise(self, case: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        introduce environmental noise to patient_visible_data based on NOISE_PROBABILITY
+    # def _introduce_noise(self, case: Dict[str, Any]) -> Dict[str, Any]:
+    #     """
+    #     introduce environmental noise to patient_visible_data based on NOISE_PROBABILITY
 
-        deterministically applies one of three noise types using self.rng
-        logs noise as environment action
-        """
-        import copy
+    #     deterministically applies one of three noise types using self.rng
+    #     logs noise as environment action
+    #     """
+    #     import copy
 
-        if self.rng.random() > NOISE_PROBABILITY:
-            # no noise introduced
-            self.audit_logger.log_environment_action(
-                phase="phase_1_presentation",
-                action_type="data_quality_check",
-                description="no environmental noise introduced (clean data)",
-                outcome={"noise_applied": False},
-                metadata={"noise_probability": NOISE_PROBABILITY}
-            )
-            return case
+    #     if self.rng.random() > NOISE_PROBABILITY:
+    #         # no noise introduced
+    #         self.audit_logger.log_environment_action(
+    #             phase="phase_1_presentation",
+    #             action_type="data_quality_check",
+    #             description="no environmental noise introduced (clean data)",
+    #             outcome={"noise_applied": False},
+    #             metadata={"noise_probability": NOISE_PROBABILITY}
+    #         )
+    #         return case
 
-        noisy_case = copy.deepcopy(case)
-        patient_data = noisy_case.get("patient_visible_data", {})
+    #     noisy_case = copy.deepcopy(case)
+    #     patient_data = noisy_case.get("patient_visible_data", {})
 
-        noise_type = self.rng.choice(["age", "medication", "diagnosis"])
-        noise_description = ""
-        noise_details = {}
+    #     noise_type = self.rng.choice(["age", "medication", "diagnosis"])
+    #     noise_description = ""
+    #     noise_details = {}
 
-        if noise_type == "age":
-            # age error: ±3-7 years
-            age_offset = self.rng.randint(3, 7) * self.rng.choice([-1, 1])
-            original_age = patient_data.get("age", 60)
-            noisy_age = max(18, original_age + age_offset)
-            patient_data["age"] = noisy_age
-            noise_description = f"age error introduced: {original_age} → {noisy_age}"
-            noise_details = {"original_age": original_age, "noisy_age": noisy_age, "offset": age_offset}
+    #     if noise_type == "age":
+    #         # age error: ±3-7 years
+    #         age_offset = self.rng.randint(3, 7) * self.rng.choice([-1, 1])
+    #         original_age = patient_data.get("age", 60)
+    #         noisy_age = max(18, original_age + age_offset)
+    #         patient_data["age"] = noisy_age
+    #         noise_description = f"age error introduced: {original_age} → {noisy_age}"
+    #         noise_details = {"original_age": original_age, "noisy_age": noisy_age, "offset": age_offset}
 
-        elif noise_type == "medication":
-            # wrong medication name in history
-            medications = patient_data.get("medications", [])
-            if medications:
-                wrong_meds = [
-                    "Aspirin 81mg daily",
-                    "Metformin 500mg twice daily",
-                    "Lisinopril 10mg daily",
-                    "Atorvastatin 20mg daily"
-                ]
-                idx = self.rng.randint(0, len(medications) - 1)
-                original_med = medications[idx]
-                wrong_med = self.rng.choice(wrong_meds)
-                medications[idx] = wrong_med
-                noise_description = f"medication error introduced: replaced '{original_med}' with '{wrong_med}'"
-                noise_details = {"original": original_med, "replacement": wrong_med, "index": idx}
+    #     elif noise_type == "medication":
+    #         # wrong medication name in history
+    #         medications = patient_data.get("medications", [])
+    #         if medications:
+    #             wrong_meds = [
+    #                 "Aspirin 81mg daily",
+    #                 "Metformin 500mg twice daily",
+    #                 "Lisinopril 10mg daily",
+    #                 "Atorvastatin 20mg daily"
+    #             ]
+    #             idx = self.rng.randint(0, len(medications) - 1)
+    #             original_med = medications[idx]
+    #             wrong_med = self.rng.choice(wrong_meds)
+    #             medications[idx] = wrong_med
+    #             noise_description = f"medication error introduced: replaced '{original_med}' with '{wrong_med}'"
+    #             noise_details = {"original": original_med, "replacement": wrong_med, "index": idx}
 
-        elif noise_type == "diagnosis":
-            # remove key diagnosis from medical history
-            medical_history = patient_data.get("medical_history", [])
-            if medical_history and len(medical_history) > 1:
-                idx = self.rng.randint(0, len(medical_history) - 1)
-                removed_diagnosis = medical_history[idx]
-                medical_history.pop(idx)
-                noise_description = f"diagnosis omitted: removed '{removed_diagnosis}' from medical history"
-                noise_details = {"removed_diagnosis": removed_diagnosis, "index": idx}
+    #     elif noise_type == "diagnosis":
+    #         # remove key diagnosis from medical history
+    #         medical_history = patient_data.get("medical_history", [])
+    #         if medical_history and len(medical_history) > 1:
+    #             idx = self.rng.randint(0, len(medical_history) - 1)
+    #             removed_diagnosis = medical_history[idx]
+    #             medical_history.pop(idx)
+    #             noise_description = f"diagnosis omitted: removed '{removed_diagnosis}' from medical history"
+    #             noise_details = {"removed_diagnosis": removed_diagnosis, "index": idx}
 
-        # log environment noise action
-        self.audit_logger.log_environment_action(
-            phase="phase_1_presentation",
-            action_type="introduce_noise",
-            description=noise_description,
-            outcome={"noise_type": noise_type, "noise_applied": True, **noise_details},
-            metadata={"noise_probability": NOISE_PROBABILITY}
-        )
+    #     # log environment noise action
+    #     self.audit_logger.log_environment_action(
+    #         phase="phase_1_presentation",
+    #         action_type="introduce_noise",
+    #         description=noise_description,
+    #         outcome={"noise_type": noise_type, "noise_applied": True, **noise_details},
+    #         metadata={"noise_probability": NOISE_PROBABILITY}
+    #     )
 
-        return noisy_case
+    #     return noisy_case
 
     def _generate_test_result(self, test_name: str, case: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -352,11 +330,11 @@ class UtilizationReviewSimulation:
 
         routes to appropriate workflow based on case_type
         """
-        # initialize audit logger for this case (before noise introduction)
+        # initialize audit logger for this case
         self.audit_logger = AuditLogger(case_id=case["case_id"])
 
-        # apply environmental noise deterministically
-        case = self._introduce_noise(case)
+        # NOTE: environmental noise feature disabled (see commented _introduce_noise method)
+        # case = self._introduce_noise(case)
 
         # clear test result cache for new case
         self.test_result_cache = {}
@@ -389,22 +367,14 @@ class UtilizationReviewSimulation:
         # unified phase 2 workflow (all case types)
         state = run_phase_2_utilization_review(self, state, case)
 
-        # truth checking after phase 2 (if enabled)
-        if self.enable_truth_checking and self.truth_checker:
-            state = run_truth_check_phase2(self, state, case)
-
         # phase 3: claims adjudication (if treatment was approved and delivered)
         # applies to ALL PA types
-        if (state.medication_authorization and
-            state.medication_authorization.authorization_status == "approved"):
+        if (state.authorization_request and
+            state.authorization_request.authorization_status == "approved"):
             state = run_phase_3_claims(self, state, case, case_type)
 
-            # truth checking after phase 3 appeals (if enabled and appeal was filed)
-            if self.enable_truth_checking and self.truth_checker and state.appeal_filed:
-                state = run_truth_check_phase3(self, state, case)
-
         # phase 4: financial settlement
-        if state.medication_authorization:
+        if state.authorization_request:
             state = run_phase_4_financial(state, case)
 
         if "ground_truth" in case:
@@ -430,24 +400,6 @@ class UtilizationReviewSimulation:
                 "escalation_depth": state.friction_metrics.escalation_depth,
                 "total_friction": state.friction_metrics.total_friction
             }
-
-        # add truth check summary if available
-        if self.enable_truth_checking:
-            truth_check_summary = {}
-            if state.truth_check_phase2:
-                truth_check_summary["phase2"] = {
-                    "is_deceptive": state.truth_check_phase2.is_deceptive,
-                    "deception_score": state.truth_check_phase2.deception_score,
-                    "hallucinated_claims": state.truth_check_phase2.hallucinated_claims
-                }
-            if state.truth_check_phase3:
-                truth_check_summary["phase3"] = {
-                    "is_deceptive": state.truth_check_phase3.is_deceptive,
-                    "deception_score": state.truth_check_phase3.deception_score,
-                    "hallucinated_claims": state.truth_check_phase3.hallucinated_claims
-                }
-            if truth_check_summary:
-                summary["truth_check_summary"] = truth_check_summary
 
         self.audit_logger.finalize(summary)
         state.audit_log = self.audit_logger.get_audit_log()

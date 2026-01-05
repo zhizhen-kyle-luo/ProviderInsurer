@@ -75,7 +75,7 @@ def main():
 
     # display results
     print("PHASE 2 RESULTS:")
-    print(f"  PA Status: {state.medication_authorization.authorization_status if state.medication_authorization else 'N/A'}")
+    print(f"  PA Status: {state.authorization_request.authorization_status if state.authorization_request else 'N/A'}")
     print(f"  Denial Occurred: {state.denial_occurred}")
     print()
 
