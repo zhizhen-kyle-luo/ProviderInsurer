@@ -9,7 +9,9 @@ usage:
 import sys
 import os
 import argparse
+from dotenv import load_dotenv
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+load_dotenv()
 
 from src.simulation.game_runner import UtilizationReviewSimulation
 from src.data.case_registry import get_case, list_cases
@@ -30,39 +32,37 @@ def print_results(result):
     print(f"insurance: {result.admission.insurance.payer_name}")
 
     print("\nphase 2: prior authorization")
-    if result.medication_request:
-        print(f"request: {result.medication_request.medication_name}")
-        print(f"dosage: {result.medication_request.dosage}")
-    elif result.procedure_request:
-        print(f"request: {result.procedure_request.procedure_name}")
-        if result.procedure_request.cpt_code:
-            print(f"cpt: {result.procedure_request.cpt_code}")
+    if result.authorization_request:
+        print(f"request: {result.authorization_request.service_name}")
+        print(f"type: {result.authorization_request.request_type}")
+        if result.authorization_request.dosage:
+            print(f"dosage: {result.authorization_request.dosage}")
+        if result.authorization_request.cpt_code:
+            print(f"cpt: {result.authorization_request.cpt_code}")
 
-    if result.medication_authorization:
-        status = result.medication_authorization.authorization_status
-        print(f"pa status: {status.upper()}")
-        print(f"reviewer: {result.medication_authorization.reviewer_type}")
-        if result.medication_authorization.denial_reason:
-            print(f"denial: {result.medication_authorization.denial_reason[:80]}...")
+        status = result.authorization_request.authorization_status
+        if status:
+            print(f"pa status: {status.upper()}")
+            if result.authorization_request.denial_reason:
+                print(f"denial: {result.authorization_request.denial_reason[:80]}...")
 
     print("\nphase 3: claims adjudication")
-    if result.medication_authorization and result.medication_authorization.authorization_status == "approved":
+    if result.authorization_request and result.authorization_request.authorization_status == "approved":
         print("claim submitted and processed")
+        if result.appeal_filed:
+            print(f"appeal filed: {result.appeal_filed}")
+            print(f"appeal successful: {result.appeal_successful}")
     else:
         print("no claim (pa denied)")
 
     print("\nphase 4: financial settlement")
-    if result.medication_financial:
-        fin = result.medication_financial
-        print(f"total billed: ${fin.total_billed:,.2f}")
-        print(f"payer payment: ${fin.payer_payment:,.2f}")
-        print(f"patient copay: ${fin.patient_copay:,.2f}")
-        print(f"admin cost: ${fin.total_administrative_cost:,.2f}")
-    elif result.financial_settlement:
+    if result.financial_settlement:
         fin = result.financial_settlement
         print(f"total billed: ${fin.total_billed_charges:,.2f}")
         print(f"payer payment: ${fin.payer_payment:,.2f}")
         print(f"patient responsibility: ${fin.patient_responsibility:,.2f}")
+        if hasattr(fin, 'total_administrative_cost'):
+            print(f"admin cost: ${fin.total_administrative_cost:,.2f}")
 
 
 def save_outputs(result, output_dir="outputs"):
@@ -82,7 +82,7 @@ def save_outputs(result, output_dir="outputs"):
     print(f"mermaid: {mermaid_path}")
 
 
-def run_case(case_id: str, azure_config: dict):
+def run_case(case_id: str):
     """run simulation for a single case"""
     print("=" * 80)
     print(f"case: {case_id}")
@@ -91,11 +91,13 @@ def run_case(case_id: str, azure_config: dict):
     case = get_case(case_id)
     print(f"patient: {case['patient_visible_data']['age']}yo {case['patient_visible_data']['sex']}")
     print(f"complaint: {case['patient_visible_data']['chief_complaint']}")
-    print(f"pa type: {case['pa_type']}")
+    case_type = case.get('case_type', 'unknown')
+    print(f"case type: {case_type}")
 
     case = convert_case_to_models(case)
 
-    sim = UtilizationReviewSimulation(azure_config=azure_config)
+    # simulation uses env vars (AZURE_OPENAI_ENDPOINT, etc.)
+    sim = UtilizationReviewSimulation()
     result = sim.run_case(case)
 
     print_results(result)
@@ -111,12 +113,6 @@ def main():
     parser.add_argument('--output-dir', default='outputs', help='output directory')
     args = parser.parse_args()
 
-    azure_config = {
-        "endpoint": "https://azure-ai.hms.edu",
-        "key": "59352b8b5029493a861f26c74ef46cfe",
-        "deployment_name": "gpt-4o-1120"
-    }
-
     if args.all:
         case_ids = list_cases()
         print(f"\nrunning all {len(case_ids)} registered cases\n")
@@ -130,7 +126,7 @@ def main():
     results = []
     for case_id in case_ids:
         try:
-            result = run_case(case_id, azure_config)
+            result = run_case(case_id)
             results.append(result)
             print("\n")
         except Exception as e:

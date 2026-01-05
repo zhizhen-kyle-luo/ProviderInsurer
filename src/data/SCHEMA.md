@@ -22,9 +22,9 @@
     "sex": "M" | "F",
     "admission_source": "string",  // free text, "" if not documented
     "chief_complaint": "string",
-    "medical_history": [],  // can be empty
-    "medications": [],  // can be empty
-    "vital_signs": {},  // empty if not documented
+    "medical_history": [],
+    "medications": [],
+    "vital_signs": {},
 
     // optional if documented:
     "presenting_symptoms": "string",

@@ -7,8 +7,7 @@ from src.models.schemas import (
     PatientDemographics,
     InsuranceInfo,
     AdmissionNotification,
-    ClinicalPresentation,
-    CaseType
+    ClinicalPresentation
 )
 
 
@@ -27,10 +26,11 @@ def convert_case_to_models(case_dict):
     """
     patient_pres = case_dict.get("patient_visible_data")
     if not patient_pres:
-        raise ValueError("case must have either patient_visible_data")
+        raise ValueError("case must have patient_visible_data")
 
-    # all cases use medicare advantage (hardcoded in insurer prompt)
-    case_type = case_dict.get("case_type") or case_dict.get("pa_type", CaseType.INPATIENT_ADMISSION)
+    case_type = case_dict.get("case_type")
+    if not case_type:
+        raise ValueError("case must have case_type field")
 
     patient_demographics = PatientDemographics(
         patient_id=patient_pres["patient_id"],
@@ -39,7 +39,6 @@ def convert_case_to_models(case_dict):
         mrn=patient_pres.get("patient_id")
     )
 
-    # default medicare advantage insurance (consistent with insurer prompt)
     insurance_info = InsuranceInfo(
         plan_type="MA",
         payer_name="Medicare Advantage",
@@ -66,7 +65,6 @@ def convert_case_to_models(case_dict):
     case_dict["admission"] = admission
     case_dict["clinical_presentation"] = clinical_presentation
     case_dict["case_type"] = case_type
-
     # provider creates authorization_request during simulation
     # intended_request stays in environment_hidden_data for ground truth comparison only
 
