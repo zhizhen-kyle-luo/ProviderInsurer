@@ -1,41 +1,13 @@
-# Environment variables
 .env
+.venv/
 
 # Python cache
-*.pyc
 __pycache__/
-*.pyo
-*.pyd
 .Python
 .pytest_cache/
 .ruff_cache/
 
-# Virtual environment
-.venv/
-venv/
-ENV/
-
 # Generated outputs
 *.mmd
-simulation_output.mmd
-
-# WORM cache files
 .worm_cache/
-
-# Data files (too large / may contain PHI)
-data/mimic_raw.json
-
-# Experiment results (large md files)
-experiments/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-.gpg-batch.txt
-outputs/
+experiment_results/
