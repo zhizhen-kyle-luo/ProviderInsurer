@@ -17,6 +17,24 @@ class COPDPolicies:
 
     PROVIDER_GUIDELINES = {
         "gold_2023": {
+            # new schema fields
+            "policy_id": "gold_2023_copd",
+            "policy_type": "provider_guideline",
+            "issuer": "Global Initiative for Chronic Obstructive Lung Disease (GOLD)",
+            "line_of_business": "unknown",
+            "source": {
+                "url": "https://www.nature.com/articles/s41533-023-00349-4"
+            },
+            "phase2": {
+                "requires_phase2": "unknown",
+                "phase2_type": "unknown"
+            },
+            "criteria": [
+                {"id": "gold_001", "kind": "ONE_OF", "text": "Any hospitalization indication from clinical guidelines"},
+            ],
+            "notes_free_text": "GOLD 2023 recommends hospital admission for COPD exacerbation if any of the listed indications are present.",
+
+            # existing fields (used by prompts)
             "policy_name": "GOLD 2023 Guidelines",
             "hospitalization_indications": [
                 "Severe symptoms such as sudden worsening of resting dyspnoea",
@@ -34,6 +52,26 @@ class COPDPolicies:
 
     PAYOR_POLICIES = {
         "interqual_2022": {
+            # new schema fields
+            "policy_id": "interqual_2022_copd",
+            "policy_type": "payer_coverage_policy",
+            "issuer": "Change Healthcare (InterQual)",
+            "line_of_business": "unknown",
+            "source": {
+                "url": "https://www.stqn.org/upload/docs/STQN/Quarter%201%202023/2022%20Interqual%20Physician%20Admission%20Guide%20Adult.pdf"
+            },
+            "phase2": {
+                "requires_phase2": True,
+                "phase2_type": "concurrent_review"
+            },
+            "criteria": [
+                {"id": "iq_001", "kind": "MUST_HAVE", "text": ">=2 SABA doses administered"},
+                {"id": "iq_002", "kind": "MUST_HAVE", "text": "Dyspnea present"},
+                {"id": "iq_003", "kind": "ONE_OF", "text": "Must meet one of: SpO2 <= 89%, PaO2 <= 55 mmHg (pH > 7.45), PCO2 > 45 mmHg (pH < 7.35), ventilation support, or increased work of breathing"},
+            ],
+            "notes_free_text": "InterQual 2022 uses gated criteria: treatment prerequisites -> numeric thresholds -> clinical severity markers. Observation level has less stringent thresholds than inpatient level.",
+
+            # existing fields (used by prompts)
             "policy_name": "InterQual 2022 COPD Criteria",
             # observation level (6-48h) - gated requirements
             "observation_criteria": {

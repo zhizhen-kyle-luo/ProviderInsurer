@@ -18,6 +18,25 @@ class InfliximabCrohnsPolicies:
 
     PROVIDER_GUIDELINES = {
         "aga_2021": {
+            # new schema fields
+            "policy_id": "aga_2021_crohns_infliximab",
+            "policy_type": "provider_guideline",
+            "issuer": "American Gastroenterological Association (AGA)",
+            "line_of_business": "unknown",
+            "source": {
+                "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC8988893/"
+            },
+            "phase2": {
+                "requires_phase2": True,
+                "phase2_type": "PA"
+            },
+            "criteria": [
+                {"id": "aga_001", "kind": "MUST_HAVE", "text": "Moderate to severe Crohn's disease"},
+                {"id": "aga_002", "kind": "OTHER", "text": "Prefer early biologic introduction over delayed step therapy"},
+            ],
+            "notes_free_text": "AGA 2021 recommends anti-TNF therapy (infliximab) for moderate to severe Crohn's disease, preferring early biologic introduction rather than waiting for conventional therapy failure.",
+
+            # existing fields (used by prompts)
             "policy_name": "AGA 2021 (provider guideline)",
             "scope": "Adult outpatients with moderate to severe luminal and/or fistulizing Crohn's disease",
             "key_recommendations": [
@@ -40,6 +59,26 @@ class InfliximabCrohnsPolicies:
 
     PAYOR_POLICIES = {
         "uhc_commercial_2025": {
+            # new schema fields
+            "policy_id": "uhc_commercial_2025_infliximab",
+            "policy_type": "payer_coverage_policy",
+            "issuer": "UnitedHealthcare",
+            "line_of_business": "commercial",
+            "source": {
+                "url": "https://www.uhcprovider.com/content/dam/provider/docs/public/policies/comm-medical-drug/infliximab-remicade-inflectra.pdf"
+            },
+            "phase2": {
+                "requires_phase2": True,
+                "phase2_type": "PA"
+            },
+            "criteria": [
+                {"id": "uhc_001", "kind": "MUST_HAVE", "text": "Diagnosis of moderately to severely active Crohn's disease"},
+                {"id": "uhc_002", "kind": "ONE_OF", "text": "High-risk disease features OR failure/contraindication/intolerance to conventional therapies"},
+                {"id": "uhc_003", "kind": "PRESCRIBER_REQ", "text": "Prescribed by or in consultation with gastroenterologist"},
+            ],
+            "notes_free_text": "UHC policy allows coverage for infliximab via either high-risk/complicated disease features OR conventional therapy failure. Authorization up to 12 months.",
+
+            # existing fields (used by prompts)
             "policy_name": "UnitedHealthcare Commercial Medical Benefit Drug Policy (effective 2025-10-01)",
             "notes": [
                 "Policy cross-references a related Medicare Advantage policy ('Medicare Part B Step Therapy Programs').",
@@ -63,6 +102,27 @@ class InfliximabCrohnsPolicies:
             ),
         },
         "cigna_ip0660_2026": {
+            # new schema fields
+            "policy_id": "cigna_ip0660_2026_infliximab",
+            "policy_type": "payer_coverage_policy",
+            "issuer": "Cigna",
+            "line_of_business": "commercial",
+            "source": {
+                "url": "https://static.cigna.com/assets/chcp/pdf/coveragePolicies/pharmacy/ip_0660_coveragepositioncriteria_inflammatory_conditions_infliximab_intravenous_products_pa.pdf"
+            },
+            "phase2": {
+                "requires_phase2": True,
+                "phase2_type": "PA"
+            },
+            "criteria": [
+                {"id": "cigna_001", "kind": "MUST_HAVE", "text": "Age >= 6 years"},
+                {"id": "cigna_002", "kind": "STEP_THERAPY", "text": "Tried corticosteroids OR contraindicated, OR tried other conventional systemic therapy, OR has fistulas, OR post-op resection"},
+                {"id": "cigna_003", "kind": "PRESCRIBER_REQ", "text": "Prescribed by or in consultation with gastroenterologist"},
+                {"id": "cigna_004", "kind": "EXCLUSION", "text": "Mesalamine trial does NOT count as systemic therapy"},
+            ],
+            "notes_free_text": "Cigna IP0660 requires stricter step therapy documentation. Mesalamine does not satisfy step therapy requirement. Authorization for 6 months.",
+
+            # existing fields (used by prompts)
             "policy_name": "Cigna Drug Coverage Policy IP0660 (effective 2026-01-01) — stricter step therapy",
             "crohns_disease_initial_criteria": {
                 "approve_if_all": [
