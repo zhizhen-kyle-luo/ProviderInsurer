@@ -592,11 +592,11 @@ Use your authorization aggressiveness parameter to guide this decision."""
         return decision if decision in ["treat_anyway", "no_treat"] else "no_treat"
 
     except (json.JSONDecodeError, KeyError) as e:
-        # default to no_treat if parsing fails (conservative: avoid uncompensated care)
+        # parsing failed - raise error to surface the bug
         sim.audit_logger.log_provider_action(
             phase="phase_2_utilization_review",
             action_type="treatment_decision_parse_error",
-            description=f"failed to parse provider treatment decision, defaulting to no_treat: {str(e)}",
+            description=f"failed to parse provider treatment decision: {str(e)}",
             outcome={"error": str(e), "raw_response": response_text}
         )
-        return "no_treat"
+        raise ValueError(f"failed to parse provider treatment decision after PA denial: {e}\nResponse: {response_text}")

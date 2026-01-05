@@ -110,14 +110,14 @@ Consider your authorization aggressiveness parameter in your decision."""
         return decision if decision in ["submit_claim", "skip"] else "skip"
 
     except (json.JSONDecodeError, KeyError) as e:
-        # default to skip if parsing fails
+        # parsing failed - raise error to surface the bug
         sim.audit_logger.log_provider_action(
             phase="phase_3_claims",
             action_type="claim_submission_decision_parse_error",
-            description=f"failed to parse provider decision, defaulting to skip: {str(e)}",
+            description=f"failed to parse provider decision: {str(e)}",
             outcome={"error": str(e), "raw_response": response_text}
         )
-        return "skip"
+        raise ValueError(f"failed to parse provider claim submission decision: {e}\nResponse: {response_text}")
 
 
 def run_phase_3_claims(
