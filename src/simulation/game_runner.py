@@ -339,7 +339,9 @@ class UtilizationReviewSimulation:
         # clear test result cache for new case
         self.test_result_cache = {}
 
-        case_type = case.get("case_type") or case.get("pa_type", CaseType.INPATIENT_ADMISSION)
+        case_type = case.get("case_type")
+        if not case_type:
+            raise ValueError("case must have case_type field")
 
         # construct structured objects from Golden Schema (patient_visible_data)
         admission = self._build_admission_from_patient_data(case)

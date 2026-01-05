@@ -91,7 +91,7 @@ def run_case(case_id: str):
     case = get_case(case_id)
     print(f"patient: {case['patient_visible_data']['age']}yo {case['patient_visible_data']['sex']}")
     print(f"complaint: {case['patient_visible_data']['chief_complaint']}")
-    case_type = case.get('case_type') or case.get('pa_type', 'unknown')
+    case_type = case.get('case_type', 'unknown')
     print(f"case type: {case_type}")
 
     case = convert_case_to_models(case)

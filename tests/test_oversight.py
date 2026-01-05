@@ -336,8 +336,7 @@ class TestProviderPromptActionSpace:
         prompt = create_provider_claim_appeal_decision_prompt(
             state=mock_state,
             denial_reason="Insufficient documentation",
-            service_request={"medication_name": "TestMed", "dosage": "100mg"},
-            pa_type="specialty_medication"
+            service_request={"medication_name": "TestMed", "dosage": "100mg"}
         )
 
         assert "CONTINUE" in prompt
@@ -352,8 +351,7 @@ class TestProviderPromptActionSpace:
             state=mock_state,
             pend_decision=pend_decision,
             service_request={"medication_name": "TestMed", "dosage": "100mg"},
-            pend_iteration=1,
-            pa_type="specialty_medication"
+            pend_iteration=1
         )
 
         assert "CONTINUE" in prompt

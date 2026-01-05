@@ -33,6 +33,6 @@ def get_cases_by_type(case_type: str):
     matching_cases = []
     for case_id in CASE_PATHS:
         case_data = get_case(case_id)
-        if case_data.get("case_type") == case_type or case_data.get("pa_type") == case_type:
+        if case_data.get("case_type") == case_type:
             matching_cases.append(case_id)
     return matching_cases
