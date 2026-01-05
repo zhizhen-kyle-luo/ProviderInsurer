@@ -24,6 +24,10 @@ def get_case(case_id: str):
     with open(case_path, 'r') as f:
         return json.load(f)
 
+def list_cases():
+    """list all registered case ids"""
+    return list(CASE_PATHS.keys())
+
 def get_cases_by_type(case_type: str):
     """get all cases of a specific case type"""
     matching_cases = []
