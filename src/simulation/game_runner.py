@@ -369,10 +369,10 @@ class UtilizationReviewSimulation:
         # unified phase 2 workflow (all case types)
         state = run_phase_2_utilization_review(self, state, case)
 
-        # phase 3: claims adjudication (if treatment was approved and delivered)
+        # phase 3: claims adjudication
         # applies to ALL PA types
-        if (state.authorization_request and
-            state.authorization_request.authorization_status == "approved"):
+        # provider decides whether to submit claim (even if PA denied)
+        if state.authorization_request:
             state = run_phase_3_claims(self, state, case, case_type)
 
         # phase 4: financial settlement

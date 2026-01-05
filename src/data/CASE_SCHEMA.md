@@ -1,4 +1,4 @@
-# Case Schema v2.0
+# Case Schema
 
 **Principles:**
 - Real-world data only (no fabrication)
