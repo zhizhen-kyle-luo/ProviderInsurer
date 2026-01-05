@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.simulation.game_runner import UtilizationReviewSimulation
-from src.data.cases.grey_zones import COPD_RESPIRATORY_FAILURE_GREY
+from src.data.case_registry import get_case
 
 def main():
     print("=" * 60)
@@ -35,8 +35,9 @@ def main():
         master_seed=42
     )
 
-    print("Running case...")
-    state = sim.run_case(COPD_RESPIRATORY_FAILURE_GREY)
+    case = get_case("copd_respiratory_failure_grey_001")
+    print(f"Running case: {case['case_id']}")
+    state = sim.run_case(case)
 
     # print results
     print()
