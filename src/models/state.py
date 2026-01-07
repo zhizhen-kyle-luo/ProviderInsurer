@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from .case_types import CaseType
 from .patient import AdmissionNotification, ClinicalPresentation
 from .authorization import AuthorizationRequest
-from .financial import FinancialSettlement
+from .financial import FinancialSettlement, ClaimLineItem
 from .metrics import FrictionMetrics
 
 if TYPE_CHECKING:
@@ -44,6 +44,9 @@ class EncounterState(BaseModel):
     # phase 3 billing - Provider's actual chosen amount (for DRG upcoding analysis)
     phase_3_billed_amount: Optional[float] = None
     phase_3_diagnosis_code: Optional[str] = None
+
+    # phase 3 line-level claim tracking (X12 837/835 aligned)
+    claim_lines: List[ClaimLineItem] = Field(default_factory=list)  # individual service lines with adjudication status
 
     # friction model - policy asymmetry and friction tracking
     friction_metrics: Optional[FrictionMetrics] = None

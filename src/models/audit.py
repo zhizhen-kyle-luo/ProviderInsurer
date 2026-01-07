@@ -440,9 +440,20 @@ class AuditLog(BaseModel):
                     key_decision = f"Dx: {dx}"
                     amt_str = f"${amount:,.0f}" if isinstance(amount, (int, float)) else str(amount)
                 else:
-                    status = parsed.get("claim_status", "?")
+                    status = parsed.get("authorization_status") or parsed.get("claim_status") or "?"
                     key_decision = status.upper()
-                    amt = parsed.get("approved_amount", "")
+                    amt = parsed.get("total_paid_amount")
+                    if amt is None:
+                        amt = parsed.get("approved_amount")
+                    if amt is None:
+                        line_adjs = parsed.get("line_adjudications", [])
+                        if line_adjs:
+                            paid_vals = [
+                                adj.get("paid_amount")
+                                for adj in line_adjs
+                                if isinstance(adj.get("paid_amount"), (int, float))
+                            ]
+                            amt = sum(paid_vals) if paid_vals else None
                     amt_str = f"${amt:,.0f}" if isinstance(amt, (int, float)) else "-"
 
                 lines.append(f"| {agent} | {action} | {key_decision} | {amt_str} |")

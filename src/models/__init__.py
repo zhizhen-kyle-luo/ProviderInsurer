@@ -14,6 +14,7 @@ from .clinical import (
 )
 from .authorization import AuthorizationRequest
 from .financial import (
+    ClaimLineItem,
     ServiceLineItem,
     DRGAssignment,
     FinancialSettlement
@@ -48,6 +49,7 @@ __all__ = [
     # authorization
     "AuthorizationRequest",
     # financial
+    "ClaimLineItem",
     "ServiceLineItem",
     "DRGAssignment",
     "FinancialSettlement",
