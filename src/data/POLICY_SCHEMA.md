@@ -25,10 +25,7 @@ These artifacts are nputs to the simulation.
 {
   "policy_id": "string",
   "policy_type": "provider_guideline" | "payer_coverage_policy",
-
   "issuer": "string",
-  "line_of_business": "MA" | "commercial" | "medicaid" | "unknown",
-
   "source": {
     "url": "string"
   },
@@ -38,20 +35,11 @@ These artifacts are nputs to the simulation.
     "phase2_type": "PA" | "concurrent_review" | "none" | "unknown"
   },
 
-  "criteria": [
-    {
-      "id": "string",
-      "kind": "MUST_HAVE"
-            | "ONE_OF"
-            | "EXCLUSION"
-            | "DOC_REQUIRED"
-            | "STEP_THERAPY"
-            | "PRESCRIBER_REQ"
-            | "CONTINUATION_REQ"
-            | "OTHER",
-      "text": "string"
-    }
-  ],
+   "content": {
+    "format": "structured" | "free_text" | "mixed",
+    "data": "object",     // existing dict keys live here
+    "text": "string"      // optional raw excerpt if useful
+  },
 
   "notes_free_text": "string"
 }

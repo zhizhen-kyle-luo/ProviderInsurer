@@ -21,7 +21,6 @@ from src.simulation.phases.unified_review import run_unified_multi_level_review
 if TYPE_CHECKING:
     from src.simulation.game_runner import UtilizationReviewSimulation
 
-
 def run_phase_2_utilization_review(
     sim: "UtilizationReviewSimulation",
     state: EncounterState,
@@ -31,10 +30,8 @@ def run_phase_2_utilization_review(
     unified phase 2: iterative utilization review workflow for all case types
 
     PHASE 2 = PRE-ADJUDICATION UTILIZATION REVIEW:
-    - Timing: BEFORE or DURING care delivery
+    - Timing: BEFORE or DURING care delivery (prospective PA / concurrent review)
     - Record status: EVOLVING - provider can order tests, add documentation
-    - Payor can: PEND (request more info), and provider can respond in real-time
-    - Decision: whether to AUTHORIZE care to proceed (prospective PA / concurrent review)
 
     continues until: approved OR max iterations OR agent abandon
 
@@ -43,8 +40,6 @@ def run_phase_2_utilization_review(
       - level 1: internal_appeal (medical director review)
       - level 2: independent_review (final clinical review, no pend)
     """
-
-    # Call unified review with Phase 2 prompts
     state = run_unified_multi_level_review(
         sim=sim,
         state=state,

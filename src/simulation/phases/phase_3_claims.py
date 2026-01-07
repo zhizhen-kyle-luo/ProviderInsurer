@@ -8,7 +8,7 @@ Uses unified_review.py for core 3-level logic, same structure as Phase 2:
 """
 
 from typing import Dict, Any, TYPE_CHECKING
-from src.models.schemas import EncounterState, CaseType
+from src.models.schemas import EncounterState
 from src.utils.prompts import (
     create_unified_phase3_provider_request_prompt,
     create_unified_phase3_payor_review_prompt
@@ -139,27 +139,29 @@ def run_phase_3_claims(
 
     CRITICAL: Provider decides whether to submit claim even if PA was denied
     """
-    # provider decision: should I submit a claim?
-    # this decision is made even if PA was denied
+    # provider decision: should I submit a claim? this decision is made even if PA was denied
     provider_decision = _provider_claim_submission_decision(sim, state, case, case_type)
 
     if provider_decision == "skip":
-        # phase 3 skipped - provider chose not to submit claim
-        # this is internal flow control, not an action in the action space
+        #internal flow control, not an action in the action space
         return state
 
-    # extract service request data based on PA type
-    phase_2_evidence = getattr(state, '_phase_2_evidence', {})
-
-    if case_type == CaseType.SPECIALTY_MEDICATION:
-        service_request = case.get("medication_request", {})
+    # extract service details from authorization_request (unified across all case types)
+    if state.authorization_request:
+        service_request = {
+            "service_name": state.authorization_request.service_name,
+            "dosage": state.authorization_request.dosage,
+            "frequency": state.authorization_request.frequency,
+            "clinical_rationale": state.authorization_request.clinical_rationale,
+            "cpt_code": state.authorization_request.cpt_code,
+            "ndc_code": state.authorization_request.ndc_code,
+            "j_code": state.authorization_request.j_code,
+        }
     else:
-        # for procedures, cardiac testing, imaging: use approved request from phase 2
-        approved_req = phase_2_evidence.get('approved_request', {})
-        requested_service = approved_req.get('requested_service', {})
-        service_request = requested_service if requested_service else approved_req.get('request_details', {})
+        service_request = {}
 
     cost_ref = case.get("cost_reference", {})
+    phase_2_evidence = {}
 
     # extract coding options for DRG upcoding scenarios (grey zone cases)
     environment_data = case.get("environment_hidden_data", {})

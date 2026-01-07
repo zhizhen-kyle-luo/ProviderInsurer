@@ -69,13 +69,13 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
     # inject provider policy view if available
     policy_section = ""
     if hasattr(state, 'provider_policy_view') and state.provider_policy_view:
+        import json
         policy_view = state.provider_policy_view
-        policy_name = policy_view.get("policy_name", "Clinical Guidelines")
-        criteria = policy_view.get("hospitalization_indications", [])
-        if criteria:
+        content_data = policy_view.get("content", {}).get("data", {})
+        if content_data:
             policy_section = f"""
-YOUR CLINICAL GUIDELINES: {policy_name}
-{chr(10).join(['- ' + c for c in criteria])}
+YOUR CLINICAL GUIDELINES:
+{json.dumps(content_data, indent=2)}
 
 NOTE: The Insurer uses different (stricter) criteria that you cannot see.
 Gather objective evidence to demonstrate clinical necessity.
@@ -212,23 +212,15 @@ Guidelines: {', '.join(requested_service.get('guideline_references', []))}
     # inject payor policy view if available
     policy_section = ""
     if hasattr(state, 'payor_policy_view') and state.payor_policy_view:
+        import json
         policy_view = state.payor_policy_view
-        policy_name = policy_view.get("policy_name", "Medical Policy")
-        inpatient = policy_view.get("inpatient_criteria", {})
-        must_meet = inpatient.get("must_meet_one_of", [])
-        prerequisites = inpatient.get("prerequisites", [])
-
-        if must_meet or prerequisites:
+        content_data = policy_view.get("content", {}).get("data", {})
+        if content_data:
             policy_section = f"""
-STRICT AUDITOR MODE - YOUR POLICY: {policy_name}
+STRICT AUDITOR MODE - YOUR COVERAGE POLICY:
+{json.dumps(content_data, indent=2)}
 
-PREREQUISITES (must be documented):
-{chr(10).join(['- ' + p for p in prerequisites]) if prerequisites else '- None'}
-
-INPATIENT CRITERIA - MUST MEET AT LEAST ONE:
-{chr(10).join([f"{i+1}. {c.get('metric', 'Unknown')}: {c.get('threshold', c.get('range', c.get('values', c.get('description', ''))))}" for i, c in enumerate(must_meet)]) if must_meet else '- None specified'}
-
-CRITICAL: Deny if numeric thresholds are not met exactly. Do NOT approve based on clinical judgment alone.
+CRITICAL: Apply your coverage criteria strictly. Deny if documentation does not meet policy requirements.
 
 """
 

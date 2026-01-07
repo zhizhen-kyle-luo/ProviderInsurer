@@ -61,7 +61,7 @@ def build_provider_evidence_packet(
             for it in prior_iterations
             if it.get("payor_decision") == "denied"
         ],
-        "stage": state.provider_policy_view.get("policy_name", "") if state.provider_policy_view else ""
+        "stage": state.provider_policy_view.get("content", {}).get("data", {}).get("policy_name", "") if state.provider_policy_view else ""
     }
 
 
@@ -71,11 +71,10 @@ def build_payor_evidence_packet(
 ) -> Dict[str, Any]:
     """build evidence packet for payor oversight editing"""
     policy_view = state.payor_policy_view or {}
-    inpatient = policy_view.get("inpatient_criteria", {})
+    content_data = policy_view.get("content", {}).get("data", {})
 
     return {
-        "policy_criteria": inpatient.get("must_meet_one_of", []),
-        "prerequisites": inpatient.get("prerequisites", []),
+        "policy_content": content_data,
         "missing_items": provider_request.get("missing_documentation", []),
         "provider_diagnosis_codes": [
             d.get("icd10") for d in provider_request.get("diagnosis_codes", [])
@@ -121,8 +120,6 @@ def run_unified_multi_level_review(
     prior_iterations = []
     treatment_approved = False
     approved_provider_request = None
-
-    # stage mapping for iteration semantics (0-indexed)
     stage_map = {0: "initial_determination", 1: "internal_appeal", 2: "independent_review"}
 
     # verify policy views are loaded (critical for information asymmetry)
@@ -134,10 +131,7 @@ def run_unified_multi_level_review(
     for iteration_num in range(max_iterations):
         stage = stage_map.get(iteration_num, "unknown")
 
-        # ===== PROVIDER GENERATES REQUEST =====
         provider_system_prompt = create_provider_prompt(sim.provider_params)
-
-        # call provider prompt function with kwargs
         provider_user_prompt = provider_prompt_fn(
             state, case, iteration_num, prior_iterations, stage=stage,
             **provider_prompt_kwargs
@@ -146,13 +140,10 @@ def run_unified_multi_level_review(
         full_prompt = f"{provider_system_prompt}\n\n{provider_user_prompt}"
         messages = [HumanMessage(content=full_prompt)]
 
-        # STEP 1: copilot generates draft
+        # copilot generates draft
         draft_response = sim.provider_copilot.invoke(messages)
         draft_text = draft_response.content
         draft_cache_hit = draft_response.additional_kwargs.get('cache_hit', False) if hasattr(draft_response, 'additional_kwargs') else False
-
-        # update current level tracking
-        state.current_level = iteration_num
 
         # log copilot draft
         sim.audit_logger.log_interaction(
@@ -172,7 +163,7 @@ def run_unified_multi_level_review(
             }
         )
 
-        # STEP 2: apply oversight editing
+        # apply oversight editing
         oversight_level = sim.provider_params.get('oversight_intensity', 'medium')
         evidence_packet = build_provider_evidence_packet(state, case, prior_iterations)
         provider_response_text, oversight_metadata = apply_oversight_edit(
@@ -265,7 +256,6 @@ def run_unified_multi_level_review(
                 state.friction_metrics.escalation_depth, iteration_num - 1
             )
 
-        # ===== PAYOR REVIEWS REQUEST =====
         payor_system_prompt = create_payor_prompt(sim.payor_params)
 
         # call payor prompt function with kwargs
@@ -421,19 +411,57 @@ def run_unified_multi_level_review(
             "payor_denial_reason": payor_decision.get("denial_reason")
         }
 
+        #important!
+        state.current_level = iteration_num
+
         # handle decision outcomes
         if payor_decision["authorization_status"] == "approved":
             if request_type == "treatment":
-                # treatment approved - DONE
+                # treatment approved - DONE (provider can continue for more pre-approvals or treat)
                 treatment_approved = True
                 approved_provider_request = provider_request
+
+                # extract service details from provider_request
+                requested_service = provider_request.get("requested_service", {})
+                service_name = requested_service.get("service_name", "")
+                clinical_rationale = requested_service.get("clinical_justification",
+                                                          requested_service.get("treatment_justification", ""))
+
+                # extract diagnosis codes
+                diagnosis_codes = []
+                for diag in provider_request.get("diagnosis_codes", []):
+                    if isinstance(diag, dict):
+                        diagnosis_codes.append(diag.get("icd10", ""))
+                    elif isinstance(diag, str):
+                        diagnosis_codes.append(diag)
+
                 # set decision on authorization_request (create if needed)
                 if not state.authorization_request:
                     state.authorization_request = AuthorizationRequest(
-                        request_type="medication",
-                        service_name="",
-                        clinical_rationale=""
+                        request_type=request_type,
+                        service_name=service_name,
+                        clinical_rationale=clinical_rationale,
+                        diagnosis_codes=diagnosis_codes
                     )
+                else:
+                    # update existing authorization_request
+                    state.authorization_request.request_type = request_type
+                    state.authorization_request.service_name = service_name
+                    state.authorization_request.clinical_rationale = clinical_rationale
+                    state.authorization_request.diagnosis_codes = diagnosis_codes
+
+                # extract coding information (CPT, NDC, J-code)
+                state.authorization_request.cpt_code = requested_service.get("procedure_code",
+                                                                            requested_service.get("cpt_code"))
+                state.authorization_request.ndc_code = requested_service.get("ndc_code")
+                state.authorization_request.j_code = requested_service.get("j_code")
+
+                # extract service details (dosage, frequency, etc.)
+                state.authorization_request.dosage = requested_service.get("dosage")
+                state.authorization_request.frequency = requested_service.get("frequency")
+                state.authorization_request.duration = requested_service.get("duration")
+
+                # set payor decision fields
                 state.authorization_request.authorization_status = "approved"
                 state.authorization_request.denial_reason = None
                 state.authorization_request.missing_documentation = []
@@ -442,7 +470,8 @@ def run_unified_multi_level_review(
                 state.authorization_request.review_level = payor_decision.get("level")
                 break
             elif request_type == "diagnostic_test":
-                # diagnostic test approved - generate test result (only in Phase 2)
+                # diagnostic test approved - continue to next iteration (get more pre-approvals)
+                # generate test result (only in Phase 2)
                 if phase == "phase_2_utilization_review":
                     test_name = provider_request.get("requested_service", {}).get("service_name")
                     if not test_name:
@@ -455,17 +484,47 @@ def run_unified_multi_level_review(
                         iteration_record["test_results"] = {}
 
         elif payor_decision["authorization_status"] == "denied":
+            # provider must decide: appeal to next level or abandon
             state.denial_occurred = True
+            # continue loop to next iteration (provider appeals) unless at Level 2
+            if iteration_num >= 2:
+                # at Level 2 (independent review): final decision, no appeal possible
+                break
+
+        elif payor_decision["authorization_status"] == "pending_info":
+            # provider must decide: resubmit with more info or abandon
+            # continue loop to iterate at same level - provider will try to address pend
+            pass
 
         prior_iterations.append(iteration_record)
 
     # if treatment never approved, mark as denied
     if not treatment_approved:
+        # try to populate from last provider request if available
+        last_request_type = "medication"
+        last_service_name = ""
+        last_clinical_rationale = ""
+        last_diagnosis_codes = []
+
+        if approved_provider_request:
+            # use the last approved request (even if it was diagnostic test)
+            last_request_type = approved_provider_request.get("request_type", "medication")
+            requested_service = approved_provider_request.get("requested_service", {})
+            last_service_name = requested_service.get("service_name", "")
+            last_clinical_rationale = requested_service.get("clinical_justification",
+                                                           requested_service.get("treatment_justification", ""))
+            for diag in approved_provider_request.get("diagnosis_codes", []):
+                if isinstance(diag, dict):
+                    last_diagnosis_codes.append(diag.get("icd10", ""))
+                elif isinstance(diag, str):
+                    last_diagnosis_codes.append(diag)
+
         if not state.authorization_request:
             state.authorization_request = AuthorizationRequest(
-                request_type="medication",
-                service_name="",
-                clinical_rationale=""
+                request_type=last_request_type,
+                service_name=last_service_name,
+                clinical_rationale=last_clinical_rationale,
+                diagnosis_codes=last_diagnosis_codes
             )
         state.authorization_request.authorization_status = "denied"
         state.authorization_request.denial_reason = f"{phase}: max iterations reached without approval"
