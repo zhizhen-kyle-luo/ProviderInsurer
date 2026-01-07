@@ -311,10 +311,14 @@ def create_unified_phase3_payor_review_prompt(
     # inject payor policy view if available
     policy_section = ""
     if hasattr(state, 'payor_policy_view') and state.payor_policy_view:
+        import json
         policy_view = state.payor_policy_view
-        policy_name = policy_view.get("policy_name", "Medical Policy")
-        policy_section = f"""
-YOUR PAYMENT POLICY: {policy_name}
+        content_data = policy_view.get("content", {}).get("data", {})
+        if content_data:
+            policy_section = f"""
+YOUR PAYMENT POLICY:
+{json.dumps(content_data, indent=2)}
+
 Review the claim documentation against payment guidelines.
 
 """

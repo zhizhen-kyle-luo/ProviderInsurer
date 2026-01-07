@@ -353,8 +353,22 @@ class UtilizationReviewSimulation:
             provider_policy = COPDPolicies.PROVIDER_GUIDELINES["gold_2023"]
             payor_policy = COPDPolicies.PAYOR_POLICIES["interqual_2022"]
         else:
-            provider_policy = {"policy_name": "Standard Clinical Guidelines", "hospitalization_indications": []}
-            payor_policy = {"policy_name": "Standard Medical Policy", "inpatient_criteria": {"must_meet_one_of": []}}
+            provider_policy = {
+                "policy_name": "Standard Clinical Guidelines",
+                "content": {
+                    "format": "structured",
+                    "data": {},
+                    "text": ""
+                }
+            }
+            payor_policy = {
+                "policy_name": "Standard Medical Policy",
+                "content": {
+                    "format": "structured",
+                    "data": {},
+                    "text": ""
+                }
+            }
 
         state = EncounterState(
             case_id=case["case_id"],
@@ -372,7 +386,8 @@ class UtilizationReviewSimulation:
         # phase 3: claims adjudication
         # applies to ALL PA types
         # provider decides whether to submit claim (even if PA denied)
-        if state.authorization_request:
+        # skip if provider chose not to treat after PA denial (no services rendered)
+        if state.authorization_request and not getattr(state, 'care_abandoned', False):
             state = run_phase_3_claims(self, state, case, case_type)
 
         # phase 4: financial settlement

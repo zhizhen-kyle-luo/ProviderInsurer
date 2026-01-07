@@ -63,9 +63,9 @@ def _build_evidence_summary(evidence_packet: Dict[str, Any]) -> str:
         parts.append(f"Diagnoses: {', '.join(evidence_packet['icd10_codes'])}")
     if evidence_packet.get('cpt_codes'):
         parts.append(f"Procedures: {', '.join(evidence_packet['cpt_codes'])}")
-    if evidence_packet.get('policy_criteria'):
-        criteria = json.dumps(evidence_packet['policy_criteria'])
-        parts.append(f"Policy criteria: {criteria}")
+    if evidence_packet.get('policy_content'):
+        policy_content = json.dumps(evidence_packet['policy_content'])
+        parts.append(f"Policy content: {policy_content}")
     if evidence_packet.get('missing_items'):
         parts.append(f"Missing items: {', '.join(evidence_packet['missing_items'])}")
     if evidence_packet.get('prior_denials'):
