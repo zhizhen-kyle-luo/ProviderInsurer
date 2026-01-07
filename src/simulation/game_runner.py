@@ -353,8 +353,22 @@ class UtilizationReviewSimulation:
             provider_policy = COPDPolicies.PROVIDER_GUIDELINES["gold_2023"]
             payor_policy = COPDPolicies.PAYOR_POLICIES["interqual_2022"]
         else:
-            provider_policy = {"policy_name": "Standard Clinical Guidelines", "hospitalization_indications": []}
-            payor_policy = {"policy_name": "Standard Medical Policy", "inpatient_criteria": {"must_meet_one_of": []}}
+            provider_policy = {
+                "policy_name": "Standard Clinical Guidelines",
+                "content": {
+                    "format": "structured",
+                    "data": {},
+                    "text": ""
+                }
+            }
+            payor_policy = {
+                "policy_name": "Standard Medical Policy",
+                "content": {
+                    "format": "structured",
+                    "data": {},
+                    "text": ""
+                }
+            }
 
         state = EncounterState(
             case_id=case["case_id"],
