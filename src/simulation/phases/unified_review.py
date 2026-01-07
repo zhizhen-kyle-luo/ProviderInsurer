@@ -559,7 +559,10 @@ def run_unified_multi_level_review(
                 state.authorization_request.authorization_status = "approved"
                 state.authorization_request.denial_reason = None
                 state.authorization_request.missing_documentation = []
-                state.authorization_request.approved_quantity_amount = payor_decision.get("approved_quantity")
+                approved_quantity = payor_decision.get("approved_quantity_amount")
+                if approved_quantity is None:
+                    approved_quantity = payor_decision.get("approved_quantity")
+                state.authorization_request.approved_quantity_amount = approved_quantity
                 state.authorization_request.reviewer_type = payor_decision.get("reviewer_type")
                 state.authorization_request.review_level = payor_decision.get("level")
                 break
