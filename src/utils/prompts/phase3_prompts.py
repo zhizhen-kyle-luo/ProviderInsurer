@@ -36,6 +36,35 @@ def create_unified_phase3_provider_request_prompt(
     """
     import json
 
+    def format_currency(value: object) -> str:
+        if isinstance(value, (int, float)):
+            return f"${value:.2f}"
+        if value is None:
+            return "N/A"
+        return str(value)
+
+    # build line-level claim status summary (provider memory of what was approved/denied)
+    claim_lines_summary = ""
+    if state.claim_lines:
+        level_names = {0: 'Initial', 1: 'Internal Appeal', 2: 'IRE'}
+        claim_lines_summary = "\nCLAIM LINE STATUS (your submitted lines and payor decisions):\n"
+        for line in state.claim_lines:
+            claim_lines_summary += f"\nLine {line.line_number}: {line.procedure_code} - {line.service_description}\n"
+            claim_lines_summary += f"  Billed: {format_currency(line.billed_amount)} (qty: {line.quantity})\n"
+
+            if line.adjudication_status:
+                claim_lines_summary += f"  Status: {line.adjudication_status.upper()}\n"
+                if line.adjudication_status in ["approved", "partial"]:
+                    claim_lines_summary += f"  Paid: {format_currency(line.paid_amount)}\n"
+                elif line.adjudication_status == "denied":
+                    claim_lines_summary += f"  Denial Reason: {line.adjustment_reason}\n"
+
+            level_name = level_names.get(line.current_review_level, f'Level {line.current_review_level}')
+            claim_lines_summary += f"  Review Level: L{line.current_review_level} ({level_name})\n"
+            claim_lines_summary += f"  Your Action: {line.provider_action or 'PENDING DECISION'}\n"
+
+        claim_lines_summary += "\n"
+
     # format prior iterations for context
     prior_context = ""
     if prior_iterations:
@@ -147,8 +176,7 @@ CRITICAL OPERATIONAL CONTEXT - PHASE 3:
 - Decision sought: PAYMENT for services already rendered
 - Your goal: Demonstrate that documentation supports reimbursement
 
-{prior_context}
-
+{prior_context}{claim_lines_summary}
 PATIENT INFORMATION:
 - Age: {state.admission.patient_demographics.age}
 - Sex: {state.admission.patient_demographics.sex}
@@ -308,6 +336,17 @@ def create_unified_phase3_payor_review_prompt(
             f"  - {d.get('icd10')}: {d.get('description')}" for d in diagnosis_codes
         ])
 
+    # extract procedure codes (line-level billing)
+    procedure_codes = provider_request.get('procedure_codes', [])
+    procedure_summary = ""
+    if procedure_codes:
+        procedure_summary = "\nProcedure Codes Submitted:\n"
+        for idx, proc in enumerate(procedure_codes, 1):
+            procedure_summary += f"  Line {idx}: {proc.get('code')} ({proc.get('code_type')})\n"
+            procedure_summary += f"    Description: {proc.get('description')}\n"
+            procedure_summary += f"    Quantity: {proc.get('quantity')}\n"
+            procedure_summary += f"    Amount Billed: ${proc.get('amount_billed', 0):.2f}\n"
+
     # inject payor policy view if available
     policy_section = ""
     if hasattr(state, 'payor_policy_view') and state.payor_policy_view:
@@ -370,7 +409,7 @@ Your decision must be based solely on the submitted claim documentation.
 
 {service_summary}
 - Amount Billed: ${total_billed:.2f}
-{diagnosis_summary}
+{diagnosis_summary}{procedure_summary}
 
 PHASE 2 COVERAGE/UTILIZATION REVIEW DECISION:
 - Status: {state.authorization_request.authorization_status if state.authorization_request else 'approved'}
@@ -397,25 +436,41 @@ DECISION GUIDANCE:
 
 RESPONSE FORMAT (JSON):
 {{
-    "authorization_status": "{decision_options.replace(' | ', '" or "')}",  // "approved", "denied", or "pending_info"
+    "authorization_status": "{decision_options.replace(' | ', '" or "')}",  // overall: "approved", "denied", "partial", or "pending_info"
 
-    // if approved:
-    "approved_amount": <dollar amount>,
+    // LINE-LEVEL ADJUDICATION (X12 835 remittance advice aligned)
+    // adjudicate each submitted procedure code line separately
+    "line_adjudications": [
+        {{
+            "line_number": <1-based index into procedure_codes array>,
+            "procedure_code": "<CPT/HCPCS code from submission>",
+            "adjudication_status": "approved" or "denied" or "partial",
+            "billed_amount": <amount provider billed>,
+            "allowed_amount": <payor's contractual allowed amount>,
+            "paid_amount": <actual payment amount>,
+            "adjustment_reason": "<reason for denial or adjustment, if any>"
+        }}
+    ],
 
-    // if denied:
-    "denial_reason": "<specific reason for claim denial>",
-    "denial_code": "<standard denial code>",
+    // OVERALL CLAIM-LEVEL FIELDS
+    "total_paid_amount": <sum of all line paid_amounts>,
 
     // if pending_info (only for Levels 0-1):
     "pend_reason": "<what EXISTING documentation is missing>",
     "requested_documents": ["<discharge summary>", "<operative report>", etc.],
+
+    // if fully denied (all lines denied):
+    "denial_reason": "<overall reason for full claim denial>",
 
     "criteria_used": "<payment guidelines or policies applied>",
     "reviewer_type": "{role_label}",
     "level": {level}
 }}
 
-IMPORTANT: You are reviewing payment for services ALREADY RENDERED.
-You cannot prevent care (it already happened). You can only approve/deny/pend payment."""
+IMPORTANT:
+- You are reviewing payment for services ALREADY RENDERED
+- You must adjudicate EACH procedure code line separately in line_adjudications array
+- Set overall authorization_status to "partial" if some lines approved and some denied
+- Cannot prevent care (it already happened), can only approve/deny/pend payment"""
 
     return base_prompt

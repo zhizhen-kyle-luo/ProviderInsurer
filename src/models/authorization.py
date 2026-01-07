@@ -27,6 +27,11 @@ class AuthorizationRequest(BaseModel):
     visit_count: Optional[int] = None
     site_of_service: Optional[str] = None
 
+    # service quantity (HSD-like - X12 278 Health Care Services Delivery)
+    # enables partial approval scenarios: "requested 5 infusions, approved 3"
+    requested_quantity: Optional[int] = None  # provider's requested amount
+    quantity_unit: Optional[str] = None  # "infusions", "days", "visits", "units", "treatments"
+
     # step therapy / prior authorization history (optional)
     prior_therapies_failed: List[str] = Field(default_factory=list)
     step_therapy_completed: bool = False
@@ -35,7 +40,11 @@ class AuthorizationRequest(BaseModel):
     authorization_status: Optional[str] = None  # "approved", "denied", "pended", "partial"
     denial_reason: Optional[str] = None
     appeal_notes: Optional[str] = None
-    approved_quantity: Optional[str] = None  # how many units/doses approved
+
+    # quantity decision (enables partial approvals)
+    approved_quantity_amount: Optional[int] = None  # how many units approved (if different from requested)
+    # note: quantity_unit is shared between request and decision
+
     missing_documentation: List[str] = Field(default_factory=list)  # only populated for pended status
     reviewer_type: Optional[str] = None  # "UM Triage Reviewer", "Medical Director", "IRE"
     review_level: Optional[int] = None  # 0, 1, or 2 (Medicare appeals level)
