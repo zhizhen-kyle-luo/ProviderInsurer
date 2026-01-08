@@ -34,6 +34,7 @@ class EncounterState(BaseModel):
     denial_occurred: bool = False
     appeal_filed: bool = False
     appeal_successful: bool = False
+    provider_treated_despite_denial: bool = False
 
     # phase 3 pend tracking
     claim_pended: bool = False
