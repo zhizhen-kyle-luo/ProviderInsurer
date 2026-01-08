@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 import threading
 
 
@@ -89,7 +89,7 @@ class WORMCache:
             'user_prompt': user_prompt,
             'response': response,
             'metadata': metadata or {},
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'key': key
         }
 

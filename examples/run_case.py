@@ -16,7 +16,6 @@ load_dotenv()
 from src.simulation.game_runner import UtilizationReviewSimulation
 from src.data.case_registry import get_case, list_cases
 from src.data.case_converter import convert_case_to_models
-from src.utils.mermaid_audit_generator import MermaidAuditGenerator
 
 
 def print_results(result):
@@ -66,20 +65,22 @@ def print_results(result):
 
 
 def save_outputs(result, output_dir="outputs"):
-    """save audit log and mermaid diagram"""
+    """save audit log (JSON and markdown)"""
     if not result.audit_log:
         print("\nno audit log generated")
         return
 
     os.makedirs(output_dir, exist_ok=True)
 
-    audit_path = f"{output_dir}/{result.audit_log.case_id}_audit_log.md"
-    result.audit_log.save_to_markdown(audit_path)
-    print(f"\naudit log: {audit_path}")
+    # save JSON for viewer
+    json_path = f"{output_dir}/{result.audit_log.case_id}_audit_log.json"
+    result.audit_log.save_to_json(json_path)
+    print(f"\naudit log (JSON): {json_path}")
 
-    mermaid_path = f"{output_dir}/{result.audit_log.case_id}_workflow.mmd"
-    MermaidAuditGenerator.save_from_state(result, mermaid_path)
-    print(f"mermaid: {mermaid_path}")
+    # save markdown for reference
+    md_path = f"{output_dir}/{result.audit_log.case_id}_audit_log.md"
+    result.audit_log.save_to_markdown(md_path)
+    print(f"audit log (markdown): {md_path}")
 
 
 def run_case(case_id: str):
