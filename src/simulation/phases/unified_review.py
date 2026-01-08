@@ -619,27 +619,8 @@ def _provider_treatment_decision_after_pa_denial(
         decision = decision_data.get("decision", "no_treat")
         rationale = decision_data.get("rationale", "")
 
-        # log decision
-        sim.audit_logger.log_provider_action(
-            phase="phase_2_utilization_review",
-            action_type="treatment_decision_after_pa_denial",
-            description=f"provider decided to {decision} after PA exhausted",
-            outcome={
-                "decision": decision,
-                "rationale": rationale,
-                "pa_status": "denied",
-
-            }
-        )
-
         return decision if decision in ["treat_anyway", "no_treat"] else "no_treat"
 
     except Exception as e:
         # parsing failed - raise error to surface the bug
-        sim.audit_logger.log_provider_action(
-            phase="phase_2_utilization_review",
-            action_type="treatment_decision_parse_error",
-            description=f"failed to parse provider treatment decision: {str(e)}",
-            outcome={"error": str(e), "raw_response": response_text}
-        )
         raise ValueError(f"failed to parse provider treatment decision after PA denial: {e}\nResponse: {response_text}")
