@@ -86,8 +86,7 @@ Configuration to be determined
 ### High Effort (example):
 ```python
 high_effort_params = {
-    "reasoning_depth": "thorough",
-    "documentation_quality": "comprehensive",
+    
     "oversight_level": "high"
 }
 ```
@@ -95,8 +94,7 @@ high_effort_params = {
 ### Low Effort (example):
 ```python
 low_effort_params = {
-    "reasoning_depth": "minimal",
-    "documentation_quality": "brief",
+    
     "oversight_level": "low"
 }
 ```

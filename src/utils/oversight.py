@@ -8,7 +8,8 @@ import difflib
 import json
 from langchain_core.messages import HumanMessage
 
-from src.utils.prompts import OVERSIGHT_BUDGETS
+from src.utils.prompts import OVERSIGHT_GUIDANCE
+from src.utils.json_parsing import extract_json_from_text
 
 
 def _count_words(text: str) -> int:
@@ -82,10 +83,10 @@ def apply_oversight_edit(
     draft_text: str,
     evidence_packet: Dict[str, Any],
     llm,
-    rng_seed: int = 42  # reserved for future stochastic editing
+    rng_seed: int = 42
 ) -> Tuple[str, Dict[str, Any]]:
     """
-    apply metered oversight editing to an AI-generated draft
+    apply human oversight review to an AI-generated draft
 
     args:
         role: "provider" or "payor"
@@ -98,60 +99,25 @@ def apply_oversight_edit(
     returns:
         tuple of (final_text, edit_metadata_dict)
 
-    behavior by level:
-        low: minimal/no edits, strictly obey small budget
-        medium: can fix contradictions, add missing required items
-        high: extensive editing, remove unsupported claims, verify all
-    """
-    budgets = OVERSIGHT_BUDGETS.get(oversight_level, OVERSIGHT_BUDGETS['medium'])
-    max_tokens = budgets['max_tokens_changed']
-    max_passes = budgets['max_edit_passes']
-    max_checks = budgets['max_evidence_checks']
+    workflow:
+        1. review draft against evidence
+        2. decide if editing is needed
+        3. if needed, provide revised text; otherwise approve as-is
 
+    metrics tracked:
+        - tokens_changed: actual word count difference
+        - oversight_llm_tokens: token count of oversight call (proxy for review time)
+        - needs_editing: whether changes were made
+    """
+    guidance = OVERSIGHT_GUIDANCE.get(oversight_level, OVERSIGHT_GUIDANCE['medium'])
     evidence_summary = _build_evidence_summary(evidence_packet)
 
-    # for low oversight, do minimal editing
-    if oversight_level == 'low':
-        # very light touch - only fix obvious errors
-        prompt = f"""You are reviewing a {role} draft. Make MINIMAL changes only.
+    # construct oversight prompt
+    prompt = f"""You are reviewing an AI-generated {role} draft.
 
-BUDGET CONSTRAINTS (STRICT):
-- Maximum words to change: {max_tokens}
-- Only fix obvious typos or formatting issues
-- Do NOT add new content or remove claims
-- If draft is acceptable, return it unchanged
-
-DRAFT TO REVIEW:
-{draft_text}
-
-AVAILABLE EVIDENCE (reference only):
-{evidence_summary}
-
-Return JSON:
-{{
-    "revised_text": "<your minimally edited text or original if no changes needed>",
-    "edits_made": ["<edit 1>", ...],
-    "tokens_changed_estimate": <number>
-}}"""
-
-    elif oversight_level == 'medium':
-        prompt = f"""You are reviewing a {role} draft with standard oversight.
-
-BUDGET CONSTRAINTS:
-- Maximum words to change: {max_tokens}
-- Maximum evidence checks: {max_checks}
-- One editing pass only
-
-ALLOWED EDITS:
-1. Fix factual contradictions with evidence
-2. Add missing required items from evidence packet
-3. Improve clarity without changing meaning
-4. Remove obviously unsupported claims
-
-DO NOT:
-- Completely rewrite the draft
-- Add speculative content not in evidence
-- Change the core argument or conclusion
+OVERSIGHT LEVEL: {oversight_level}
+GUIDANCE: {guidance['instruction']}
+TYPICAL BEHAVIOR: {guidance['typical_behavior']}
 
 DRAFT TO REVIEW:
 {draft_text}
@@ -159,46 +125,22 @@ DRAFT TO REVIEW:
 AVAILABLE EVIDENCE:
 {evidence_summary}
 
-Return JSON:
+TASK:
+1. Review the draft against the available evidence
+2. Decide if editing is needed based on your oversight level
+3. If editing is needed, provide revised text
+4. If draft is acceptable as-is, set needs_editing to false
+
+OUTPUT JSON:
 {{
-    "revised_text": "<your edited text>",
-    "edits_made": ["<description of edit 1>", "<description of edit 2>", ...],
-    "tokens_changed_estimate": <number>,
-    "evidence_checks_performed": <number>,
-    "removed_unsupported_claims": ["<claim 1>", ...]
-}}"""
+    "needs_editing": true or false,
+    "review_notes": "brief assessment of draft quality",
+    "revised_text": "full revised text if needs_editing=true, otherwise null",
+    "changes_made": ["list of changes if any, otherwise empty array"]
+}}
 
-    else:  # high oversight
-        prompt = f"""You are performing THOROUGH oversight review of a {role} draft.
-
-BUDGET CONSTRAINTS:
-- Maximum words to change: {max_tokens}
-- Maximum evidence checks: {max_checks}
-- Up to {max_passes} editing passes allowed
-
-REQUIRED CHECKS:
-1. Verify ALL factual claims against evidence
-2. Fix any contradictions with evidence
-3. Add all missing required documentation items
-4. Remove any unsupported or speculative claims
-5. Ensure clinical/policy accuracy
-6. Improve clarity and completeness
-
-DRAFT TO REVIEW:
-{draft_text}
-
-AVAILABLE EVIDENCE:
-{evidence_summary}
-
-Return JSON:
-{{
-    "revised_text": "<your thoroughly reviewed text>",
-    "edits_made": ["<description of edit 1>", "<description of edit 2>", ...],
-    "tokens_changed_estimate": <number>,
-    "evidence_checks_performed": <number>,
-    "removed_unsupported_claims": ["<claim 1>", ...],
-    "added_evidence_items": ["<item 1>", ...]
-}}"""
+IMPORTANT: If needs_editing is false, set revised_text to null and leave changes_made empty.
+"""
 
     # invoke LLM
     messages = [HumanMessage(content=prompt)]
@@ -207,62 +149,44 @@ Return JSON:
 
     # parse response
     try:
-        clean_response = response_text
-        if "```json" in clean_response:
-            clean_response = clean_response.split("```json")[1].split("```")[0].strip()
-        elif "```" in clean_response:
-            clean_response = clean_response.split("```")[1].split("```")[0].strip()
-        parsed = json.loads(clean_response)
-    except (json.JSONDecodeError, IndexError):
+        parsed = extract_json_from_text(response_text)
+    except Exception as e:
         # fallback: return original with error metadata
         return draft_text, {
             'oversight_level': oversight_level,
-            'max_edit_passes': max_passes,
-            'max_tokens_changed': max_tokens,
-            'changed_word_count': 0,
-            'changed_char_count': 0,
+            'needs_editing': None,
+            'tokens_changed': 0,
+            'oversight_llm_tokens': len(prompt.split()),
             'diff_ratio': 0.0,
-            'edits_made_count': 0,
-            'evidence_checks_count': 0,
-            'removed_unsupported_claims_count': 0,
-            'parse_error': True
+            'parse_error': True,
+            'parse_error_message': str(e)
         }
 
-    revised_text = parsed.get('revised_text', draft_text)
+    needs_editing = parsed.get('needs_editing', True)
+    review_notes = parsed.get('review_notes', '')
+    revised_text = parsed.get('revised_text')
+    changes_made = parsed.get('changes_made', [])
+
+    # if no editing needed, use original
+    if not needs_editing or revised_text is None:
+        revised_text = draft_text
 
     # safety check: if revised_text is not a string, use draft_text
     if not isinstance(revised_text, str):
         revised_text = draft_text
 
-    edits_made = parsed.get('edits_made', [])
-    llm_token_estimate = parsed.get('tokens_changed_estimate', 0)
-    evidence_checks = parsed.get('evidence_checks_performed', 0)
-    removed_claims = parsed.get('removed_unsupported_claims', [])
-
     # compute actual diff metrics
     diff_metrics = _compute_diff_metrics(draft_text, revised_text)
-
-    # enforce budget: if over limit, use original
-    if diff_metrics['changed_word_count'] > max_tokens * 1.5:  # 50% tolerance
-        # over budget - revert to original with minimal edits
-        revised_text = draft_text
-        diff_metrics = _compute_diff_metrics(draft_text, draft_text)
-        edits_made = ['reverted: exceeded edit budget']
 
     # build metadata
     metadata = {
         'oversight_level': oversight_level,
-        'max_edit_passes': max_passes,
-        'max_tokens_changed': max_tokens,
-        'changed_word_count': diff_metrics['changed_word_count'],
-        'changed_char_count': diff_metrics['changed_char_count'],
+        'needs_editing': needs_editing,
+        'tokens_changed': diff_metrics['changed_word_count'],
+        'oversight_llm_tokens': len(prompt.split()),
         'diff_ratio': diff_metrics['diff_ratio'],
-        'edits_made_count': len(edits_made),
-        'edits_made': edits_made,
-        'evidence_checks_count': min(evidence_checks, max_checks),
-        'removed_unsupported_claims_count': len(removed_claims),
-        'llm_token_estimate': llm_token_estimate,
-        'budget_enforced': diff_metrics['changed_word_count'] <= max_tokens * 1.5
+        'changes_made': changes_made,
+        'review_notes': review_notes,
     }
 
     return revised_text, metadata

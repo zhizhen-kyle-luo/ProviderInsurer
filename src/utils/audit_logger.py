@@ -147,22 +147,12 @@ class AuditLogger:
             "total_interactions": total_interactions,
             "interactions_by_phase": interactions_by_phase,
             "interactions_by_agent": interactions_by_agent,
-            "simulation_duration_seconds": self._calculate_duration(),
             "cache_statistics": {
                 "cache_hits": cache_hits,
                 "cache_misses": cache_misses,
                 "cache_hit_rate": cache_hit_rate
             }
         }
-
-    def _calculate_duration(self) -> float:
-        """Calculate simulation duration in seconds."""
-        if not self.audit_log.simulation_end:
-            return 0.0
-
-        start = datetime.fromisoformat(self.audit_log.simulation_start)
-        end = datetime.fromisoformat(self.audit_log.simulation_end)
-        return (end - start).total_seconds()
 
     def get_audit_log(self) -> AuditLog:
         """Get the complete audit log."""

@@ -58,6 +58,11 @@ class AuditLog(BaseModel):
     agent_configurations: List[AgentConfiguration] = Field(default_factory=list)
     summary: Dict[str, Any] = Field(default_factory=dict)
 
+    def save_to_json(self, filepath: str):
+        """save audit log to JSON file"""
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(self.model_dump(), f, indent=2)
+
     def save_to_markdown(self, filepath: str):
         """save audit log to markdown file with full interaction details"""
         lines = []
@@ -90,7 +95,6 @@ class AuditLog(BaseModel):
             lines.append("## Summary")
             lines.append("")
             lines.append(f"- **Total Interactions:** {self.summary.get('total_interactions', 0)}")
-            lines.append(f"- **Duration:** {self.summary.get('simulation_duration_seconds', 0):.2f} seconds")
             lines.append("")
 
             if "interactions_by_phase" in self.summary:
@@ -376,10 +380,12 @@ class AuditLog(BaseModel):
             lines.append("")
             if "provider" in params:
                 prov = params["provider"]
-                lines.append(f"**Provider:** risk={prov.get('risk_tolerance', 'mod')}, care={prov.get('patient_care_weight', 'mod')}, docs={prov.get('documentation_style', 'mod')}")
+                prov_items = ", ".join(f"{k}={v}" for k, v in prov.items())
+                lines.append(f"**Provider:** {prov_items}")
             if "payor" in params:
                 pay = params["payor"]
-                lines.append(f"**Payor:** cost={pay.get('cost_focus', 'mod')}, denial={pay.get('denial_threshold', 'mod')}, ai={pay.get('ai_reliance', 'mod')}")
+                pay_items = ", ".join(f"{k}={v}" for k, v in pay.items())
+                lines.append(f"**Payor:** {pay_items}")
             lines.append("")
 
         # decision trace by phase
@@ -504,10 +510,12 @@ class AuditLog(BaseModel):
                 params = self.summary["behavioral_parameters"]
                 if "provider" in params:
                     prov = params["provider"]
-                    lines.append(f"- **Provider:** risk={prov.get('risk_tolerance')}, care={prov.get('patient_care_weight')}, docs={prov.get('documentation_style')}")
+                    prov_items = ", ".join(f"{k}={v}" for k, v in prov.items())
+                    lines.append(f"- **Provider:** {prov_items}")
                 if "payor" in params:
                     pay = params["payor"]
-                    lines.append(f"- **Payor:** cost={pay.get('cost_focus')}, denial={pay.get('denial_threshold')}, ai={pay.get('ai_reliance')}")
+                    pay_items = ", ".join(f"{k}={v}" for k, v in pay.items())
+                    lines.append(f"- **Payor:** {pay_items}")
             lines.append("")
 
         lines.append("---")

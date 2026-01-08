@@ -10,9 +10,43 @@ from .config import (
     MAX_ITERATIONS,
     WORKFLOW_LEVELS,
     LEVEL_NAME_MAP,
-    DEFAULT_PROVIDER_PARAMS,
-    PROVIDER_PARAM_DEFINITIONS,
 )
+
+
+def create_phase3_claim_submission_decision_prompt(
+    state,
+    pa_status: str,
+    denial_reason: str,
+):
+    """Prompt for provider decision to submit a claim after PA denial."""
+    return f"""PHASE 3: CLAIM SUBMISSION DECISION
+
+SITUATION: Your prior authorization (Phase 2) was DENIED, but the patient still received care under your decision.
+You must decide: Submit a claim for payment, or skip claim submission?
+
+PHASE 2 AUTHORIZATION STATUS:
+- Status: {pa_status}
+- Denial Reason: {denial_reason}
+- Service: {state.authorization_request.service_name if state.authorization_request and state.authorization_request.service_name else 'N/A'}
+
+CLINICAL CONTEXT:
+- Patient Age: {state.admission.patient_demographics.age}
+- Chief Complaint: {state.clinical_presentation.chief_complaint}
+- Medical History: {', '.join(state.clinical_presentation.medical_history)}
+
+TWO DECISIONS:
+1. submit_claim: Submit claim for payment despite PA denial. This will enter the claims adjudication process (appeals, documentation submission, etc.)
+2. skip: Do not submit claim. Write off the cost. No further administrative effort.
+
+TASK: Decide whether to submit a claim for payment.
+
+RESPONSE FORMAT (JSON):
+{{
+    "decision": "submit_claim" or "skip",
+    "rationale": "<explain your reasoning>"
+}}
+
+Consider your clinical and documentation constraints in your decision."""
 
 
 def create_unified_phase3_provider_request_prompt(
@@ -151,19 +185,7 @@ def create_unified_phase3_provider_request_prompt(
         else:
             coding_section = "BILLING INFORMATION: (billing details not provided)"
 
-    # Provider behavioral parameters (configured at simulation runtime)
-    provider_params = getattr(state, 'provider_params', None) or DEFAULT_PROVIDER_PARAMS
-    aggressiveness = provider_params.get('authorization_aggressiveness', DEFAULT_PROVIDER_PARAMS.get('authorization_aggressiveness', 'medium'))
-
-    provider_behavior_section = f"""
-PROVIDER BEHAVIOR PARAMETERS (simulation controls):
-- Authorization aggressiveness: {aggressiveness} ({PROVIDER_PARAM_DEFINITIONS['authorization_aggressiveness'].get(aggressiveness, '')})
-
-How to use this parameter in Phase 3 decisions:
-- LOW aggressiveness: Treat as revenue-recovery task. Abandon low-probability appeals to conserve administrative resources. Write off claims early if documentation is weak.
-- MEDIUM aggressiveness: Balanced approach. Appeal denials if documentation can be strengthened. Consider cost-benefit of administrative effort vs. payment recovery.
-- HIGH aggressiveness: Fight for payment recovery. Persist through appeals despite uncertainty. Invest heavily in documentation clarification and supplementation to secure reimbursement.
-"""
+    provider_behavior_section = ""
 
     base_prompt = f"""ITERATION {iteration}/{MAX_ITERATIONS} - PHASE 3: RETROSPECTIVE REVIEW (POST-SERVICE)
 
@@ -175,6 +197,7 @@ CRITICAL OPERATIONAL CONTEXT - PHASE 3:
 - You CAN ONLY: clarify existing documentation, submit additional existing records
 - Decision sought: PAYMENT for services already rendered
 - Your goal: Demonstrate that documentation supports reimbursement
+- If Phase 2 approved the service, assume it WAS delivered as authorized. Submit a payable, itemized claim.
 
 {prior_context}{claim_lines_summary}
 PATIENT INFORMATION:
@@ -258,6 +281,19 @@ def create_unified_phase3_payor_review_prompt(
     - Level 1 (internal_reconsideration): medical reviewer appeal review, can REQUEST_INFO
     - Level 2 (independent_review): IRE, terminal, cannot REQUEST_INFO, must decide
     """
+    def sum_procedure_billed_amount(procedure_codes):
+        total = 0.0
+        has_amount = False
+        for proc in procedure_codes:
+            amount = proc.get("amount_billed")
+            quantity = proc.get("quantity", 1)
+            if isinstance(amount, (int, float)):
+                has_amount = True
+                if isinstance(quantity, (int, float)):
+                    total += amount * quantity
+                else:
+                    total += amount
+        return total if has_amount else None
 
     # resolve level from stage name if not provided directly
     if level is None and stage:
@@ -284,14 +320,26 @@ def create_unified_phase3_payor_review_prompt(
         service_summary = "CLAIM SUBMITTED: (service details not provided)"
 
     # get billed amount
+    total_billed = None
     if provider_billed_amount is not None:
         total_billed = provider_billed_amount
-    elif cost_ref:
+
+    if total_billed is None:
+        provider_total = provider_request.get("total_amount_billed")
+        if isinstance(provider_total, (int, float)):
+            total_billed = provider_total
+
+    procedure_codes = provider_request.get('procedure_codes', [])
+    if total_billed is None and procedure_codes:
+        total_billed = sum_procedure_billed_amount(procedure_codes)
+
+    if total_billed is None and cost_ref:
         if case_type == CaseType.SPECIALTY_MEDICATION:
             total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
         else:
             total_billed = cost_ref.get('procedure_cost', 7800)
-    else:
+
+    if total_billed is None:
         total_billed = 0.0
 
     # build clinical documentation
@@ -337,7 +385,6 @@ def create_unified_phase3_payor_review_prompt(
         ])
 
     # extract procedure codes (line-level billing)
-    procedure_codes = provider_request.get('procedure_codes', [])
     procedure_summary = ""
     if procedure_codes:
         procedure_summary = "\nProcedure Codes Submitted:\n"
@@ -408,7 +455,7 @@ Your decision must be based solely on the submitted claim documentation.
 - Current Diagnoses: {', '.join(state.admission.preliminary_diagnoses)}
 
 {service_summary}
-- Amount Billed: ${total_billed:.2f}
+- Amount Billed: ${total_billed:,.2f}
 {diagnosis_summary}{procedure_summary}
 
 PHASE 2 COVERAGE/UTILIZATION REVIEW DECISION:
@@ -433,6 +480,7 @@ DECISION GUIDANCE:
 - PENDED (if available at this level): request EXISTING documentation (discharge summary, records)
   - NOTE: Cannot request new tests or clinical actions (care is complete)
   - Pended claims have high provider abandonment rate (regulatory arbitrage)
+  - Do NOT cite "no procedure codes" or "$0 billed" if procedure lines are listed or total billed is nonzero
 
 RESPONSE FORMAT (JSON):
 {{

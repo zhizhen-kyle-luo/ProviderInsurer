@@ -1,18 +1,18 @@
 """
-Run hypothesis testing experiment with 5 configurations (A, B, C, C', D)
+Variables: Insurer/provider - copilot strength (W/S), human effort (L/H)
+Run A: both weak copilot, high effort - “human” baseline
+B: insurer strong copilot low effort, provider weak copilot high effort - “insurer start using AI”
+C: both strong copilot high effort. C’ : both strong copilot, patient low effort, insurer high.  “provider counteract with AI”
+Hypothesis:
+B vs A ->  more denials, insurer workload less
+C vs B - > denial gone down now.
+C’ vs B -> “even though you invested in AI, still need high human effort to achieve the same outcome as before”
 
 usage:
   python examples/run_experiment.py                # Run all runs
   python examples/run_experiment.py A              # Run specific run
   python examples/run_experiment.py A B C          # Run multiple runs
   python examples/run_experiment.py infliximab     # Use infliximab case (default: infliximab_crohns_2015)
-
-This implements the 5-run hypothesis design from EXPERIMENT_CONFIGS.md:
-- Run A: Baseline (both weak copilot, high effort)
-- Run B: Asymmetric Offense (insurer strong/low, provider weak/high)
-- Run C: Arms Race High Effort (both strong copilot, high effort)
-- Run C': Arms Race Low Effort (both strong copilot, low effort)
-- Run D: Governance (both strong copilot, both high effort)
 """
 import sys
 import os
@@ -27,81 +27,56 @@ load_dotenv()
 from src.simulation.game_runner import UtilizationReviewSimulation
 from src.data.case_registry import get_case
 from src.data.case_converter import convert_case_to_models
-from src.utils.mermaid_audit_generator import MermaidAuditGenerator
-
-
-# ============================================================================
-# EXPERIMENT PARAMETER DEFINITIONS (from EXPERIMENT_CONFIGS.md)
-# ============================================================================
 
 # Behavioral parameters for effort levels
 HIGH_EFFORT_PARAMS = {
     'oversight_intensity': 'high',  # thorough review, extensive editing allowed
-    'reasoning_depth': 'thorough',
-    'documentation_quality': 'comprehensive'
 }
 
 LOW_EFFORT_PARAMS = {
     'oversight_intensity': 'low',   # minimal review, accept with minor tweaks
-    'reasoning_depth': 'minimal',
-    'documentation_quality': 'brief'
 }
 
 EXPERIMENT_CONFIGS = {
     'A': {
-        'name': 'Baseline',
-        'description': 'Both agents use weak copilots, high effort',
-        'provider_llm': 'azure',
-        'payor_llm': 'azure',
-        'provider_copilot_llm': 'azure',    # weak copilot
-        'payor_copilot_llm': 'azure',       # weak copilot
+        'name': 'Baseline (Human)',
+        'description': 'Both sides Weak AI + High Human Effort (The Status Quo)',
+        'provider_llm': 'azure', 'payor_llm': 'azure',
+        'provider_copilot_llm': 'azure',    # Weak
+        'payor_copilot_llm': 'azure',       # Weak
         'provider_params': HIGH_EFFORT_PARAMS,
         'payor_params': HIGH_EFFORT_PARAMS,
-        'hypothesis': 'H0: Baseline - both agents strong, high effort'
+        'hypothesis': 'H0: Baseline friction and approval rates.'
     },
     'B': {
-        'name': 'Asymmetric Offense',
-        'description': 'Insurer offense: strong copilot & low effort | Provider: weak copilot & high effort',
-        'provider_llm': 'azure',
-        'payor_llm': 'azure',
-        'provider_copilot_llm': 'azure',    # weak copilot
-        'payor_copilot_llm': None,          # strong copilot (use base)
+        'name': 'Insurer Disruption',
+        'description': 'Insurer adopts Strong AI + Low Effort (Cost Cutting). Provider stays Baseline.',
+        'provider_llm': 'azure', 'payor_llm': 'azure',
+        'provider_copilot_llm': 'azure',    # Weak (Provider hasn't adapted)
+        'payor_copilot_llm': None,          # Strong (Base Model)
         'provider_params': HIGH_EFFORT_PARAMS,
-        'payor_params': LOW_EFFORT_PARAMS,
-        'hypothesis': 'H1: If insurer has strong copilot + low effort, denials/pends increase'
+        'payor_params': LOW_EFFORT_PARAMS,  # Insurer cuts costs/oversight
+        'hypothesis': 'H1: Insurer workload drops, denials increase.'
     },
     'C': {
-        'name': 'Arms Race High Effort',
-        'description': 'Both agents use strong copilots, high effort',
-        'provider_llm': 'azure',
-        'payor_llm': 'azure',
-        'provider_copilot_llm': None,       # strong copilot (use base)
-        'payor_copilot_llm': None,          # strong copilot (use base)
-        'provider_params': HIGH_EFFORT_PARAMS,
-        'payor_params': HIGH_EFFORT_PARAMS,
-        'hypothesis': 'H2: Arms race - approval recovers but admin volume explodes'
+        'name': 'Arms Race (Counter)',
+        'description': 'Provider adopts Strong AI + High Effort to fight back.',
+        'provider_llm': 'azure', 'payor_llm': 'azure',
+        'provider_copilot_llm': None,       # Strong (Provider adapts)
+        'payor_copilot_llm': None,          # Strong
+        'provider_params': HIGH_EFFORT_PARAMS, # Provider works hard to win
+        'payor_params': LOW_EFFORT_PARAMS,  # Insurer still cutting costs
+        'hypothesis': 'H2: Denials recover, but admin volume/costs explode.'
     },
-    "C'": {
-        'name': 'Arms Race Low Effort',
-        'description': 'Both agents use strong copilots, low effort',
-        'provider_llm': 'azure',
-        'payor_llm': 'azure',
-        'provider_copilot_llm': None,       # strong copilot (use base)
-        'payor_copilot_llm': None,          # strong copilot (use base)
-        'provider_params': LOW_EFFORT_PARAMS,
+    'C_prime': {
+        'name': 'The Laziness Trap',
+        'description': 'Provider tries to cut effort (Low) using Strong AI.',
+        'provider_llm': 'azure', 'payor_llm': 'azure',
+        'provider_copilot_llm': None,       # Strong
+        'payor_copilot_llm': None,          # Strong
+        'provider_params': LOW_EFFORT_PARAMS, # Provider gets lazy
         'payor_params': LOW_EFFORT_PARAMS,
-        'hypothesis': 'H3: AI does not save you if you do not put in effort'
-    },
-    'D': {
-        'name': 'Governance',
-        'description': 'Both agents use strong copilots, both high effort (governance backstop)',
-        'provider_llm': 'azure',
-        'payor_llm': 'azure',
-        'provider_copilot_llm': None,       # strong copilot (use base)
-        'payor_copilot_llm': None,          # strong copilot (use base)
-        'provider_params': HIGH_EFFORT_PARAMS,
-        'payor_params': HIGH_EFFORT_PARAMS,
-        'hypothesis': 'Optional: Governance lever - high effort from both sides'
+        'hypothesis': 'H3: Provider loses the gains from C because oversight is needed.'
     }
 }
 
@@ -120,11 +95,53 @@ def print_config_header(run_id, config):
     print()
 
 
+def get_phase_3_summary(result):
+    """derive phase 3 claim submission and status from audit log interactions"""
+    summary = {"submitted": False, "status": "no_claim"}
+    audit_log = getattr(result, "audit_log", None)
+    interactions = getattr(audit_log, "interactions", None) if audit_log else None
+    if not interactions:
+        return summary
+
+    phase_3_interactions = [i for i in interactions if i.phase == "phase_3_claims"]
+    if not phase_3_interactions:
+        return summary
+
+    summary["submitted"] = True
+    last_status = None
+    for interaction in phase_3_interactions:
+        if interaction.agent != "payor":
+            continue
+        parsed = interaction.parsed_output or {}
+        status = parsed.get("authorization_status") or parsed.get("claim_status")
+        if isinstance(status, str) and status.strip():
+            last_status = status.strip().lower()
+
+    if not last_status:
+        summary["status"] = "submitted"
+        return summary
+
+    if last_status in {"pending_info", "pending", "pended", "request_info"}:
+        summary["status"] = "pended"
+    elif last_status in {"denied", "rejected"}:
+        summary["status"] = "denied"
+    elif last_status == "partial":
+        summary["status"] = "partial"
+    elif last_status == "approved":
+        summary["status"] = "approved"
+    else:
+        summary["status"] = last_status
+
+    return summary
+
+
 def print_results(result):
     """print simulation results"""
     print("\n" + "-" * 80)
     print("RESULTS")
     print("-" * 80)
+
+    phase_3_summary = get_phase_3_summary(result)
 
     # Phase 2: Prior Authorization
     print("\nPHASE 2: PRIOR AUTHORIZATION")
@@ -138,20 +155,15 @@ def print_results(result):
 
     # Phase 3: Claims Adjudication
     print("\nPHASE 3: CLAIMS ADJUDICATION")
-    if result.authorization_request and result.authorization_request.authorization_status == "approved":
+    if phase_3_summary["submitted"]:
         print("  Claim Submitted: YES")
-        if result.claim_pended:
-            print("  Claim Status: PENDED")
-        elif result.claim_rejected:
-            print("  Claim Status: REJECTED")
-        else:
-            print("  Claim Status: APPROVED")
+        print(f"  Claim Status: {phase_3_summary['status'].upper()}")
 
         if result.appeal_filed:
             print(f"  Appeal Filed: YES")
             print(f"  Appeal Successful: {result.appeal_successful}")
     else:
-        print("  Claim Submitted: NO (PA denied)")
+        print("  Claim Submitted: NO")
 
     # Metrics
     print("\nMETRICS")
@@ -174,13 +186,13 @@ def print_results(result):
 
 def collect_metrics(result):
     """collect key metrics from result"""
+    phase_3_summary = get_phase_3_summary(result)
     return {
         'case_id': result.admission.case_id if hasattr(result.admission, 'case_id') else 'unknown',
         'pa_status': result.authorization_request.authorization_status if result.authorization_request else 'denied',
         'pa_level_reached': result.current_level,
-        'claim_status': 'N/A',  # Not tracked in Phase 3 result yet
-        'claim_pended': result.claim_pended,
-        'claim_rejected': result.claim_rejected,
+        'claim_status': phase_3_summary["status"],
+        'claim_submitted': phase_3_summary["submitted"],
         'appeal_filed': result.appeal_filed,
         'appeal_successful': result.appeal_successful,
         'total_iterations': (result.friction_metrics.provider_actions + result.friction_metrics.payor_actions) if result.friction_metrics else 0,
@@ -225,9 +237,9 @@ def run_experiment_config(run_id, config, case_id, output_dir="experiment_result
 
         # Save audit log
         if result.audit_log:
-            audit_path = f"{output_dir}/run_{run_id}_audit_log.md"
-            result.audit_log.save_to_markdown(audit_path)
-            print(f"\nAudit Log: {audit_path}")
+            audit_json_path = f"{output_dir}/run_{run_id}_audit_log.json"
+            result.audit_log.save_to_json(audit_json_path)
+            print(f"\nAudit Log: {audit_json_path}")
 
         # Collect metrics
         metrics = collect_metrics(result)
@@ -278,7 +290,7 @@ Examples:
 
     # Default to all runs if none specified
     if not runs_to_execute:
-        runs_to_execute = ['A', 'B', 'C', "C'", 'D']
+        runs_to_execute = ['A', 'B', 'C', "C'"]
 
     print("=" * 80)
     print("HYPOTHESIS TESTING EXPERIMENT")
@@ -311,7 +323,19 @@ Examples:
         print("-" * 70)
         for r in results:
             pa = r['pa_status'][:4].upper()
-            claim = 'PEND' if r['claim_pended'] else ('DENY' if r['claim_rejected'] else 'APP')
+            claim_status = r.get("claim_status", "unknown")
+            if not r.get("claim_submitted"):
+                claim = "NO"
+            elif claim_status == "pended":
+                claim = "PEND"
+            elif claim_status == "denied":
+                claim = "DENY"
+            elif claim_status == "partial":
+                claim = "PART"
+            elif claim_status == "approved":
+                claim = "APP"
+            else:
+                claim = "UNK"
             appeal = 'YES' if r['appeal_filed'] else 'NO'
             print(f"{r['run_id']:3} | {r['config']['name']:20} | {pa:4} | {r['total_iterations']:3} | {r['probing_tests']:2} | {claim:4} | {appeal:3}")
 
