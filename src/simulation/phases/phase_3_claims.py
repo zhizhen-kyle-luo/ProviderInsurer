@@ -62,30 +62,11 @@ def _provider_claim_submission_decision(
 
         decision_data = json.loads(response_text)
         decision = decision_data.get("decision", "skip")
-        rationale = decision_data.get("rationale", "")
-
-        # log decision
-        sim.audit_logger.log_provider_action(
-            phase="phase_3_claims",
-            action_type="claim_submission_decision",
-            description=f"provider decided to {decision} after PA denial",
-            outcome={
-                "decision": decision,
-                "rationale": rationale,
-                "pa_status": pa_status
-            }
-        )
 
         return decision if decision in ["submit_claim", "skip"] else "skip"
 
     except (json.JSONDecodeError, KeyError) as e:
         # parsing failed - raise error to surface the bug
-        sim.audit_logger.log_provider_action(
-            phase="phase_3_claims",
-            action_type="claim_submission_decision_parse_error",
-            description=f"failed to parse provider decision: {str(e)}",
-            outcome={"error": str(e), "raw_response": response_text}
-        )
         raise ValueError(f"failed to parse provider claim submission decision: {e}\nResponse: {response_text}")
 
 
