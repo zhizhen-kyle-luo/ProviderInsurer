@@ -24,7 +24,8 @@ from langchain_core.messages import HumanMessage
 
 from src.models.schemas import (
     EncounterState,
-    AuthorizationRequest
+    AuthorizationRequest,
+    ClaimLineItem
 )
 from src.utils.prompts import (
     create_provider_prompt,
@@ -37,6 +38,91 @@ from src.utils.json_parsing import extract_json_from_text
 
 if TYPE_CHECKING:
     from src.simulation.game_runner import UtilizationReviewSimulation
+
+
+def process_phase3_provider_claim_lines(
+    state: EncounterState,
+    provider_request: Dict[str, Any],
+    iteration_num: int
+) -> None:
+    """
+    convert provider's procedure_codes array into ClaimLineItem objects
+    only process on first iteration or when provider submits new/modified lines
+    """
+    procedure_codes = provider_request.get("procedure_codes", [])
+    if not procedure_codes:
+        return
+
+    # on first submission (iteration 0), create all claim lines
+    if iteration_num == 0:
+        state.claim_lines = []
+        for idx, proc in enumerate(procedure_codes, 1):
+            line = ClaimLineItem(
+                line_number=idx,
+                procedure_code=proc.get("code", ""),
+                code_type=proc.get("code_type", "CPT"),
+                service_description=proc.get("description", ""),
+                quantity=proc.get("quantity", 1),
+                billed_amount=proc.get("amount_billed", 0.0),
+                current_review_level=0
+            )
+            state.claim_lines.append(line)
+    # on subsequent iterations, update existing lines (provider may add documentation but not change billing)
+    # note: provider cannot change procedure codes after initial submission
+
+
+def process_phase3_payor_adjudications(
+    state: EncounterState,
+    payor_decision: Dict[str, Any],
+    iteration_num: int
+) -> None:
+    """
+    process payor's line-level adjudications and update ClaimLineItem objects
+    """
+    line_adjudications = payor_decision.get("line_adjudications", [])
+    if not line_adjudications:
+        return
+
+    # match payor adjudications to claim lines by line_number
+    for adj in line_adjudications:
+        line_num = adj.get("line_number")
+        if not line_num:
+            continue
+
+        # find corresponding claim line (1-indexed)
+        if line_num <= len(state.claim_lines):
+            line = state.claim_lines[line_num - 1]
+
+            # update adjudication fields
+            line.adjudication_status = adj.get("adjudication_status")
+            line.allowed_amount = adj.get("allowed_amount")
+            line.paid_amount = adj.get("paid_amount")
+            line.adjustment_reason = adj.get("adjustment_reason")
+            line.current_review_level = iteration_num
+            line.reviewer_type = payor_decision.get("reviewer_type")
+
+
+def check_phase3_all_lines_finalized(state: EncounterState) -> bool:
+    """
+    check if all claim lines have been finalized (either approved or provider gave up)
+    used for early termination to minimize API calls
+    """
+    if not state.claim_lines:
+        return False
+
+    for line in state.claim_lines:
+        # line is NOT finalized if:
+        # 1. it's denied but provider hasn't made a decision yet (provider_action is None)
+        # 2. provider decided to appeal it (provider_action == "appeal")
+        if line.adjudication_status == "denied":
+            if line.provider_action is None or line.provider_action == "appeal":
+                return False
+        # pending lines are also not finalized
+        elif line.adjudication_status == "pending":
+            return False
+
+    # all lines are either approved or denied+accepted
+    return True
 
 
 def build_provider_evidence_packet(
@@ -229,6 +315,10 @@ def run_unified_multi_level_review(
         if not request_type and "insurer_request" in provider_response_full:
             request_type = provider_response_full.get("insurer_request", {}).get("request_type")
 
+        # PHASE 3 ONLY: process line-level claim submission
+        if phase == "phase_3_claims":
+            process_phase3_provider_claim_lines(state, provider_request, iteration_num)
+
         # log provider request
         sim.audit_logger.log_interaction(
             phase=phase,
@@ -417,6 +507,10 @@ def run_unified_multi_level_review(
         if state.friction_metrics:
             state.friction_metrics.payor_actions += 1
 
+        # PHASE 3 ONLY: process line-level adjudications
+        if phase == "phase_3_claims":
+            process_phase3_payor_adjudications(state, payor_decision, iteration_num)
+
         # track iteration for next round
         iteration_record = {
             "provider_request_type": request_type,
@@ -524,8 +618,14 @@ def run_unified_multi_level_review(
 
         prior_iterations.append(iteration_record)
 
-    # if treatment never approved, mark as denied (Phase 2 only)
-    if phase == "phase_2_utilization_review" and not treatment_approved:
+        # PHASE 3 ONLY: check for early termination (all lines finalized)
+        if phase == "phase_3_claims" and check_phase3_all_lines_finalized(state):
+            # all claim lines are either approved or provider accepted the denial
+            # no need to continue iterating - early exit to save API calls
+            break
+
+    # if treatment never approved, mark as denied
+    if not treatment_approved:
         # try to populate from last provider request if available
         last_request_type = "medication"
         last_service_name = ""
