@@ -5,7 +5,9 @@ import sys
 import os
 import shutil
 import threading
-sys.path.insert(0, os.path.dirname(__file__))
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 
 from src.utils.worm_cache import WORMCache
 

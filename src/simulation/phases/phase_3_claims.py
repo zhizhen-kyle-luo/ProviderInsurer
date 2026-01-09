@@ -10,6 +10,7 @@ Uses unified_review.py for core 3-level logic, same structure as Phase 2:
 from typing import Dict, Any, TYPE_CHECKING
 from src.models.schemas import EncounterState
 from src.utils.prompts import (
+    create_phase3_claim_submission_decision_prompt,
     create_unified_phase3_provider_request_prompt,
     create_unified_phase3_payor_review_prompt
 )
@@ -31,12 +32,9 @@ def _provider_claim_submission_decision(
     Returns: "submit_claim" or "skip"
 
     CRITICAL: This decision happens even if PA was denied.
-    Provider uses aggressiveness parameter in their reasoning.
     """
     import json
     from langchain_core.messages import HumanMessage
-    from src.utils.prompts.config import DEFAULT_PROVIDER_PARAMS, PROVIDER_PARAM_DEFINITIONS
-
     if not state.authorization_request:
         return "skip"
     pa_status = state.authorization_request.authorization_status
@@ -44,41 +42,13 @@ def _provider_claim_submission_decision(
         return "submit_claim"
 
     # PA was denied - provider must decide whether to submit claim anyway
-    provider_params = getattr(state, 'provider_params', None) or DEFAULT_PROVIDER_PARAMS
-    aggressiveness = provider_params.get('authorization_aggressiveness', 'medium')
     denial_reason = state.authorization_request.denial_reason if hasattr(state.authorization_request, 'denial_reason') else "Not specified"
 
-    prompt = f"""PHASE 3: CLAIM SUBMISSION DECISION
-
-SITUATION: Your prior authorization (Phase 2) was DENIED, but the patient still received care under your decision.
-You must decide: Submit a claim for payment, or skip claim submission?
-
-PHASE 2 AUTHORIZATION STATUS:
-- Status: {pa_status}
-- Denial Reason: {denial_reason}
-- Service: {state.authorization_request.service_name if state.authorization_request.service_name else 'N/A'}
-
-YOUR BEHAVIORAL PARAMETER:
-- Authorization aggressiveness: {aggressiveness} ({PROVIDER_PARAM_DEFINITIONS['authorization_aggressiveness'].get(aggressiveness, '')})
-
-CLINICAL CONTEXT:
-- Patient Age: {state.admission.patient_demographics.age}
-- Chief Complaint: {state.clinical_presentation.chief_complaint}
-- Medical History: {', '.join(state.clinical_presentation.medical_history)}
-
-TWO DECISIONS:
-1. submit_claim: Submit claim for payment despite PA denial. This will enter the claims adjudication process (appeals, documentation submission, etc.)
-2. skip: Do not submit claim. Write off the cost. No further administrative effort.
-
-TASK: Decide whether to submit a claim for payment.
-
-RESPONSE FORMAT (JSON):
-{{
-    "decision": "submit_claim" or "skip",
-    "rationale": "<explain your reasoning>"
-}}
-
-Consider your authorization aggressiveness parameter in your decision."""
+    prompt = create_phase3_claim_submission_decision_prompt(
+        state=state,
+        pa_status=pa_status,
+        denial_reason=denial_reason,
+    )
 
     response = sim.provider.llm.invoke([HumanMessage(content=prompt)])
     response_text = response.content.strip()
@@ -92,31 +62,11 @@ Consider your authorization aggressiveness parameter in your decision."""
 
         decision_data = json.loads(response_text)
         decision = decision_data.get("decision", "skip")
-        rationale = decision_data.get("rationale", "")
-
-        # log decision
-        sim.audit_logger.log_provider_action(
-            phase="phase_3_claims",
-            action_type="claim_submission_decision",
-            description=f"provider decided to {decision} after PA denial",
-            outcome={
-                "decision": decision,
-                "rationale": rationale,
-                "pa_status": pa_status,
-                "aggressiveness": aggressiveness
-            }
-        )
 
         return decision if decision in ["submit_claim", "skip"] else "skip"
 
     except (json.JSONDecodeError, KeyError) as e:
         # parsing failed - raise error to surface the bug
-        sim.audit_logger.log_provider_action(
-            phase="phase_3_claims",
-            action_type="claim_submission_decision_parse_error",
-            description=f"failed to parse provider decision: {str(e)}",
-            outcome={"error": str(e), "raw_response": response_text}
-        )
         raise ValueError(f"failed to parse provider claim submission decision: {e}\nResponse: {response_text}")
 
 
@@ -157,6 +107,8 @@ def run_phase_3_claims(
             "ndc_code": state.authorization_request.ndc_code,
             "j_code": state.authorization_request.j_code,
         }
+        if case_type == "specialty_medication":
+            service_request["medication_name"] = state.authorization_request.service_name
     else:
         service_request = {}
 

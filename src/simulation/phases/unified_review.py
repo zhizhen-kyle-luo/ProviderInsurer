@@ -30,9 +30,11 @@ from src.models.schemas import (
 from src.utils.prompts import (
     create_provider_prompt,
     create_payor_prompt,
-    WORKFLOW_LEVELS
+    WORKFLOW_LEVELS,
+    create_treatment_decision_after_pa_denial_prompt,
 )
 from src.utils.oversight import apply_oversight_edit
+from src.utils.json_parsing import extract_json_from_text
 
 if TYPE_CHECKING:
     from src.simulation.game_runner import UtilizationReviewSimulation
@@ -280,12 +282,7 @@ def run_unified_multi_level_review(
 
         # parse provider response
         try:
-            clean_response = provider_response_text
-            if "```json" in clean_response:
-                clean_response = clean_response.split("```json")[1].split("```")[0].strip()
-            elif "```" in clean_response:
-                clean_response = clean_response.split("```")[1].split("```")[0].strip()
-            provider_response_full = json.loads(clean_response)
+            provider_response_full = extract_json_from_text(provider_response_text)
 
             if not isinstance(provider_response_full, dict):
                 raise ValueError("expected dict, got {}".format(type(provider_response_full)))
@@ -293,17 +290,25 @@ def run_unified_multi_level_review(
             # extract insurer request (what payor sees)
             provider_request = provider_response_full.get("insurer_request", {})
 
-        except Exception:
-            provider_response_full = {
-                "insurer_request": {
-                    "request_type": "diagnostic_test",
-                    "requested_service": {}
+        except Exception as e:
+            # log parse error to audit for debugging
+            error_snippet = provider_response_text[:200] + "..." if len(provider_response_text) > 200 else provider_response_text
+            sim.audit_logger.log_interaction(
+                phase=phase,
+                agent="provider",
+                action="parse_error",
+                system_prompt="",
+                user_prompt="",
+                llm_response=provider_response_text,
+                parsed_output={"error": "json_parse_failed", "exception": str(e)},
+                metadata={
+                    "iteration": iteration_num,
+                    "stage": stage,
+                    "error_type": "provider_response_parse_error",
+                    "raw_response_snippet": error_snippet
                 }
-            }
-            provider_request = {
-                "request_type": "diagnostic_test",
-                "requested_service": {}
-            }
+            )
+            raise ValueError(f"failed to parse provider response at iteration {iteration_num}: {e}\nResponse snippet: {error_snippet}")
 
         # extract request_type from nested structure if not at top level
         request_type = provider_request.get("request_type")
@@ -442,24 +447,32 @@ def run_unified_multi_level_review(
 
         # parse payor decision
         try:
-            clean_response = payor_response_text
-            if "```json" in clean_response:
-                clean_response = clean_response.split("```json")[1].split("```")[0].strip()
-            elif "```" in clean_response:
-                clean_response = clean_response.split("```")[1].split("```")[0].strip()
-            payor_decision = json.loads(clean_response)
-        except Exception:
-            payor_decision = {
-                "authorization_status": "denied",
-                "denial_reason": "unable to parse response",
-                "criteria_used": "unknown",
-                "reviewer_type": "AI algorithm"
-            }
+            payor_decision = extract_json_from_text(payor_response_text)
+        except Exception as e:
+            # log parse error to audit for debugging
+            error_snippet = payor_response_text[:200] + "..." if len(payor_response_text) > 200 else payor_response_text
+            sim.audit_logger.log_interaction(
+                phase=phase,
+                agent="payor",
+                action="parse_error",
+                system_prompt="",
+                user_prompt="",
+                llm_response=payor_response_text,
+                parsed_output={"error": "json_parse_failed", "exception": str(e)},
+                metadata={
+                    "iteration": iteration_num,
+                    "stage": stage,
+                    "error_type": "payor_decision_parse_error",
+                    "raw_response_snippet": error_snippet
+                }
+            )
+            raise ValueError(f"failed to parse payor decision at iteration {iteration_num}: {e}\nResponse snippet: {error_snippet}")
 
         # level 2 enforcement: independent review must issue final decision (no endless pend)
         if iteration_num == 2:
             state.independent_review_reached = True
-            if payor_decision.get("authorization_status") == "pending_info":
+            status = (payor_decision.get("authorization_status") or "").lower()
+            if status in {"pending_info", "pending", "pended", "request_info"}:
                 payor_decision["authorization_status"] = "denied"
                 payor_decision["denial_reason"] = (
                     payor_decision.get("denial_reason", "") +
@@ -579,10 +592,18 @@ def run_unified_multi_level_review(
                         iteration_record["test_results"] = {test_name: test_result["value"]}
                     else:
                         iteration_record["test_results"] = {}
+            elif phase == "phase_3_claims":
+                state.claim_pended = False
+                state.claim_rejected = False
+                break
 
         elif payor_decision["authorization_status"] == "denied":
             # provider must decide: appeal to next level or abandon
             state.denial_occurred = True
+            if phase == "phase_3_claims":
+                state.claim_pended = False
+                state.claim_rejected = True
+                break
             # continue loop to next iteration (provider appeals) unless at Level 2
             if iteration_num >= 2:
                 # at Level 2 (independent review): final decision, no appeal possible
@@ -591,6 +612,8 @@ def run_unified_multi_level_review(
         elif payor_decision["authorization_status"] == "pending_info":
             # provider must decide: resubmit with more info or abandon
             # continue loop to iterate at same level - provider will try to address pend
+            if phase == "phase_3_claims":
+                state.claim_pended = True
             pass
 
         prior_iterations.append(iteration_record)
@@ -681,84 +704,23 @@ def _provider_treatment_decision_after_pa_denial(
     """
     import json
     from langchain_core.messages import HumanMessage
-    from src.utils.prompts.config import DEFAULT_PROVIDER_PARAMS, PROVIDER_PARAM_DEFINITIONS
-
-    provider_params = getattr(state, 'provider_params', None) or DEFAULT_PROVIDER_PARAMS
-    aggressiveness = provider_params.get('authorization_aggressiveness', 'medium')
-
     denial_reason = state.authorization_request.denial_reason if state.authorization_request else "PA exhausted without approval"
-
-    prompt = f"""TREATMENT DECISION AFTER PA DENIAL
-
-SITUATION: Your prior authorization request was DENIED after exhausting all appeals.
-You must decide: Provide care anyway (risking nonpayment), or decline treatment?
-
-PA OUTCOME:
-- Status: denied
-- Denial Reason: {denial_reason}
-
-YOUR BEHAVIORAL PARAMETER:
-- Authorization aggressiveness: {aggressiveness} ({PROVIDER_PARAM_DEFINITIONS['authorization_aggressiveness'].get(aggressiveness, '')})
-
-CLINICAL CONTEXT:
-- Patient Age: {state.admission.patient_demographics.age}
-- Chief Complaint: {state.clinical_presentation.chief_complaint}
-- Medical History: {', '.join(state.clinical_presentation.medical_history)}
-
-TWO DECISIONS:
-1. treat_anyway: Provide care despite PA denial (patient pays OOP, or you provide charity care, or hope claim approved retroactively)
-2. no_treat: Do not provide care (patient abandons treatment, conserve resources, avoid uncompensated care risk)
-
-IMPORTANT CONTEXT:
-- Medical abandonment tort: Terminating care without proper notice can create legal liability
-- Financial risk: Treating without authorization means risking nonpayment
-- Patient impact: 78% of patients abandon treatment when PA denied (AMA survey)
-
-TASK: Decide whether to treat the patient despite PA denial.
-
-RESPONSE FORMAT (JSON):
-{{
-    "decision": "treat_anyway" or "no_treat",
-    "rationale": "<explain your reasoning considering clinical need, financial risk, and legal obligations>"
-}}
-
-Use your authorization aggressiveness parameter to guide this decision."""
+    prompt = create_treatment_decision_after_pa_denial_prompt(
+        state=state,
+        denial_reason=denial_reason,
+    )
 
     response = sim.provider.llm.invoke([HumanMessage(content=prompt)])
     response_text = response.content.strip()
 
     # parse decision
     try:
-        if "```json" in response_text:
-            response_text = response_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in response_text:
-            response_text = response_text.split("```")[1].split("```")[0].strip()
-
-        decision_data = json.loads(response_text)
+        decision_data = extract_json_from_text(response_text)
         decision = decision_data.get("decision", "no_treat")
         rationale = decision_data.get("rationale", "")
 
-        # log decision
-        sim.audit_logger.log_provider_action(
-            phase="phase_2_utilization_review",
-            action_type="treatment_decision_after_pa_denial",
-            description=f"provider decided to {decision} after PA exhausted",
-            outcome={
-                "decision": decision,
-                "rationale": rationale,
-                "pa_status": "denied",
-                "aggressiveness": aggressiveness
-            }
-        )
-
         return decision if decision in ["treat_anyway", "no_treat"] else "no_treat"
 
-    except (json.JSONDecodeError, KeyError) as e:
+    except Exception as e:
         # parsing failed - raise error to surface the bug
-        sim.audit_logger.log_provider_action(
-            phase="phase_2_utilization_review",
-            action_type="treatment_decision_parse_error",
-            description=f"failed to parse provider treatment decision: {str(e)}",
-            outcome={"error": str(e), "raw_response": response_text}
-        )
         raise ValueError(f"failed to parse provider treatment decision after PA denial: {e}\nResponse: {response_text}")

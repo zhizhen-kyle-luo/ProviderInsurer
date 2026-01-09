@@ -16,8 +16,6 @@ from .config import (
     INTERNAL_REASONING,
     WORKFLOW_LEVELS,
     LEVEL_NAME_MAP,
-    DEFAULT_PROVIDER_PARAMS,
-    PROVIDER_PARAM_DEFINITIONS,
 )
 
 
@@ -82,19 +80,7 @@ Gather objective evidence to demonstrate clinical necessity.
 
 """
 
-    # Provider behavioral parameters (configured at simulation runtime)
-    provider_params = getattr(state, 'provider_params', None) or DEFAULT_PROVIDER_PARAMS
-    aggressiveness = provider_params.get('authorization_aggressiveness', DEFAULT_PROVIDER_PARAMS.get('authorization_aggressiveness', 'medium'))
-
-    provider_behavior_section = f"""
-PROVIDER BEHAVIOR PARAMETERS (simulation controls):
-- Authorization aggressiveness: {aggressiveness} ({PROVIDER_PARAM_DEFINITIONS['authorization_aggressiveness'].get(aggressiveness, '')})
-
-How to use this parameter in Phase 2 decisions:
-- LOW aggressiveness: Prioritize administrative efficiency. Abandon early if authorization uncertain. Avoid prolonged documentation battles.
-- MEDIUM aggressiveness: Balanced approach. Pursue authorization when clinically warranted. Appeal if evidence is strong.
-- HIGH aggressiveness: Fight for patient access. Persist through appeals despite uncertainty. Invest heavily in documentation to overcome denials.
-"""
+    provider_behavior_section = ""
 
     base_prompt = f"""ITERATION {iteration}/{MAX_ITERATIONS}
 
@@ -113,10 +99,7 @@ PATIENT INFORMATION:
 MEDICATION REQUEST (if applicable):
 {json.dumps(case.get('medication_request', {}), indent=2) if case.get('medication_request') else 'No medication specified yet'}
 
-TASK: Choose your next action from the discrete action space:
-- CONTINUE: Provide additional clinical documentation to support your case
-- APPEAL: Formally appeal a denial with new evidence
-- ABANDON: Withdraw the request (patient will not receive this service)
+TASK: Provide updated clinical documentation and your authorization request.
 
 CLINICAL DOCUMENTATION:
 Update your clinical notes each iteration as you narrow your differential diagnosis. Notes should:
@@ -126,6 +109,8 @@ Update your clinical notes each iteration as you narrow your differential diagno
 - Follow standard H&P format (concise, pertinent findings only)
 
 Your notes should justify the requested service based on clinical data.
+
+RESPONSE: Return ONLY valid JSON (no narrative text, no explanation). Do not deviate from this format.
 
 RESPONSE FORMAT (JSON):
 {{
@@ -163,6 +148,45 @@ RESPONSE FORMAT (JSON):
 """
 
     return base_prompt
+
+
+def create_treatment_decision_after_pa_denial_prompt(
+    state,
+    denial_reason: str,
+):
+    """Prompt for provider decision to treat after PA denial."""
+    return f"""TREATMENT DECISION AFTER PA DENIAL
+
+SITUATION: Your prior authorization request was DENIED after exhausting all appeals.
+You must decide: Provide care anyway (risking nonpayment), or decline treatment?
+
+PA OUTCOME:
+- Status: denied
+- Denial Reason: {denial_reason}
+
+CLINICAL CONTEXT:
+- Patient Age: {state.admission.patient_demographics.age}
+- Chief Complaint: {state.clinical_presentation.chief_complaint}
+- Medical History: {', '.join(state.clinical_presentation.medical_history)}
+
+TWO DECISIONS:
+1. treat_anyway: Provide care despite PA denial (patient pays OOP, or you provide charity care, or hope claim approved retroactively)
+2. no_treat: Do not provide care (patient abandons treatment, conserve resources, avoid uncompensated care risk)
+
+IMPORTANT CONTEXT:
+- Medical abandonment tort: Terminating care without proper notice can create legal liability
+- Financial risk: Treating without authorization means risking nonpayment
+- Patient impact: 78% of patients abandon treatment when PA denied (AMA survey)
+
+TASK: Decide whether to treat the patient despite PA denial.
+
+RESPONSE FORMAT (JSON):
+{{
+    "decision": "treat_anyway" or "no_treat",
+    "rationale": "<explain your reasoning considering clinical need, financial risk, and legal obligations>"
+}}
+
+Use your clinical judgment and documentation constraints to guide this decision."""
 
 
 def create_unified_payor_review_prompt(state, provider_request, iteration, stage=None, level=None):
@@ -277,6 +301,8 @@ EVALUATION CRITERIA:
 {"- Will test results meaningfully change clinical management?" if request_type == 'diagnostic_test' else "- Has step therapy been completed (if applicable)?"}
 - Does request align with clinical guidelines?
 - Is documentation sufficient?
+
+RESPONSE: Return ONLY valid JSON (no narrative text, no explanation). Do not deviate from this format.
 
 RESPONSE FORMAT (JSON):
 {{

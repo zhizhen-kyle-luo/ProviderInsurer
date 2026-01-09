@@ -69,28 +69,24 @@ LEVEL_NAME_MAP = {
 
 DEFAULT_PROVIDER_PARAMS = {
     'oversight_intensity': 'medium',
-    'authorization_aggressiveness': 'medium',
 }
 
 DEFAULT_PAYOR_PARAMS = {
     'oversight_intensity': 'low' 
 }
 
-OVERSIGHT_BUDGETS = {
+OVERSIGHT_GUIDANCE = {
     'low': {
-        'max_edit_passes': 1,
-        'max_tokens_changed': 50,
-        'max_evidence_checks': 1
+        'instruction': 'skim draft quickly, only fix obvious errors. if draft is reasonable, approve as-is.',
+        'typical_behavior': 'most drafts approved with no changes or minor fixes only'
     },
     'medium': {
-        'max_edit_passes': 2,
-        'max_tokens_changed': 300,
-        'max_evidence_checks': 3
+        'instruction': 'careful review, check key facts against evidence. fix clear errors, add missing critical items.',
+        'typical_behavior': 'some drafts approved as-is, others get moderate edits'
     },
     'high': {
-        'max_edit_passes': 2,
-        'max_tokens_changed': 600,
-        'max_evidence_checks': 6
+        'instruction': 'thorough line-by-line review, verify all claims against evidence. ensure complete accuracy.',
+        'typical_behavior': 'most drafts get significant edits, verify all facts'
     }
 }
 
@@ -100,11 +96,6 @@ PROVIDER_PARAM_DEFINITIONS = {
         'low': 'minimal human review of AI drafts, accept with minor tweaks only',
         'medium': 'standard review cycle, can fix contradictions and add missing evidence',
         'high': 'thorough multi-pass review, extensive editing allowed, verify all claims against evidence'
-    },
-    'authorization_aggressiveness': {
-        'low': 'risk-averse, prioritize administrative efficiency; abandon early when approval/payment uncertain; avoid prolonged fights',
-        'medium': 'balanced approach; pursue authorization when clinically warranted; appeal denials if evidence is strong',
-        'high': 'willing to fight for patient access; persist through appeals despite uncertainty; prioritize clinical need over administrative burden'
     }
 }
 
