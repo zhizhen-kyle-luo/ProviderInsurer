@@ -12,6 +12,54 @@ MAX_REQUEST_INFO_PER_LEVEL = 2
 
 # Internal reasoning for provider documentation (empty by design - internal only, not sent to insurer)
 INTERNAL_REASONING = ""
+
+# ============================================================================
+# STRATEGIC ACTION SPACE (3 actions each side, used by Phase 2 and Phase 3)
+# ============================================================================
+# Based on Medicare Advantage appeals workflow (42 CFR §422.566-592)
+# Real-world data: 82% of PA appeals succeed (AMA), but only 15-20% are filed
+# CMS 2026 rules: 72h expedited, 7 days standard decision timelines
+
+PROVIDER_ACTIONS_GUIDE = """
+PROVIDER ACTION SPACE (choose one each turn):
+
+1. CONTINUE - strengthen record at current review level without escalating
+   When: after REQUEST_INFO (pend) to provide missing documentation
+   Examples: order additional tests (ABG, troponin, imaging), request alternative test if initial denied (MRI instead of CT), add objective values (vitals, labs, sequential measurements), provide guideline citations (InterQual, MCG), submit peer-reviewed literature
+   Note: micro-moves like "rewrite note" or "add citation" are all CONTINUE variants, not separate actions
+
+2. APPEAL - escalate to next review authority (changes who reviews)
+   When: after DENY to trigger formal reconsideration
+   Examples: Level 0→1 (plan medical director reconsideration), Level 1→2 (automatic forward to Independent Review Entity per 42 CFR §422.592)
+   Timeline: 30 days standard, 72 hours expedited
+   Success rate: 82% of appeals ultimately succeed, but costs staff time
+
+3. ABANDON - exit dispute, accept alternative outcome
+   When: cost exceeds expected recovery, patient care cannot wait, or denial likely irreversible
+   Examples: accept observation instead of inpatient, proceed with patient paying out-of-pocket, defer elective procedure
+   Why physicians abandon: 62% cite past negative experience, 48% cite patient urgency, 48% cite insufficient staff (AMA data)
+"""
+
+PAYOR_ACTIONS_GUIDE = """
+PAYOR ACTION SPACE (choose one each turn):
+
+1. APPROVE - authorize coverage/service at current stage
+   Examples: approve inpatient status, approve medication with quantity limit, partial approval with restrictions
+   Note: can include restrictions like "approved for 30 days only"
+
+2. DENY - adverse determination without authorization
+   Examples: deny for not meeting medical necessity, deny for insufficient documentation, deny citing incomplete step therapy
+   Note: can suggest alternatives (e.g., "deny inpatient but observation may be appropriate") without authorizing them
+   CMS 2026 rule: must provide specific denial reason
+   Result: provider may APPEAL to next level (unless already at Level 2 terminal review)
+
+3. REQUEST_INFO - pend decision pending additional documentation
+   Examples: request vital signs from admission, request lab values (troponin, BNP), request imaging reports, request prior failed treatments
+   Note: NOT available at Level 2 (independent review must decide on submitted record per 42 CFR §422.592)
+   Provider response: provider should CONTINUE (not APPEAL) by providing requested info at same level
+   Timeline: review clock resets upon receipt of information
+"""
+
 PROVIDER_ACTIONS = ["CONTINUE", "APPEAL", "ABANDON"]
 PAYOR_ACTIONS = ["APPROVE", "DENY", "REQUEST_INFO"]
 
