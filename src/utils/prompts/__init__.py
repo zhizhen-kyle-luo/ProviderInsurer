@@ -16,6 +16,13 @@ from .config import (
     PAYOR_PARAM_DEFINITIONS,
     DEFAULT_PROVIDER_PARAMS,
     DEFAULT_PAYOR_PARAMS,
+    PROVIDER_ACTIONS_GUIDE,
+    PAYOR_ACTIONS_GUIDE,
+    PROVIDER_RESPONSE_MATRIX,
+    PROVIDER_REQUEST_TYPES,
+    PROVIDER_ACTIONS,
+    PAYOR_ACTIONS,
+    REQUEST_TYPES,
 )
 
 # System prompts (provider and payor base context)
@@ -50,6 +57,14 @@ __all__ = [
     "PAYOR_PARAM_DEFINITIONS",
     "DEFAULT_PROVIDER_PARAMS",
     "DEFAULT_PAYOR_PARAMS",
+    # Action space
+    "PROVIDER_ACTIONS_GUIDE",
+    "PAYOR_ACTIONS_GUIDE",
+    "PROVIDER_RESPONSE_MATRIX",
+    "PROVIDER_REQUEST_TYPES",
+    "PROVIDER_ACTIONS",
+    "PAYOR_ACTIONS",
+    "REQUEST_TYPES",
     # System prompts
     "create_provider_prompt",
     "create_payor_prompt",
