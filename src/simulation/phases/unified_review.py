@@ -31,12 +31,112 @@ from src.utils.prompts import (
     create_payor_prompt,
     WORKFLOW_LEVELS,
     create_treatment_decision_after_pa_denial_prompt,
+    PROVIDER_ACTIONS_GUIDE,
+    PROVIDER_RESPONSE_MATRIX,
 )
 from src.utils.oversight import apply_oversight_edit
 from src.utils.json_parsing import extract_json_from_text
 
 if TYPE_CHECKING:
     from src.simulation.game_runner import UtilizationReviewSimulation
+
+
+def _get_provider_action_after_payor_decision(
+    sim: "UtilizationReviewSimulation",
+    state: EncounterState,
+    payor_decision: Dict[str, Any],
+    request_type: str,
+    phase: str,
+    current_level: int
+) -> str:
+    """
+    ask provider to choose action (CONTINUE/APPEAL/ABANDON) after payor decision.
+
+    returns: "continue", "appeal", or "abandon"
+    """
+    payor_status = payor_decision.get("authorization_status", "").lower()
+    denial_reason = payor_decision.get("denial_reason", "")
+
+    # build prompt explaining situation and asking for action
+    prompt = f"""PROVIDER ACTION DECISION
+
+You just received a payor decision. You must choose your next action.
+
+PAYOR DECISION: {payor_status.upper()}
+Request Type: {request_type}
+Current Review Level: {current_level}
+{f"Denial/Pend Reason: {denial_reason}" if denial_reason else ""}
+
+{PROVIDER_RESPONSE_MATRIX}
+
+{PROVIDER_ACTIONS_GUIDE}
+
+IMPORTANT: Based on the payor decision and request type above, only certain actions are valid (see matrix).
+
+TASK: Choose your action and explain your reasoning.
+
+RESPONSE FORMAT (JSON):
+{{
+    "provider_action": "continue" or "appeal" or "abandon",
+    "reasoning": "<brief explanation of why you chose this action>"
+}}
+
+Return ONLY valid JSON."""
+
+    provider_system_prompt = create_provider_prompt(sim.provider_params)
+    full_prompt = f"{provider_system_prompt}\n\n{prompt}"
+    messages = [HumanMessage(content=full_prompt)]
+
+    # use provider base LLM (this is a strategic decision, not a draft)
+    response = sim.provider_base_llm.invoke(messages)
+    response_text = response.content.strip()
+
+    try:
+        action_data = extract_json_from_text(response_text)
+        provider_action = action_data.get("provider_action", "abandon").lower()
+        reasoning = action_data.get("reasoning", "")
+
+        # validate action is in allowed set
+        if provider_action not in ["continue", "appeal", "abandon"]:
+            provider_action = "abandon"
+            reasoning = f"invalid action '{provider_action}' defaulted to abandon"
+
+        # log the action decision
+        sim.audit_logger.log_interaction(
+            phase=phase,
+            agent="provider",
+            action="action_decision",
+            system_prompt=provider_system_prompt,
+            user_prompt=prompt,
+            llm_response=response_text,
+            parsed_output={"provider_action": provider_action, "reasoning": reasoning},
+            metadata={
+                "payor_decision": payor_status,
+                "request_type": request_type,
+                "current_level": current_level
+            }
+        )
+
+        return provider_action
+
+    except Exception as e:
+        # if parsing fails, default to abandon (conservative choice)
+        sim.audit_logger.log_interaction(
+            phase=phase,
+            agent="provider",
+            action="action_decision_parse_error",
+            system_prompt=provider_system_prompt,
+            user_prompt=prompt,
+            llm_response=response_text,
+            parsed_output={"error": str(e), "defaulted_to": "abandon"},
+            metadata={
+                "payor_decision": payor_status,
+                "request_type": request_type,
+                "current_level": current_level,
+                "error_type": "action_decision_parse_error"
+            }
+        )
+        return "abandon"
 
 
 def build_provider_evidence_packet(
