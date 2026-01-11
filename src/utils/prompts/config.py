@@ -14,9 +14,10 @@ MAX_REQUEST_INFO_PER_LEVEL = 2
 INTERNAL_REASONING = ""
 
 # ============================================================================
-# STRATEGIC ACTION SPACE (3 actions each side, used by Phase 2 and Phase 3)
+# STRATEGIC ACTION SPACE (Provider: 3 actions, Payor: 4 actions)
+# Used by Phase 2 (pre-adjudication) and Phase 3 (claims adjudication)
 # ============================================================================
-# Based on Medicare Advantage appeals workflow (42 CFR §422.566-592)
+# Based on Medicare Advantage appeals (42 CFR §422.566-592) and X12 278 EDI standard
 # Real-world data: 82% of PA appeals succeed (AMA), but only 15-20% are filed
 # CMS 2026 rules: 72h expedited, 7 days standard decision timelines
 
@@ -24,44 +25,115 @@ PROVIDER_ACTIONS_GUIDE = """
 PROVIDER ACTION SPACE (choose one each turn):
 
 1. CONTINUE - strengthen record at current review level without escalating
-   When: after REQUEST_INFO (pend) to provide missing documentation
-   Examples: order additional tests (ABG, troponin, imaging), request alternative test if initial denied (MRI instead of CT), add objective values (vitals, labs, sequential measurements), provide guideline citations (InterQual, MCG), submit peer-reviewed literature
-   Note: micro-moves like "rewrite note" or "add citation" are all CONTINUE variants, not separate actions
+   When to use: after REQUEST_INFO (pend) OR after APPROVE of diagnostic test
+   Strategic meaning: answer payer's question OR use new test result to request treatment
+   Examples:
+   - After REQUEST_INFO: provide missing vitals, lab values, imaging reports, guideline citations
+   - After diagnostic APPROVE: use test result (e.g., "negative TB") to now request treatment (e.g., Infliximab)
+   - Order additional/alternative tests (ABG instead of chest X-ray, MRI instead of CT)
+   - Add objective measurements (sequential vital signs, quantified severity scores)
+   - Submit peer-reviewed literature supporting medical necessity
+   Note: "rewrite note" or "add citation" are CONTINUE variants, not separate actions
 
 2. APPEAL - escalate to next review authority (changes who reviews)
-   When: after DENY to trigger formal reconsideration
-   Examples: Level 0→1 (plan medical director reconsideration), Level 1→2 (automatic forward to Independent Review Entity per 42 CFR §422.592)
+   When to use: after DENY or DOWNGRADE
+   Strategic meaning: challenge adverse determination by triggering formal reconsideration
+   Examples:
+   - Level 0→1: request plan medical director reconsideration after triage denial
+   - Level 1→2: automatic forward to Independent Review Entity (IRE) per 42 CFR §422.592
+   - After DOWNGRADE: appeal observation→inpatient or home infusion→hospital infusion
    Timeline: 30 days standard, 72 hours expedited
-   Success rate: 82% of appeals ultimately succeed, but costs staff time
+   Success rate: 82% of appeals ultimately succeed, but costs staff time and delays care
 
 3. ABANDON - exit dispute, accept alternative outcome
-   When: cost exceeds expected recovery, patient care cannot wait, or denial likely irreversible
-   Examples: accept observation instead of inpatient, proceed with patient paying out-of-pocket, defer elective procedure
+   When to use: cost exceeds expected recovery, patient urgency, or low reversal probability
+   Strategic meaning: stop fighting, accept lower reimbursement or patient self-pay
+   Examples:
+   - Accept observation status instead of continuing inpatient fight
+   - Accept home infusion instead of hospital infusion (after DOWNGRADE)
+   - Patient proceeds with treatment and pays out-of-pocket
+   - Defer elective procedure to avoid financial risk
    Why physicians abandon: 62% cite past negative experience, 48% cite patient urgency, 48% cite insufficient staff (AMA data)
 """
 
 PAYOR_ACTIONS_GUIDE = """
 PAYOR ACTION SPACE (choose one each turn):
 
-1. APPROVE - authorize coverage/service at current stage
-   Examples: approve inpatient status, approve medication with quantity limit, partial approval with restrictions
-   Note: can include restrictions like "approved for 30 days only"
+1. APPROVE - authorize coverage/service as requested (X12 278: A1 Certified in Total)
+   When to use: medical necessity criteria met, documentation complete
+   Examples: approve inpatient status, approve medication, approve diagnostic test
+   Strategic result:
+   - If request_type=TREATMENT or LEVEL_OF_CARE: TERMINAL SUCCESS (simulation ends)
+   - If request_type=DIAGNOSTIC: provider will CONTINUE with test result to request treatment
+   Note: can include restrictions like "approved for 30 days only" or quantity limits
 
-2. DENY - adverse determination without authorization
-   Examples: deny for not meeting medical necessity, deny for insufficient documentation, deny citing incomplete step therapy
-   Note: can suggest alternatives (e.g., "deny inpatient but observation may be appropriate") without authorizing them
+2. DOWNGRADE - approve alternative/lower level of service (X12 278: A6 Modified)
+   When to use: medical necessity not met for requested level, but lower level is appropriate
+   Examples:
+   - Approve observation instead of requested inpatient (classic grey zone)
+   - Approve home infusion instead of hospital infusion
+   - Approve outpatient procedure instead of inpatient admission
+   Strategic result: creates "grey zone" choice - provider must APPEAL (fight for higher reimbursement) or ABANDON (accept lower status)
+   X12 278 basis: A6 code specifically for "approved with different parameters than requested"
+   Note: this is NOT a denial - provider gets authorization, just not what they wanted
+
+3. DENY - adverse determination without authorization (X12 278: A3 Not Certified)
+   When to use: medical necessity not met, step therapy incomplete, documentation insufficient
+   Examples: deny for not meeting InterQual criteria, deny for incomplete step therapy, deny as experimental/investigational
+   Strategic result: provider may APPEAL to next level (unless at terminal Level 2) or ABANDON
    CMS 2026 rule: must provide specific denial reason
-   Result: provider may APPEAL to next level (unless already at Level 2 terminal review)
+   Note: can suggest alternatives (e.g., "deny inpatient but observation may be appropriate") without authorizing them
 
-3. REQUEST_INFO - pend decision pending additional documentation
-   Examples: request vital signs from admission, request lab values (troponin, BNP), request imaging reports, request prior failed treatments
-   Note: NOT available at Level 2 (independent review must decide on submitted record per 42 CFR §422.592)
-   Provider response: provider should CONTINUE (not APPEAL) by providing requested info at same level
+4. REQUEST_INFO - pend decision pending additional documentation (X12 278: A4 Pended)
+   When to use: cannot adjudicate with current documentation, need specific clinical data
+   Examples: request vital signs from admission, request lab values (troponin, BNP, lactate), request imaging reports, request medication administration record (MAR)
+   Strategic result: keeps door open - provider should CONTINUE (provide requested info at same level, not APPEAL)
    Timeline: review clock resets upon receipt of information
+   Note: NOT available at Level 2 (independent review must decide on submitted record per 42 CFR §422.592)
+"""
+
+# Strategic logic table: what provider actions are valid after each payor decision
+PROVIDER_RESPONSE_MATRIX = """
+STRATEGIC ACTION MATRIX (what provider can do after each payor decision):
+
+Payor Decision      | Request Type           | Valid Provider Actions | Strategic Logic
+--------------------|------------------------|------------------------|------------------
+APPROVE             | TREATMENT              | (None) - SUCCESS       | Terminal win. Treatment authorized. Simulation ends.
+APPROVE             | DIAGNOSTIC             | CONTINUE               | Information gain. Got test result. Use it to request treatment.
+APPROVE             | LEVEL_OF_CARE          | (None) - SUCCESS       | Terminal win. Got inpatient/site you wanted. Simulation ends.
+DOWNGRADE           | LEVEL_OF_CARE          | APPEAL, ABANDON        | Grey zone choice. APPEAL=fight for higher reimbursement. ABANDON=accept lower status.
+REQUEST_INFO (pend) | ANY                    | CONTINUE, ABANDON      | Open door. CONTINUE=answer question. ABANDON=give up. (Cannot APPEAL a pend)
+DENY                | ANY                    | APPEAL, ABANDON        | Closed door. APPEAL=escalate to next authority. ABANDON=accept loss.
+
+Key insights:
+- After APPROVE diagnostic: provider must CONTINUE (cannot end simulation until TREATMENT/LEVEL_OF_CARE approved)
+- After REQUEST_INFO: provider should CONTINUE (same reviewer, just answering question - NOT an appeal)
+- After DENY or DOWNGRADE: provider must choose APPEAL (change authority) or ABANDON (exit)
+- DOWNGRADE is the "grey zone" that forces cost/benefit calculation: is higher reimbursement worth appeal cost?
 """
 
 PROVIDER_ACTIONS = ["CONTINUE", "APPEAL", "ABANDON"]
-PAYOR_ACTIONS = ["APPROVE", "DENY", "REQUEST_INFO"]
+PAYOR_ACTIONS = ["APPROVE", "DOWNGRADE", "DENY", "REQUEST_INFO"]
+
+# Request types that determine terminal conditions
+PROVIDER_REQUEST_TYPES = """
+REQUEST TYPES (provider must specify in each request):
+
+1. TREATMENT - medication, procedure, or therapy request
+   Examples: Infliximab infusion, surgical procedure, radiation therapy
+   Terminal condition: APPROVE ends simulation (treatment authorized)
+
+2. DIAGNOSTIC - test or imaging to gather clinical information
+   Examples: MRI, CT scan, lab panel, biopsy
+   Terminal condition: APPROVE does NOT end simulation (provider must CONTINUE to request treatment with test result)
+
+3. LEVEL_OF_CARE - inpatient vs observation, hospital vs home infusion, site of care determination
+   Examples: inpatient admission vs observation status, hospital infusion vs home infusion
+   Terminal condition: APPROVE ends simulation (site/status authorized)
+   Grey zone: DOWNGRADE (e.g., observation instead of inpatient) forces APPEAL or ABANDON choice
+"""
+
+REQUEST_TYPES = ["treatment", "diagnostic_test", "level_of_care"]
 
 # Level definitions for 3-level Medicare Advantage-inspired workflow (0-indexed)
 # Level 0: UM triage / checklist-driven initial determination
