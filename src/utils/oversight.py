@@ -64,9 +64,6 @@ def _build_evidence_summary(evidence_packet: Dict[str, Any]) -> str:
         parts.append(f"Diagnoses: {', '.join(evidence_packet['icd10_codes'])}")
     if evidence_packet.get('cpt_codes'):
         parts.append(f"Procedures: {', '.join(evidence_packet['cpt_codes'])}")
-    if evidence_packet.get('policy_content'):
-        policy_content = json.dumps(evidence_packet['policy_content'])
-        parts.append(f"Policy content: {policy_content}")
     if evidence_packet.get('missing_items'):
         parts.append(f"Missing items: {', '.join(evidence_packet['missing_items'])}")
     if evidence_packet.get('prior_denials'):
@@ -97,7 +94,7 @@ def apply_oversight_edit(
         rng_seed: seed for reproducibility
 
     returns:
-        tuple of (final_text, edit_metadata_dict)
+        tuple of (final_text, edit_metadata_dict, prompt, response_text)
 
     workflow:
         1. review draft against evidence
@@ -160,7 +157,7 @@ IMPORTANT: If needs_editing is false, set revised_text to null and leave changes
             'diff_ratio': 0.0,
             'parse_error': True,
             'parse_error_message': str(e)
-        }
+        }, prompt, response_text
 
     needs_editing = parsed.get('needs_editing', True)
     review_notes = parsed.get('review_notes', '')
@@ -189,4 +186,4 @@ IMPORTANT: If needs_editing is false, set revised_text to null and leave changes
         'review_notes': review_notes,
     }
 
-    return revised_text, metadata
+    return revised_text, metadata, prompt, response_text

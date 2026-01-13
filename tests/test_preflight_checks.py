@@ -51,7 +51,7 @@ def main() -> int:
     state = _build_state(case_id)
 
     # Phase 2 provider prompt should not mention aggressiveness.
-    p2_prompt = create_unified_provider_request_prompt(state, case, 0, [])
+    p2_prompt = create_unified_provider_request_prompt(state, case, 0, [], level=0)
     if "Authorization aggressiveness" in p2_prompt:
         failures.append("Phase 2 provider prompt still mentions aggressiveness.")
 
@@ -68,7 +68,7 @@ def main() -> int:
         case=case,
         iteration=0,
         prior_iterations=[],
-        stage="initial_determination",
+        level=0,
         service_request={"medication_name": "Infliximab", "dosage": "5 mg/kg"},
         cost_ref=case.get("cost_reference", {}),
         phase_2_evidence={},
@@ -97,7 +97,6 @@ def main() -> int:
         state=state,
         provider_request=provider_request,
         iteration=0,
-        stage="initial_determination",
         level=0,
         service_request={"medication_name": "Infliximab", "dosage": "5 mg/kg"},
         cost_ref=None,
@@ -111,15 +110,14 @@ def main() -> int:
         failures.append(f"Phase 3 payor prompt Amount Billed expected $1250.00, got {amount_billed}.")
     if "Line 1: J1745" not in payor_prompt or "Line 2: 96413" not in payor_prompt:
         failures.append("Phase 3 payor prompt missing procedure line details.")
-    if "Decision options: approved | denied | pending_info" not in payor_prompt:
-        failures.append("Phase 3 level 0 payor prompt missing pending_info option.")
+    if "Decision options: approved | downgrade | denied | pending_info" not in payor_prompt:
+        failures.append("Phase 3 level 0 payor prompt missing DOWNGRADE or pending_info option.")
 
     # Phase 3 payor prompt: level 2 should not allow pending_info.
     payor_prompt_level2 = create_unified_phase3_payor_review_prompt(
         state=state,
         provider_request=provider_request,
         iteration=2,
-        stage="independent_review",
         level=2,
         service_request={"medication_name": "Infliximab", "dosage": "5 mg/kg"},
         cost_ref=None,
@@ -128,8 +126,8 @@ def main() -> int:
         case_type=case["case_type"],
         provider_billed_amount=None,
     )
-    if "Decision options: approved | denied" not in payor_prompt_level2:
-        failures.append("Phase 3 level 2 payor prompt still allows pending_info.")
+    if "Decision options: approved | downgrade | denied" not in payor_prompt_level2:
+        failures.append("Phase 3 level 2 payor prompt still allows pending_info or missing DOWNGRADE.")
     if "REQUEST_INFO (pending_info) is NOT available at this level." not in payor_prompt_level2:
         failures.append("Phase 3 level 2 payor prompt missing no-pend warning.")
 
@@ -149,7 +147,6 @@ def main() -> int:
         state=state,
         provider_request=provider_request_with_commas,
         iteration=0,
-        stage="initial_determination",
         level=0,
         service_request={"medication_name": "Infliximab", "dosage": "5 mg/kg"},
         cost_ref=None,

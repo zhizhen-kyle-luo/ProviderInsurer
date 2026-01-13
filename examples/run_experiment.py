@@ -2,11 +2,11 @@
 Variables: Insurer/provider - copilot strength (W/S), human effort (L/H)
 Run A: both weak copilot, high effort - “human” baseline
 B: insurer strong copilot low effort, provider weak copilot high effort - “insurer start using AI”
-C: both strong copilot high effort. C’ : both strong copilot, patient low effort, insurer high.  “provider counteract with AI”
+C: both strong copilot high effort. C prime : both strong copilot, patient low effort, insurer high.  “provider counteract with AI”
 Hypothesis:
 B vs A ->  more denials, insurer workload less
 C vs B - > denial gone down now.
-C’ vs B -> “even though you invested in AI, still need high human effort to achieve the same outcome as before”
+C prime vs B -> “even though you invested in AI, still need high human effort to achieve the same outcome as before”
 
 usage:
   python examples/run_experiment.py                # Run all runs
@@ -28,13 +28,12 @@ from src.simulation.game_runner import UtilizationReviewSimulation
 from src.data.case_registry import get_case
 from src.data.case_converter import convert_case_to_models
 
-# Behavioral parameters for effort levels
 HIGH_EFFORT_PARAMS = {
-    'oversight_intensity': 'high',  # thorough review, extensive editing allowed
+    'oversight_intensity': 'high',
 }
 
 LOW_EFFORT_PARAMS = {
-    'oversight_intensity': 'low',   # minimal review, accept with minor tweaks
+    'oversight_intensity': 'low',
 }
 
 EXPERIMENT_CONFIGS = {
@@ -52,29 +51,29 @@ EXPERIMENT_CONFIGS = {
         'name': 'Insurer Disruption',
         'description': 'Insurer adopts Strong AI + Low Effort (Cost Cutting). Provider stays Baseline.',
         'provider_llm': 'azure', 'payor_llm': 'azure',
-        'provider_copilot_llm': 'azure',    # Weak (Provider hasn't adapted)
-        'payor_copilot_llm': None,          # Strong (Base Model)
+        'provider_copilot_llm': 'azure',
+        'payor_copilot_llm': None,
         'provider_params': HIGH_EFFORT_PARAMS,
-        'payor_params': LOW_EFFORT_PARAMS,  # Insurer cuts costs/oversight
+        'payor_params': LOW_EFFORT_PARAMS,
         'hypothesis': 'H1: Insurer workload drops, denials increase.'
     },
     'C': {
         'name': 'Arms Race (Counter)',
         'description': 'Provider adopts Strong AI + High Effort to fight back.',
         'provider_llm': 'azure', 'payor_llm': 'azure',
-        'provider_copilot_llm': None,       # Strong (Provider adapts)
-        'payor_copilot_llm': None,          # Strong
-        'provider_params': HIGH_EFFORT_PARAMS, # Provider works hard to win
-        'payor_params': LOW_EFFORT_PARAMS,  # Insurer still cutting costs
+        'provider_copilot_llm': None,
+        'payor_copilot_llm': None,
+        'provider_params': HIGH_EFFORT_PARAMS,
+        'payor_params': LOW_EFFORT_PARAMS,
         'hypothesis': 'H2: Denials recover, but admin volume/costs explode.'
     },
     'C_prime': {
         'name': 'The Laziness Trap',
         'description': 'Provider tries to cut effort (Low) using Strong AI.',
         'provider_llm': 'azure', 'payor_llm': 'azure',
-        'provider_copilot_llm': None,       # Strong
-        'payor_copilot_llm': None,          # Strong
-        'provider_params': LOW_EFFORT_PARAMS, # Provider gets lazy
+        'provider_copilot_llm': None,
+        'payor_copilot_llm': None,
+        'provider_params': LOW_EFFORT_PARAMS,
         'payor_params': LOW_EFFORT_PARAMS,
         'hypothesis': 'H3: Provider loses the gains from C because oversight is needed.'
     }
@@ -95,53 +94,11 @@ def print_config_header(run_id, config):
     print()
 
 
-def get_phase_3_summary(result):
-    """derive phase 3 claim submission and status from audit log interactions"""
-    summary = {"submitted": False, "status": "no_claim"}
-    audit_log = getattr(result, "audit_log", None)
-    interactions = getattr(audit_log, "interactions", None) if audit_log else None
-    if not interactions:
-        return summary
-
-    phase_3_interactions = [i for i in interactions if i.phase == "phase_3_claims"]
-    if not phase_3_interactions:
-        return summary
-
-    summary["submitted"] = True
-    last_status = None
-    for interaction in phase_3_interactions:
-        if interaction.agent != "payor":
-            continue
-        parsed = interaction.parsed_output or {}
-        status = parsed.get("authorization_status") or parsed.get("claim_status")
-        if isinstance(status, str) and status.strip():
-            last_status = status.strip().lower()
-
-    if not last_status:
-        summary["status"] = "submitted"
-        return summary
-
-    if last_status in {"pending_info", "pending", "pended", "request_info"}:
-        summary["status"] = "pended"
-    elif last_status in {"denied", "rejected"}:
-        summary["status"] = "denied"
-    elif last_status == "partial":
-        summary["status"] = "partial"
-    elif last_status == "approved":
-        summary["status"] = "approved"
-    else:
-        summary["status"] = last_status
-
-    return summary
-
-
 def print_results(result):
     """print simulation results"""
     print("\n" + "-" * 80)
     print("RESULTS")
     print("-" * 80)
-
-    phase_3_summary = get_phase_3_summary(result)
 
     # Phase 2: Prior Authorization
     print("\nPHASE 2: PRIOR AUTHORIZATION")
@@ -152,18 +109,6 @@ def print_results(result):
         print(f"  PA Status: {status.upper()}")
         if result.authorization_request.denial_reason:
             print(f"  Denial Reason: {result.authorization_request.denial_reason[:100]}...")
-
-    # Phase 3: Claims Adjudication
-    print("\nPHASE 3: CLAIMS ADJUDICATION")
-    if phase_3_summary["submitted"]:
-        print("  Claim Submitted: YES")
-        print(f"  Claim Status: {phase_3_summary['status'].upper()}")
-
-        if result.appeal_filed:
-            print(f"  Appeal Filed: YES")
-            print(f"  Appeal Successful: {result.appeal_successful}")
-    else:
-        print("  Claim Submitted: NO")
 
     # Metrics
     print("\nMETRICS")
@@ -186,13 +131,16 @@ def print_results(result):
 
 def collect_metrics(result):
     """collect key metrics from result"""
-    phase_3_summary = get_phase_3_summary(result)
+    # validate required fields exist
+    if not result.authorization_request:
+        raise ValueError("result.authorization_request is missing - cannot extract PA status")
+    if not hasattr(result.authorization_request, 'authorization_status') or not result.authorization_request.authorization_status:
+        raise ValueError("result.authorization_request.authorization_status is missing or empty")
+
     return {
         'case_id': result.admission.case_id if hasattr(result.admission, 'case_id') else 'unknown',
-        'pa_status': result.authorization_request.authorization_status if result.authorization_request else 'denied',
+        'pa_status': result.authorization_request.authorization_status,
         'pa_level_reached': result.current_level,
-        'claim_status': phase_3_summary["status"],
-        'claim_submitted': phase_3_summary["submitted"],
         'appeal_filed': result.appeal_filed,
         'appeal_successful': result.appeal_successful,
         'total_iterations': (result.friction_metrics.provider_actions + result.friction_metrics.payor_actions) if result.friction_metrics else 0,
@@ -203,7 +151,6 @@ def collect_metrics(result):
         'total_billed': result.financial_settlement.total_billed_charges if result.financial_settlement else 0.0,
         'payer_payment': result.financial_settlement.payer_payment if result.financial_settlement else 0.0
     }
-
 
 def run_experiment_config(run_id, config, case_id, output_dir="experiment_results"):
     """run a single experiment configuration"""
@@ -319,25 +266,12 @@ Examples:
 
     if results:
         print(f"\nCompleted {len(results)}/{len(runs_to_execute)} runs\n")
-        print("RUN | CONFIG | PA | ITERATIONS | TESTS | CLAIM | APPEAL")
-        print("-" * 70)
+        print("RUN | CONFIG | PA | ITERATIONS | TESTS | APPEAL")
+        print("-" * 62)
         for r in results:
             pa = r['pa_status'][:4].upper()
-            claim_status = r.get("claim_status", "unknown")
-            if not r.get("claim_submitted"):
-                claim = "NO"
-            elif claim_status == "pended":
-                claim = "PEND"
-            elif claim_status == "denied":
-                claim = "DENY"
-            elif claim_status == "partial":
-                claim = "PART"
-            elif claim_status == "approved":
-                claim = "APP"
-            else:
-                claim = "UNK"
             appeal = 'YES' if r['appeal_filed'] else 'NO'
-            print(f"{r['run_id']:3} | {r['config']['name']:20} | {pa:4} | {r['total_iterations']:3} | {r['probing_tests']:2} | {claim:4} | {appeal:3}")
+            print(f"{r['run_id']:3} | {r['config']['name']:20} | {pa:4} | {r['total_iterations']:3} | {r['probing_tests']:2} | {appeal:3}")
 
         # Save summary
         summary_path = f"{args.output_dir}/experiment_summary.json"

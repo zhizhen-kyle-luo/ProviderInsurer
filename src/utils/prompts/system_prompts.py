@@ -19,25 +19,6 @@ def create_provider_prompt(params=None):
 
 OVERSIGHT LEVEL: {params.get('oversight_intensity', 'medium')} ({oversight_def})
 
-CRITICAL CONTEXT - OPERATIONAL DIFFERENCES BETWEEN PHASES:
-
-PHASE 2 - PRE-ADJUDICATION UTILIZATION REVIEW (prospective/concurrent):
-- Timing: BEFORE or DURING care delivery
-- Record status: EVOLVING - you can still order tests, add documentation, gather evidence
-- Insurer can: PEND (request more info), and you can provide it in real-time
-- Your goal: Build sufficient clinical justification to get approval
-- Decision impact: Determines whether care proceeds (prospective PA) or continues (concurrent review)
-- You can RESPOND to REQUEST_INFO by ordering tests, adding clinical notes
-
-PHASE 3 - POST-SERVICE RETROSPECTIVE REVIEW (claims adjudication):
-- Timing: AFTER care is completed
-- Record status: FIXED - clinical facts cannot change, only documentation clarification
-- Insurer reviews: The documentation you already submitted with the claim
-- Your goal: Demonstrate that documentation supports payment for services already rendered
-- Decision impact: Payment vs denial vs partial payment for completed work
-- You CANNOT order new tests or change clinical facts - can only clarify existing documentation
-- Each appeal costs staff time with uncertain recovery
-
 FINANCIAL REALITY:
 - Your practice operates on thin margins
 - Each write-off directly impacts profitability
@@ -68,26 +49,6 @@ def create_payor_prompt(params=None):
     return f"""You are an INSURER agent (Medicare Advantage plan) managing costs using AI systems.
 
 OVERSIGHT LEVEL: {params.get('oversight_intensity', 'medium')} ({oversight_def})
-
-CRITICAL CONTEXT - OPERATIONAL DIFFERENCES BETWEEN PHASES:
-
-PHASE 2 - PRE-ADJUDICATION UTILIZATION REVIEW (prospective/concurrent):
-- Timing: BEFORE care begins (prospective PA) or DURING care (concurrent review)
-- Record status: EVOLVING - provider can still gather evidence, order tests, add documentation
-- Your action space: APPROVE, DENY, or REQUEST_INFO (pend for missing documentation)
-- REQUEST_INFO allows: "We need X test result before deciding" or "Clarify Y clinical finding"
-- Provider can RESPOND in real-time by providing requested information
-- Decision semantics: Medical necessity for PROCEEDING with or CONTINUING care
-- Strategic consideration: Pend to gather evidence vs deny to prevent unnecessary care
-
-PHASE 3 - POST-SERVICE RETROSPECTIVE REVIEW (claims adjudication):
-- Timing: AFTER care is completed and claim submitted
-- Record status: FIXED - clinical events already happened, documentation is final
-- Your action space: APPROVE (pay), DENY (reject claim), or REQUEST_INFO (pend for existing documentation)
-- REQUEST_INFO at this phase: "Submit discharge summary" NOT "order another test"
-- You CANNOT ask for new clinical actions - only existing documentation clarification
-- Decision semantics: PAYMENT determination based on whether documentation supports medical necessity
-- Strategic consideration: Pay vs deny vs pend (provider may abandon pended claims)
 
 FINANCIAL REALITY:
 - Premium revenue fixed annually

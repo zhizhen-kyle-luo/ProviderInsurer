@@ -13,24 +13,30 @@ by adding documentation and ordering tests (when allowed by your simulation).
 
 from .config import (
     MAX_ITERATIONS,
+    MAX_REQUEST_INFO_PER_LEVEL,
     INTERNAL_REASONING,
     WORKFLOW_LEVELS,
-    LEVEL_NAME_MAP,
+    PROVIDER_REQUEST_TYPES,
+    PAYOR_ACTIONS_GUIDE,
+)
+from src.models.prompt_formats import (
+    phase2_provider_response_format,
+    phase2_treatment_decision_response_format,
+    phase2_payor_response_format,
+)
+from src.models.request_formats import (
+    phase2_diagnostic_request_summary,
+    phase2_treatment_request_summary,
+    phase2_level_of_care_request_summary,
 )
 
 
-def create_unified_provider_request_prompt(state, case, iteration, prior_iterations, stage=None):
+def create_unified_provider_request_prompt(state, case, iteration, prior_iterations, level):
     """Unified provider prompt for Phase 2 pre-adjudication utilization review.
-
-    The provider chooses whether to request a diagnostic test or a treatment,
-    and updates documentation iteratively in response to payer REQUEST_INFO/denials.
-
-    stage semantics:
-    - initial_determination: standard clinical note, gather evidence
-    - internal_appeal: address prior denial reason explicitly
-    - independent_review: final packet, maximize clarity and objective values
     """
     import json
+    if level not in WORKFLOW_LEVELS:
+        raise ValueError(f"unknown level '{level}' in create_unified_provider_request_prompt")
 
     # format prior iterations for context
     prior_context = ""
@@ -57,12 +63,12 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
 
     # stage-specific provider instructions
     stage_instruction = ""
-    if stage == "initial_determination":
-        stage_instruction = "ROUND 1 - INITIAL DETERMINATION: Submit your best clinical justification based on initial presentation and any available objective data.\n"
-    elif stage == "internal_appeal":
-        stage_instruction = "ROUND 2 - INTERNAL APPEAL: You are appealing a prior denial. Address the specific denial reason explicitly and provide additional clinical evidence that addresses the payor's concerns.\n"
-    elif stage == "independent_review":
-        stage_instruction = "ROUND 3 - FINAL INDEPENDENT REVIEW: This is your final opportunity to present evidence. Ensure all objective values (labs, vitals, imaging) are clearly documented with specific numbers. Maximize clarity and completeness.\n"
+    if level == 0:
+        stage_instruction = "INITIAL DETERMINATION: Submit your best clinical justification based on initial presentation and any available objective data.\n"
+    elif level == 1:
+        stage_instruction = "INTERNAL APPEAL: You are appealing a prior denial. Address the specific denial reason explicitly and provide additional clinical evidence that addresses the payor's concerns.\n"
+    elif level == 2:
+        stage_instruction = "FINAL INDEPENDENT REVIEW: This is your final opportunity to present evidence. Ensure all objective values (labs, vitals, imaging) are clearly documented with specific numbers. Maximize clarity and completeness.\n"
 
     # inject provider policy view if available
     policy_section = ""
@@ -75,9 +81,8 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
 YOUR CLINICAL GUIDELINES:
 {json.dumps(content_data, indent=2)}
 
-NOTE: The Insurer uses different (stricter) criteria that you cannot see.
+NOTE: The Insurer uses different criteria that you cannot see.
 Gather objective evidence to demonstrate clinical necessity.
-
 """
 
     provider_behavior_section = ""
@@ -101,6 +106,8 @@ MEDICATION REQUEST (if applicable):
 
 TASK: Provide updated clinical documentation and your authorization request.
 
+{PROVIDER_REQUEST_TYPES}
+
 CLINICAL DOCUMENTATION:
 Update your clinical notes each iteration as you narrow your differential diagnosis. Notes should:
 - Integrate new test results and clinical findings
@@ -113,54 +120,23 @@ Your notes should justify the requested service based on clinical data.
 RESPONSE: Return ONLY valid JSON (no narrative text, no explanation). Do not deviate from this format.
 
 RESPONSE FORMAT (JSON):
-{{
-    "internal_rationale": {{
-        "reasoning": "<your diagnostic reasoning and why you chose this confidence level>",
-        "differential_diagnoses": ["<diagnosis 1>", "<diagnosis 2>"]
-    }},
-    "insurer_request": {{
-        "diagnosis_codes": [
-            {{
-                "icd10": "<ICD-10 code>",
-                "description": "<diagnosis description>"
-            }}
-        ],
-        "request_type": "diagnostic_test" or "treatment",
-        "requested_service": {{
-            // if diagnostic_test:
-            "procedure_code": "<CPT code for test>",
-            "code_type": "CPT",
-            "service_name": "<specific test>",
-            "test_justification": "<why this test will establish diagnosis>",
-            "expected_findings": "<what results would confirm/rule out diagnosis>"
-
-            // if treatment:
-            "procedure_code": "<CPT/HCPCS/J-code>",
-            "code_type": "CPT" or "HCPCS" or "J-code",
-            "service_name": "<specific treatment>",
-            "clinical_justification": "<why treatment is medically necessary>",
-            "clinical_evidence": "<objective data supporting request>",
-            "guideline_references": ["<guideline 1>", "<guideline 2>"]
-        }},
-        "clinical_notes": "<narrative H&P-style documentation integrating all findings to date>"
-    }}
-}}
+{phase2_provider_response_format()}
 """
 
     return base_prompt
 
 
-def create_treatment_decision_after_pa_denial_prompt(
+def create_treatment_decision_after_phase2_denial_prompt(
     state,
     denial_reason: str,
 ):
-    """Prompt for provider decision to treat after PA denial."""
-    return f"""TREATMENT DECISION AFTER PA DENIAL
+    """Prompt for provider decision to treat after Phase 2 denial."""
+    return f"""TREATMENT DECISION AFTER PHASE 2 DENIAL
 
-SITUATION: Your prior authorization request was DENIED after exhausting all appeals.
+SITUATION: Your Phase 2 utilization review request was DENIED after exhausting all appeals.
 You must decide: Provide care anyway (risking nonpayment), or decline treatment?
 
-PA OUTCOME:
+PHASE 2 OUTCOME:
 - Status: denied
 - Denial Reason: {denial_reason}
 
@@ -170,63 +146,79 @@ CLINICAL CONTEXT:
 - Medical History: {', '.join(state.clinical_presentation.medical_history)}
 
 TWO DECISIONS:
-1. treat_anyway: Provide care despite PA denial (patient pays OOP, or you provide charity care, or hope claim approved retroactively)
+1. treat_anyway: Provide care despite the denial (patient pays OOP, or you provide charity care, or hope claim approved retroactively)
 2. no_treat: Do not provide care (patient abandons treatment, conserve resources, avoid uncompensated care risk)
 
 IMPORTANT CONTEXT:
 - Medical abandonment tort: Terminating care without proper notice can create legal liability
 - Financial risk: Treating without authorization means risking nonpayment
-- Patient impact: 78% of patients abandon treatment when PA denied (AMA survey)
+- Patient impact: 78% of patients abandon treatment when coverage is denied (AMA survey)
 
-TASK: Decide whether to treat the patient despite PA denial.
+TASK: Decide whether to treat the patient despite the denial.
 
 RESPONSE FORMAT (JSON):
-{{
-    "decision": "treat_anyway" or "no_treat",
-    "rationale": "<explain your reasoning considering clinical need, financial risk, and legal obligations>"
-}}
+{phase2_treatment_decision_response_format()}
 
 Use your clinical judgment and documentation constraints to guide this decision."""
 
 
-def create_unified_payor_review_prompt(state, provider_request, iteration, stage=None, level=None):
+def create_unified_payor_review_prompt(state, provider_request, iteration, level, pend_count_at_level=0):
     """Unified payor prompt for Phase 2 pre-adjudication utilization review.
-
-    uses WORKFLOW_LEVELS for level-specific semantics (0-indexed):
-    - Level 0 (initial_determination): triage, checklist-driven, can REQUEST_INFO
-    - Level 1 (internal_reconsideration): medical director, fresh eyes, can REQUEST_INFO
-    - Level 2 (independent_review): IRE, terminal, cannot REQUEST_INFO, no internal notes
     """
 
-    # resolve level from stage name if not provided directly
-    if level is None and stage:
-        level = LEVEL_NAME_MAP.get(stage, 0)
-    elif level is None:
-        level = 0
+    if level not in WORKFLOW_LEVELS:
+        raise ValueError(f"unknown level '{level}' in create_unified_payor_review_prompt")
 
-    level_config = WORKFLOW_LEVELS.get(level, WORKFLOW_LEVELS[0])
+    level_config = WORKFLOW_LEVELS[level]
 
+    if 'request_type' not in provider_request:
+        raise ValueError("provider_request missing required field 'request_type'")
     request_type = provider_request.get('request_type')
-    requested_service = provider_request.get('requested_service', {})
+    if not request_type:
+        raise ValueError("provider_request.request_type is empty")
+
+    if 'requested_service' not in provider_request:
+        raise ValueError("provider_request missing required field 'requested_service'")
+    requested_service = provider_request.get('requested_service')
+    if not isinstance(requested_service, dict):
+        raise ValueError("provider_request.requested_service must be a dict")
 
     if request_type == 'diagnostic_test':
-        request_summary = f"""
-DIAGNOSTIC TEST REVIEW REQUEST (Phase 2):
-Test: {requested_service.get('service_name')}
-Justification: {requested_service.get('test_justification')}
-Expected Findings: {requested_service.get('expected_findings')}
-"""
-    else:  # treatment
-        request_summary = f"""
-TREATMENT REVIEW REQUEST (Phase 2):
-Treatment: {requested_service.get('service_name')}
-Justification: {requested_service.get('clinical_justification')}
-Clinical Evidence: {requested_service.get('clinical_evidence')}
-Guidelines: {', '.join(requested_service.get('guideline_references', []))}
-"""
+        if 'service_name' not in requested_service:
+            raise ValueError("requested_service missing required field 'service_name' for diagnostic_test")
+        if 'test_justification' not in requested_service:
+            raise ValueError("requested_service missing required field 'test_justification' for diagnostic_test")
+        if 'expected_findings' not in requested_service:
+            raise ValueError("requested_service missing required field 'expected_findings' for diagnostic_test")
+        request_summary = phase2_diagnostic_request_summary(requested_service)
+    elif request_type == 'level_of_care':
+        if 'requested_status' not in requested_service:
+            raise ValueError("requested_service missing required field 'requested_status' for level_of_care")
+        if 'alternative_status' not in requested_service:
+            raise ValueError("requested_service missing required field 'alternative_status' for level_of_care")
+        if 'severity_indicators' not in requested_service:
+            raise ValueError("requested_service missing required field 'severity_indicators' for level_of_care")
+        request_summary = phase2_level_of_care_request_summary(requested_service)
+    elif request_type == 'treatment':
+        if 'service_name' not in requested_service:
+            raise ValueError("requested_service missing required field 'service_name' for treatment")
+        if 'clinical_evidence' not in requested_service:
+            raise ValueError("requested_service missing required field 'clinical_evidence' for treatment")
+        if 'guideline_references' not in requested_service:
+            raise ValueError("requested_service missing required field 'guideline_references' for treatment")
+        guideline_references = requested_service.get('guideline_references')
+        if not isinstance(guideline_references, list):
+            raise ValueError("requested_service.guideline_references must be a list for treatment")
+        request_summary = phase2_treatment_request_summary(requested_service, guideline_references)
+    else:
+        raise ValueError(f"unknown request_type '{request_type}' - must be 'diagnostic_test', 'level_of_care', or 'treatment'")
 
     # get diagnosis codes if present
-    diagnosis_codes = provider_request.get('diagnosis_codes', [])
+    if 'diagnosis_codes' not in provider_request:
+        raise ValueError("provider_request missing required field 'diagnosis_codes'")
+    diagnosis_codes = provider_request.get('diagnosis_codes')
+    if not isinstance(diagnosis_codes, list):
+        raise ValueError("provider_request.diagnosis_codes must be a list")
     diagnosis_summary = ""
     if diagnosis_codes:
         diagnosis_summary = "\nDiagnosis Codes:\n" + "\n".join([
@@ -252,20 +244,32 @@ CRITICAL: Apply your coverage criteria strictly. Deny if documentation does not 
     role_label = level_config["role_label"]
     review_style = level_config["review_style"]
     level_description = level_config["description"]
-    can_pend = level_config["can_pend"]
+    can_pend_by_level = level_config["can_pend"]
     is_terminal = level_config["terminal"]
     is_independent = level_config["independent"]
 
+    # enforce MAX_REQUEST_INFO_PER_LEVEL: disable pend if limit reached
+    can_pend = can_pend_by_level and (pend_count_at_level < MAX_REQUEST_INFO_PER_LEVEL)
+    pend_limit_reached = can_pend_by_level and (pend_count_at_level >= MAX_REQUEST_INFO_PER_LEVEL)
+
     if can_pend:
-        decision_options = "approved | denied | pending_info"
+        decision_options = "approved | downgrade | denied | pending_info"
     else:
-        decision_options = "approved | denied"
+        decision_options = "approved | downgrade | denied"
 
     stage_instruction = f"""LEVEL {level} - {level_config['name'].upper()} ({role_label}):
 Reviewer: {role_label}
 Mode: {review_style}
 Decision options: {decision_options}
 {level_description}
+
+{PAYOR_ACTIONS_GUIDE}
+
+"""
+    if pend_limit_reached:
+        stage_instruction += f"""CRITICAL: You have reached the maximum REQUEST_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends) at this level.
+You MUST issue a final decision: APPROVED, DOWNGRADE, or DENIED.
+REQUEST_INFO (pending_info) is NO LONGER available.
 
 """
     if is_terminal:
@@ -279,6 +283,10 @@ Your decision must be based solely on the submitted clinical record.
 
 """
 
+    if 'clinical_notes' not in provider_request:
+        raise ValueError("provider_request missing required field 'clinical_notes'")
+    clinical_notes = provider_request['clinical_notes']
+
     base_prompt = f"""ITERATION {iteration}/{MAX_ITERATIONS}
 
 {stage_instruction}{policy_section}PROVIDER REQUEST:
@@ -287,7 +295,7 @@ Your decision must be based solely on the submitted clinical record.
 {request_summary}
 
 Clinical Notes:
-{provider_request.get('clinical_notes', 'no clinical notes provided')}
+{clinical_notes}
 
 PATIENT CONTEXT:
 - Age: {state.admission.patient_demographics.age}
@@ -297,22 +305,22 @@ PATIENT CONTEXT:
 TASK: Review the Phase 2 pre-adjudication utilization review request and issue a coverage decision (or REQUEST_INFO) based on medical necessity and coverage criteria.
 
 EVALUATION CRITERIA:
-{"- Is diagnostic test medically necessary to establish diagnosis?" if request_type == 'diagnostic_test' else "- Is treatment medically necessary based on clinical evidence?"}
-{"- Will test results meaningfully change clinical management?" if request_type == 'diagnostic_test' else "- Has step therapy been completed (if applicable)?"}
+{
+    "- Is diagnostic test medically necessary to establish diagnosis?" if request_type == 'diagnostic_test'
+    else "- Does clinical severity justify requested level of care?" if request_type == 'level_of_care'
+    else "- Is treatment medically necessary based on clinical evidence?"
+}
+{
+    "- Will test results meaningfully change clinical management?" if request_type == 'diagnostic_test'
+    else "- Do severity indicators meet criteria for requested status vs alternative?" if request_type == 'level_of_care'
+    else "- Has step therapy been completed (if applicable)?"
+}
 - Does request align with clinical guidelines?
 - Is documentation sufficient?
 
 RESPONSE: Return ONLY valid JSON (no narrative text, no explanation). Do not deviate from this format.
 
 RESPONSE FORMAT (JSON):
-{{
-    "authorization_status": "{decision_options.replace(' | ', '" or "')}",
-    "denial_reason": "<specific reason if denied{' or pended' if can_pend else ''}>",
-    {"'missing_documentation': ['<doc1>', '<doc2>'],  // if pending for missing info" if can_pend else ""}
-    "criteria_used": "<guidelines or policies applied>",
-    "reviewer_type": "{role_label}",
-    "level": {level},
-    "requires_peer_to_peer": true or false  // optional, set true if peer-to-peer recommended
-}}"""
+{phase2_payor_response_format(decision_options, can_pend, role_label, level)}"""
 
     return base_prompt

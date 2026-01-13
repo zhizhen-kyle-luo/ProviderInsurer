@@ -11,3 +11,6 @@ __pycache__/
 *.mmd
 .worm_cache/
 experiment_results/
+
+# Node
+node_modules/
