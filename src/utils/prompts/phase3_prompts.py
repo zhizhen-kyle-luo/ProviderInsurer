@@ -8,8 +8,21 @@ Insurer can: PEND only for existing documentation clarification, not new clinica
 
 from .config import (
     MAX_ITERATIONS,
+    MAX_REQUEST_INFO_PER_LEVEL,
     WORKFLOW_LEVELS,
-    LEVEL_NAME_MAP,
+    PAYOR_ACTIONS_GUIDE,
+)
+from src.models.prompt_formats import (
+    phase3_claim_submission_decision_response_format,
+    phase3_provider_response_format,
+    phase3_payor_response_format,
+)
+from src.models.request_formats import (
+    phase3_provider_service_details,
+    phase3_provider_coding_section,
+    phase3_payor_service_summary,
+    phase3_payor_diagnosis_summary,
+    phase3_payor_procedure_summary,
 )
 
 
@@ -41,18 +54,15 @@ TWO DECISIONS:
 TASK: Decide whether to submit a claim for payment.
 
 RESPONSE FORMAT (JSON):
-{{
-    "decision": "submit_claim" or "skip",
-    "rationale": "<explain your reasoning>"
-}}
+{phase3_claim_submission_decision_response_format()}
 
 Consider your clinical and documentation constraints in your decision."""
 
 
 def create_unified_phase3_provider_request_prompt(
-    state, case, iteration, prior_iterations, stage=None,
+    state, case, iteration, prior_iterations, level,
     service_request=None, cost_ref=None, phase_2_evidence=None,
-    case_type="specialty_medication", coding_options=None
+    case_type=None, coding_options=None
 ):
     """
     Phase 3 unified provider prompt: retrospective review (post-service)
@@ -63,12 +73,16 @@ def create_unified_phase3_provider_request_prompt(
     - Decision sought: PAYMENT for services already rendered
     - Appeals focus on: documentation completeness, not clinical necessity
 
-    stage semantics (same 3-level structure as Phase 2):
-    - initial_determination: standard claim submission with documentation
-    - internal_appeal: address claim denial with additional documentation
-    - independent_review: final appeal packet with maximum documentation clarity
+    level semantics (same 3-level structure as Phase 2):
+    - 0: initial claim submission with documentation
+    - 1: address claim denial with additional documentation
+    - 2: final appeal packet with maximum documentation clarity
     """
     import json
+    if level not in WORKFLOW_LEVELS:
+        raise ValueError(f"unknown level '{level}' in create_unified_phase3_provider_request_prompt")
+    if case_type is None:
+        raise ValueError("create_unified_phase3_provider_request_prompt requires case_type")
 
     def format_currency(value: object) -> str:
         if isinstance(value, (int, float)):
@@ -112,11 +126,11 @@ def create_unified_phase3_provider_request_prompt(
 
     # stage-specific provider instructions
     stage_instruction = ""
-    if stage == "initial_determination":
+    if level == 0:
         stage_instruction = "ROUND 1 - INITIAL CLAIM SUBMISSION: Submit your claim with complete documentation of services rendered.\n"
-    elif stage == "internal_appeal":
+    elif level == 1:
         stage_instruction = "ROUND 2 - INTERNAL APPEAL: You are appealing a claim denial. Provide additional EXISTING documentation that addresses the specific denial reason. You CANNOT change clinical facts - only clarify/supplement documentation.\n"
-    elif stage == "independent_review":
+    elif level == 2:
         stage_instruction = "ROUND 3 - FINAL INDEPENDENT REVIEW: This is your final appeal opportunity. Submit all available documentation that supports payment for services already rendered. Ensure maximum clarity and completeness.\n"
 
     # build clinical documentation from Phase 2
@@ -144,46 +158,12 @@ def create_unified_phase3_provider_request_prompt(
 
     # build service details
     if service_request:
-        from src.models.schemas import CaseType
-        if case_type == CaseType.SPECIALTY_MEDICATION:
-            service_details = f"""SERVICE DELIVERED:
-- Medication: {service_request.get('medication_name')}
-- Dosage Administered: {service_request.get('dosage')}
-- Route: {service_request.get('route', 'N/A')}
-- Frequency: {service_request.get('frequency', 'N/A')}"""
-        else:
-            service_name = service_request.get('service_name', service_request.get('treatment_name', service_request.get('procedure_name', 'procedure')))
-            service_details = f"""SERVICE DELIVERED:
-- Procedure/Service: {service_name}
-- Clinical Indication: {service_request.get('clinical_indication', service_request.get('treatment_justification', 'N/A'))}"""
+        service_details = phase3_provider_service_details(service_request, case_type)
     else:
         service_details = "SERVICE DELIVERED: (service details not provided)"
 
     # build coding & billing section
-    if coding_options and len(coding_options) > 0:
-        coding_section_parts = ["CODING & BILLING OPTIONS:"]
-        coding_section_parts.append("You must select ONE diagnosis code based on clinical documentation:")
-        coding_section_parts.append("")
-        for i, option in enumerate(coding_options, 1):
-            coding_section_parts.append(f"OPTION {i}: {option.get('icd10', 'N/A')} - {option.get('diagnosis', 'Unknown')}")
-            coding_section_parts.append(f"  - Payment: ${option.get('payment', 0):,.2f}")
-            coding_section_parts.append(f"  - DRG: {option.get('drg_code', 'N/A')}")
-            coding_section_parts.append("")
-        coding_section = "\n".join(coding_section_parts)
-    else:
-        if cost_ref:
-            from src.models.schemas import CaseType
-            if case_type == CaseType.SPECIALTY_MEDICATION:
-                total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
-                coding_section = f"""BILLING INFORMATION:
-- Drug Acquisition Cost: ${cost_ref.get('drug_acquisition_cost', 7800):.2f}
-- Administration Fee: ${cost_ref.get('administration_fee', 150):.2f}
-- Total Amount Billed: ${total_billed:.2f}"""
-            else:
-                total_billed = cost_ref.get('procedure_cost', 7800)
-                coding_section = f"BILLING INFORMATION:\n- Procedure Cost: ${total_billed:.2f}"
-        else:
-            coding_section = "BILLING INFORMATION: (billing details not provided)"
+    coding_section = phase3_provider_coding_section(coding_options, cost_ref, case_type)
 
     provider_behavior_section = ""
 
@@ -228,33 +208,7 @@ IMPORTANT CONSTRAINTS - PHASE 3:
 4. Each appeal costs staff time - consider abandoning if unlikely to succeed
 
 RESPONSE FORMAT (JSON):
-{{
-    "internal_rationale": {{
-        "reasoning": "<why you expect this claim to be paid or denied>",
-        "documentation_completeness": "<assessment of your documentation>"
-    }},
-    "insurer_request": {{
-        "diagnosis_codes": [
-            {{
-                "icd10": "<ICD-10 code>",
-                "description": "<diagnosis description>"
-            }}
-        ],
-        "procedure_codes": [
-            {{
-                "code": "<CPT/HCPCS/J-code>",
-                "code_type": "CPT" or "HCPCS" or "J-code",
-                "description": "<service description>",
-                "quantity": <number>,
-                "amount_billed": <dollar amount per unit>
-            }}
-        ],
-        "total_amount_billed": <total dollar amount>,
-        "clinical_notes": "<narrative documentation of care delivered>",
-        "discharge_summary": "<if applicable, final discharge documentation>",
-        "supporting_documentation": "<any additional clarifying records>"
-    }}
-}}
+{phase3_provider_response_format()}
 
 IMPORTANT: The internal_rationale is for YOUR use only.
 The insurer_request section is what you send to the payor for claims adjudication."""
@@ -263,9 +217,9 @@ The insurer_request section is what you send to the payor for claims adjudicatio
 
 
 def create_unified_phase3_payor_review_prompt(
-    state, provider_request, iteration, stage=None, level=None,
+    state, provider_request, iteration, level,
     service_request=None, cost_ref=None, case=None, phase_2_evidence=None,
-    case_type="specialty_medication", provider_billed_amount=None
+    case_type=None, provider_billed_amount=None, pend_count_at_level=0
 ):
     """
     Phase 3 unified payor prompt: retrospective review / claims adjudication
@@ -295,27 +249,16 @@ def create_unified_phase3_payor_review_prompt(
                     total += amount
         return total if has_amount else None
 
-    # resolve level from stage name if not provided directly
-    if level is None and stage:
-        level = LEVEL_NAME_MAP.get(stage, 0)
-    elif level is None:
-        level = 0
+    if level not in WORKFLOW_LEVELS:
+        raise ValueError(f"unknown level '{level}' in create_unified_phase3_payor_review_prompt")
+    if case_type is None:
+        raise ValueError("create_unified_phase3_payor_review_prompt requires case_type")
 
-    level_config = WORKFLOW_LEVELS.get(level, WORKFLOW_LEVELS[0])
+    level_config = WORKFLOW_LEVELS[level]
 
     # build service summary
-    from src.models.schemas import CaseType
     if service_request:
-        if case_type == CaseType.SPECIALTY_MEDICATION:
-            service_name = service_request.get('medication_name', 'medication')
-            service_summary = f"""CLAIM SUBMITTED:
-- Medication: {service_request.get('medication_name')}
-- Dosage Administered: {service_request.get('dosage')}"""
-        else:
-            service_name = service_request.get('service_name', service_request.get('treatment_name', service_request.get('procedure_name', 'procedure')))
-            service_summary = f"""CLAIM SUBMITTED:
-- Procedure/Service: {service_name}
-- Clinical Indication: {service_request.get('clinical_indication', service_request.get('treatment_justification', 'N/A'))}"""
+        service_summary = phase3_payor_service_summary(service_request, case_type)
     else:
         service_summary = "CLAIM SUBMITTED: (service details not provided)"
 
@@ -378,21 +321,10 @@ def create_unified_phase3_payor_review_prompt(
 
     # get diagnosis codes if present
     diagnosis_codes = provider_request.get('diagnosis_codes', [])
-    diagnosis_summary = ""
-    if diagnosis_codes:
-        diagnosis_summary = "\nDiagnosis Codes:\n" + "\n".join([
-            f"  - {d.get('icd10')}: {d.get('description')}" for d in diagnosis_codes
-        ])
+    diagnosis_summary = phase3_payor_diagnosis_summary(diagnosis_codes)
 
     # extract procedure codes (line-level billing)
-    procedure_summary = ""
-    if procedure_codes:
-        procedure_summary = "\nProcedure Codes Submitted:\n"
-        for idx, proc in enumerate(procedure_codes, 1):
-            procedure_summary += f"  Line {idx}: {proc.get('code')} ({proc.get('code_type')})\n"
-            procedure_summary += f"    Description: {proc.get('description')}\n"
-            procedure_summary += f"    Quantity: {proc.get('quantity')}\n"
-            procedure_summary += f"    Amount Billed: ${proc.get('amount_billed', 0):.2f}\n"
+    procedure_summary = phase3_payor_procedure_summary(procedure_codes)
 
     # inject payor policy view if available
     policy_section = ""
@@ -413,14 +345,18 @@ Review the claim documentation against payment guidelines.
     role_label = level_config["role_label"]
     review_style = level_config["review_style"]
     level_description = level_config["description"]
-    can_pend = level_config["can_pend"]
+    can_pend_by_level = level_config["can_pend"]
     is_terminal = level_config["terminal"]
     is_independent = level_config["independent"]
 
+    # enforce MAX_REQUEST_INFO_PER_LEVEL: disable pend if limit reached
+    can_pend = can_pend_by_level and (pend_count_at_level < MAX_REQUEST_INFO_PER_LEVEL)
+    pend_limit_reached = can_pend_by_level and (pend_count_at_level >= MAX_REQUEST_INFO_PER_LEVEL)
+
     if can_pend:
-        decision_options = "approved | denied | pending_info"
+        decision_options = "approved | downgrade | denied | pending_info"
     else:
-        decision_options = "approved | denied"
+        decision_options = "approved | downgrade | denied"
 
     stage_instruction = f"""LEVEL {level} - {level_config['name'].upper()} ({role_label}):
 Reviewer: {role_label}
@@ -428,12 +364,21 @@ Mode: {review_style}
 Decision options: {decision_options}
 {level_description}
 
+{PAYOR_ACTIONS_GUIDE}
+
 CRITICAL - PHASE 3 OPERATIONAL CONTEXT:
 - This is RETROSPECTIVE REVIEW: care already completed
 - You are deciding PAYMENT, not authorization
 - Record is FIXED: you cannot request new clinical actions
 - REQUEST_INFO can only ask for EXISTING documentation (discharge summary, records)
 - Provider may abandon pended claims (pends have high abandonment rate)
+- DOWNGRADE in Phase 3 means approving lower-level code/DRG than submitted
+
+"""
+    if pend_limit_reached:
+        stage_instruction += f"""CRITICAL: You have reached the maximum REQUEST_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends) at this level.
+You MUST issue a final decision: APPROVED, DOWNGRADE, or DENIED.
+REQUEST_INFO (pending_info) is NO LONGER available.
 
 """
     if is_terminal:
@@ -483,37 +428,7 @@ DECISION GUIDANCE:
   - Do NOT cite "no procedure codes" or "$0 billed" if procedure lines are listed or total billed is nonzero
 
 RESPONSE FORMAT (JSON):
-{{
-    "authorization_status": "{decision_options.replace(' | ', '" or "')}",  // overall: "approved", "denied", "partial", or "pending_info"
-
-    // LINE-LEVEL ADJUDICATION (X12 835 remittance advice aligned)
-    // adjudicate each submitted procedure code line separately
-    "line_adjudications": [
-        {{
-            "line_number": <1-based index into procedure_codes array>,
-            "procedure_code": "<CPT/HCPCS code from submission>",
-            "adjudication_status": "approved" or "denied" or "partial",
-            "billed_amount": <amount provider billed>,
-            "allowed_amount": <payor's contractual allowed amount>,
-            "paid_amount": <actual payment amount>,
-            "adjustment_reason": "<reason for denial or adjustment, if any>"
-        }}
-    ],
-
-    // OVERALL CLAIM-LEVEL FIELDS
-    "total_paid_amount": <sum of all line paid_amounts>,
-
-    // if pending_info (only for Levels 0-1):
-    "pend_reason": "<what EXISTING documentation is missing>",
-    "requested_documents": ["<discharge summary>", "<operative report>", etc.],
-
-    // if fully denied (all lines denied):
-    "denial_reason": "<overall reason for full claim denial>",
-
-    "criteria_used": "<payment guidelines or policies applied>",
-    "reviewer_type": "{role_label}",
-    "level": {level}
-}}
+{phase3_payor_response_format(decision_options, role_label, level, can_pend)}
 
 IMPORTANT:
 - You are reviewing payment for services ALREADY RENDERED

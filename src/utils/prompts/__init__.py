@@ -8,6 +8,7 @@ with existing code that imports from src.utils.prompts
 # Config and constants
 from .config import (
     MAX_ITERATIONS,
+    MAX_REQUEST_INFO_PER_LEVEL,
     INTERNAL_REASONING,
     WORKFLOW_LEVELS,
     LEVEL_NAME_MAP,
@@ -20,9 +21,10 @@ from .config import (
     PAYOR_ACTIONS_GUIDE,
     PROVIDER_RESPONSE_MATRIX,
     PROVIDER_REQUEST_TYPES,
-    PROVIDER_ACTIONS,
-    PAYOR_ACTIONS,
-    REQUEST_TYPES,
+    VALID_PROVIDER_ACTIONS,
+    VALID_PAYOR_ACTIONS,
+    VALID_REQUEST_TYPES,
+    VALID_TREATMENT_DECISIONS,
 )
 
 # System prompts (provider and payor base context)
@@ -34,7 +36,7 @@ from .system_prompts import (
 # Phase 2 prompts (pre-adjudication UR)
 from .phase2_prompts import (
     create_unified_provider_request_prompt,
-    create_treatment_decision_after_pa_denial_prompt,
+    create_treatment_decision_after_phase2_denial_prompt,
     create_unified_payor_review_prompt,
 )
 
@@ -49,6 +51,7 @@ from .phase3_prompts import (
 __all__ = [
     # Config
     "MAX_ITERATIONS",
+    "MAX_REQUEST_INFO_PER_LEVEL",
     "INTERNAL_REASONING",
     "WORKFLOW_LEVELS",
     "LEVEL_NAME_MAP",
@@ -62,15 +65,16 @@ __all__ = [
     "PAYOR_ACTIONS_GUIDE",
     "PROVIDER_RESPONSE_MATRIX",
     "PROVIDER_REQUEST_TYPES",
-    "PROVIDER_ACTIONS",
-    "PAYOR_ACTIONS",
-    "REQUEST_TYPES",
+    "VALID_PROVIDER_ACTIONS",
+    "VALID_PAYOR_ACTIONS",
+    "VALID_REQUEST_TYPES",
+    "VALID_TREATMENT_DECISIONS",
     # System prompts
     "create_provider_prompt",
     "create_payor_prompt",
     # Phase 2 prompts
     "create_unified_provider_request_prompt",
-    "create_treatment_decision_after_pa_denial_prompt",
+    "create_treatment_decision_after_phase2_denial_prompt",
     "create_unified_payor_review_prompt",
     # Phase 3 prompts
     "create_phase3_claim_submission_decision_prompt",
