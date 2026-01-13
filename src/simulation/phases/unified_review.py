@@ -24,7 +24,8 @@ from langchain_core.messages import HumanMessage
 
 from src.models import (
     EncounterState,
-    AuthorizationRequest
+    AuthorizationRequest,
+    ClaimLineItem
 )
 from src.utils.prompts import (
     create_provider_prompt,
@@ -45,105 +46,89 @@ if TYPE_CHECKING:
     from src.simulation.game_runner import UtilizationReviewSimulation
 
 
-def _get_provider_action_after_payor_decision(
-    sim: "UtilizationReviewSimulation",
+def process_phase3_provider_claim_lines(
+    state: EncounterState,
+    provider_request: Dict[str, Any],
+    iteration_num: int
+) -> None:
+    """
+    convert provider's procedure_codes array into ClaimLineItem objects
+    only process on first iteration or when provider submits new/modified lines
+    """
+    procedure_codes = provider_request.get("procedure_codes", [])
+    if not procedure_codes:
+        return
+
+    # on first submission (iteration 0), create all claim lines
+    if iteration_num == 0:
+        state.claim_lines = []
+        for idx, proc in enumerate(procedure_codes, 1):
+            line = ClaimLineItem(
+                line_number=idx,
+                procedure_code=proc.get("code", ""),
+                code_type=proc.get("code_type", "CPT"),
+                service_description=proc.get("description", ""),
+                quantity=proc.get("quantity", 1),
+                billed_amount=proc.get("amount_billed", 0.0),
+                current_review_level=0
+            )
+            state.claim_lines.append(line)
+    # on subsequent iterations, update existing lines (provider may add documentation but not change billing)
+    # note: provider cannot change procedure codes after initial submission
+
+
+def process_phase3_payor_adjudications(
     state: EncounterState,
     payor_decision: Dict[str, Any],
-    request_type: str,
-    phase: str,
-    current_level: int
-) -> str:
+    iteration_num: int
+) -> None:
     """
-    ask provider to choose action (CONTINUE/APPEAL/ABANDON) after payor decision.
-
-    returns: "continue", "appeal", or "abandon"
+    process payor's line-level adjudications and update ClaimLineItem objects
     """
-    if "action" not in payor_decision:
-        raise ValueError("payor_decision missing required field 'action'")
-    payor_action = payor_decision["action"]
-    denial_reason = payor_decision.get("denial_reason", "")
+    line_adjudications = payor_decision.get("line_adjudications", [])
+    if not line_adjudications:
+        return
 
-    # build prompt explaining situation and asking for action
-    prompt = f"""PROVIDER ACTION DECISION
+    # match payor adjudications to claim lines by line_number
+    for adj in line_adjudications:
+        line_num = adj.get("line_number")
+        if not line_num:
+            continue
 
-You just received a payor decision. You must choose your next action.
+        # find corresponding claim line (1-indexed)
+        if line_num <= len(state.claim_lines):
+            line = state.claim_lines[line_num - 1]
 
-PAYOR DECISION: {payor_action}
-Request Type: {request_type}
-Current Review Level: {current_level}
-{f"Denial/Pend Reason: {denial_reason}" if denial_reason else ""}
+            # update adjudication fields
+            line.adjudication_status = adj.get("adjudication_status")
+            line.allowed_amount = adj.get("allowed_amount")
+            line.paid_amount = adj.get("paid_amount")
+            line.adjustment_reason = adj.get("adjustment_reason")
+            line.current_review_level = iteration_num
+            line.reviewer_type = payor_decision.get("reviewer_type")
 
-{PROVIDER_RESPONSE_MATRIX}
 
-{PROVIDER_ACTIONS_GUIDE}
+def check_phase3_all_lines_finalized(state: EncounterState) -> bool:
+    """
+    check if all claim lines have been finalized (either approved or provider gave up)
+    used for early termination to minimize API calls
+    """
+    if not state.claim_lines:
+        return False
 
-IMPORTANT: Based on the payor decision and request type above, only certain actions are valid (see matrix).
+    for line in state.claim_lines:
+        # line is NOT finalized if:
+        # 1. it's denied but provider hasn't made a decision yet (provider_action is None)
+        # 2. provider decided to appeal it (provider_action == "appeal")
+        if line.adjudication_status == "denied":
+            if line.provider_action is None or line.provider_action == "appeal":
+                return False
+        # pending lines are also not finalized
+        elif line.adjudication_status == "pending":
+            return False
 
-TASK: Choose your action and explain your reasoning.
-
-RESPONSE FORMAT (JSON):
-{{
-    "provider_action": "continue" or "appeal" or "abandon",
-    "reasoning": "<brief explanation of why you chose this action>"
-}}
-
-Return ONLY valid JSON."""
-
-    provider_system_prompt = create_provider_prompt(sim.provider_params)
-    full_prompt = f"{provider_system_prompt}\n\n{prompt}"
-    messages = [HumanMessage(content=full_prompt)]
-
-    # use provider base LLM (this is a strategic decision, not a draft)
-    response = sim.provider_base_llm.invoke(messages)
-    response_text = response.content.strip()
-
-    try:
-        action_data = extract_json_from_text(response_text)
-
-        # validate provider_action field exists
-        if "provider_action" not in action_data:
-            raise ValueError(
-                f"provider action response missing required field 'provider_action'. "
-                f"must be one of: {VALID_PROVIDER_ACTIONS}"
-            )
-
-        provider_action = action_data["provider_action"]
-        reasoning = action_data.get("reasoning", "")
-
-        # validate action is in allowed set
-        if provider_action not in VALID_PROVIDER_ACTIONS:
-            raise ValueError(
-                f"invalid provider_action '{provider_action}'. "
-                f"must be one of: {VALID_PROVIDER_ACTIONS}"
-            )
-
-        # log the action decision
-        sim.audit_logger.log_interaction(
-            phase=phase,
-            agent="provider",
-            action="action_decision",
-            system_prompt=provider_system_prompt,
-            user_prompt=prompt,
-            llm_response=response_text,
-            parsed_output={"provider_action": provider_action, "reasoning": reasoning},
-            metadata={
-                "payor_decision": payor_action,
-                "request_type": request_type,
-                "current_level": current_level
-            }
-        )
-
-        return provider_action
-
-    except ValueError as e:
-        # validation error - re-raise (no defaults)
-        raise
-    except Exception as e:
-        # JSON parsing failed - raise error to surface the bug
-        raise ValueError(
-            f"failed to parse provider action decision: {e}\n"
-            f"Response: {response_text}"
-        )
+    # all lines are either approved or denied+accepted
+    return True
 
 
 def build_provider_evidence_packet(
@@ -352,19 +337,9 @@ def run_unified_multi_level_review(
         if not request_type and "insurer_request" in provider_response_full:
             request_type = provider_response_full.get("insurer_request", {}).get("request_type")
 
-        # validate request_type is present and valid
-        if not request_type:
-            raise ValueError(
-                f"provider response missing required field 'request_type' at turn {turn_count}. "
-                f"must be one of: {VALID_REQUEST_TYPES}"
-            )
-        if request_type not in VALID_REQUEST_TYPES:
-            raise ValueError(
-                f"invalid request_type '{request_type}' at turn {turn_count}. "
-                f"must be one of: {VALID_REQUEST_TYPES}"
-            )
-
-        print(f"  provider submitted {request_type} request")
+        # PHASE 3 ONLY: process line-level claim submission
+        if phase == "phase_3_claims":
+            process_phase3_provider_claim_lines(state, provider_request, iteration_num)
 
         # log provider request
         sim.audit_logger.log_interaction(
@@ -559,19 +534,9 @@ def run_unified_multi_level_review(
         if state.friction_metrics:
             state.friction_metrics.payor_actions += 1
 
-        # validate action is present and valid
-        if "action" not in payor_decision:
-            raise ValueError(
-                f"payor response missing required field 'action' at turn {turn_count}. "
-                f"must be one of: {VALID_PAYOR_ACTIONS}"
-            )
-
-        payor_action = payor_decision["action"]
-        if payor_action not in VALID_PAYOR_ACTIONS:
-            raise ValueError(
-                f"invalid action '{payor_action}' at turn {turn_count}. "
-                f"must be one of: {VALID_PAYOR_ACTIONS}"
-            )
+        # PHASE 3 ONLY: process line-level adjudications
+        if phase == "phase_3_claims":
+            process_phase3_payor_adjudications(state, payor_decision, iteration_num)
 
         # track iteration for next round
         iteration_record = {
@@ -749,30 +714,14 @@ def run_unified_multi_level_review(
                 current_level=current_level
             )
 
-            if provider_action == "continue":
-                # stay at same level, provider will address pend
-                prior_iterations.append(iteration_record)
-                continue
-            else:  # abandon
-                prior_iterations.append(iteration_record)
-                break
-
-        else:
-            # unknown status - treat as denial and break
-            prior_iterations.append(iteration_record)
+        # PHASE 3 ONLY: check for early termination (all lines finalized)
+        if phase == "phase_3_claims" and check_phase3_all_lines_finalized(state):
+            # all claim lines are either approved or provider accepted the denial
+            # no need to continue iterating - early exit to save API calls
             break
 
-    # if treatment never approved, determine final authorization status (Phase 2 only)
-    if phase == "phase_2_utilization_review" and not treatment_approved:
-        # determine what the final status should be based on last payor decision
-        if not prior_iterations:
-            raise ValueError(f"{phase}: treatment not approved but no prior iterations recorded")
-
-        last_iteration = prior_iterations[-1]
-        if "payor_decision" not in last_iteration:
-            raise ValueError(f"{phase}: last iteration missing payor_decision")
-        last_payor_action = last_iteration["payor_decision"]
-
+    # if treatment never approved, mark as denied
+    if not treatment_approved:
         # try to populate from last provider request if available
         last_request_type = "medication"
         last_service_name = ""
