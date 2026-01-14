@@ -35,19 +35,27 @@ def _provider_claim_submission_decision(
     """
     import json
     from langchain_core.messages import HumanMessage
-    if not state.authorization_request:
+
+    # must have service lines from Phase 2
+    if not state.service_lines:
         return "skip"
-    pa_status = state.authorization_request.authorization_status
-    if pa_status == "approved":
+
+    # check first service line status (MVP: single line)
+    first_line = state.service_lines[0]
+    p2_status = first_line.authorization_status
+
+    if p2_status == "approved":
         return "submit_claim"
 
-    # PA was denied - provider must decide whether to submit claim anyway
-    denial_reason = state.authorization_request.denial_reason if hasattr(state.authorization_request, 'denial_reason') else "Not specified"
+    # PA was denied/modified/pended - provider must decide whether to submit claim anyway
+    decision_reason = "Not specified"
+    if first_line.decision_reason:
+        decision_reason = "; ".join(first_line.decision_reason)
 
     prompt = create_phase3_claim_submission_decision_prompt(
         state=state,
-        pa_status=pa_status,
-        denial_reason=denial_reason,
+        p2_status=p2_status,
+        decision_reason=decision_reason,
     )
 
     response = sim.provider.llm.invoke([HumanMessage(content=prompt)])
@@ -93,24 +101,29 @@ def run_phase_3_claims(
     provider_decision = _provider_claim_submission_decision(sim, state, case, case_type)
 
     if provider_decision == "skip":
-        #internal flow control, not an action in the action space
+        # internal flow control, not an action in the action space
         return state
 
-    # extract service details from authorization_request (unified across all case types)
-    if state.authorization_request:
-        service_request = {
-            "service_name": state.authorization_request.service_name,
-            "dosage": state.authorization_request.dosage,
-            "frequency": state.authorization_request.frequency,
-            "clinical_rationale": state.authorization_request.clinical_rationale,
-            "cpt_code": state.authorization_request.cpt_code,
-            "ndc_code": state.authorization_request.ndc_code,
-            "j_code": state.authorization_request.j_code,
-        }
-        if case_type == "specialty_medication":
-            service_request["medication_name"] = state.authorization_request.service_name
-    else:
-        service_request = {}
+    # REUSE service_lines from Phase 2 (already populated by unified_review.py)
+    # extract service details from first service line (MVP: single line)
+    if not state.service_lines:
+        raise ValueError("Phase 3: no service lines found - Phase 2 must populate service_lines")
+
+    first_line = state.service_lines[0]
+
+    # build service_request dict for prompts (maintains backward compatibility with existing prompts)
+    service_request = {
+        "service_name": first_line.service_name,
+        "dosage": first_line.dosage,
+        "frequency": first_line.frequency,
+        "clinical_rationale": first_line.clinical_rationale,
+        "cpt_code": first_line.cpt_code,
+        "ndc_code": first_line.ndc_code,
+        "j_code": first_line.j_code,
+    }
+
+    if case_type == "specialty_medication":
+        service_request["medication_name"] = first_line.service_name
 
     cost_ref = case.get("cost_reference", {})
     phase_2_evidence = {}

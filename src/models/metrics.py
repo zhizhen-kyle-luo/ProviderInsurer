@@ -14,7 +14,3 @@ class FrictionMetrics(BaseModel):
 
     # ED (Escalation Depth): 0=Approved First Try, 1=First Appeal, 2=Second Appeal, 3=Abandon
     escalation_depth: int = 0
-
-    @property
-    def total_friction(self) -> int:
-        return self.provider_actions + self.payor_actions + self.probing_tests_count + self.escalation_depth

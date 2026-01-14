@@ -5,8 +5,7 @@ from .patient import (
     AdmissionNotification,
     ClinicalPresentation
 )
-from .authorization import AuthorizationRequest
-from .financial import ClaimLineItem
+from .financial import ServiceLineRequest
 from .metrics import FrictionMetrics
 from .state import EncounterState
 from .audit import (
@@ -27,10 +26,8 @@ __all__ = [
     "PatientDemographics",
     "AdmissionNotification",
     "ClinicalPresentation",
-    # authorization
-    "AuthorizationRequest",
     # financial
-    "ClaimLineItem",
+    "ServiceLineRequest",
     # metrics
     "FrictionMetrics",
     # state

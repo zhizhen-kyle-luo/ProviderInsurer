@@ -53,7 +53,7 @@ def convert_case_to_models(case_dict):
     case_dict["admission"] = admission
     case_dict["clinical_presentation"] = clinical_presentation
     case_dict["case_type"] = case_type
-    # provider creates authorization_request during simulation
+    # provider creates service_lines during simulation
     # intended_request stays in environment_hidden_data for ground truth comparison only
 
     return case_dict

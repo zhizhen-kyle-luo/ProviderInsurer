@@ -30,28 +30,18 @@ def print_results(result):
         print(f"history: {', '.join(result.clinical_presentation.medical_history[:2])}")
 
     print("\nphase 2: prior authorization")
-    if result.authorization_request:
-        print(f"request: {result.authorization_request.service_name}")
-        print(f"type: {result.authorization_request.request_type}")
-        if result.authorization_request.dosage:
-            print(f"dosage: {result.authorization_request.dosage}")
-        if result.authorization_request.cpt_code:
-            print(f"cpt: {result.authorization_request.cpt_code}")
-
-        status = result.authorization_request.authorization_status
-        if status:
-            print(f"pa status: {status.upper()}")
-            if result.authorization_request.denial_reason:
-                print(f"denial: {result.authorization_request.denial_reason[:80]}...")
+    if result.service_lines:
+        line = result.service_lines[0]
+        print(f"authorization status: {line.authorization_status or 'N/A'}")
+    else:
+        print("no authorization request")
 
     print("\nphase 3: claims adjudication")
-    if result.authorization_request and result.authorization_request.authorization_status == "approved":
-        print("claim submitted and processed")
-        if result.appeal_filed:
-            print(f"appeal filed: {result.appeal_filed}")
-            print(f"appeal successful: {result.appeal_successful}")
+    if result.service_lines and result.service_lines[0].adjudication_status:
+        line = result.service_lines[0]
+        print(f"adjudication status: {line.adjudication_status}")
     else:
-        print("no claim (pa denied)")
+        print("no claim adjudication")
 
     print("\nphase 4: financial settlement")
     if result.financial_settlement:
