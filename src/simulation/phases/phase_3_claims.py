@@ -7,8 +7,8 @@ Uses unified_review.py for core 3-level logic, same structure as Phase 2:
 - level 2: independent_review (final IRE review, no pend)
 """
 
-from typing import Dict, Any, TYPE_CHECKING
-from src.models import EncounterState
+from typing import Dict, Any, List, TYPE_CHECKING
+from src.models import EncounterState, ServiceLineRequest
 from src.utils.prompts import (
     create_phase3_claim_submission_decision_prompt,
     create_unified_phase3_provider_request_prompt,
@@ -18,6 +18,33 @@ from src.simulation.phases.unified_review import run_unified_multi_level_review
 
 if TYPE_CHECKING:
     from src.simulation.game_runner import UtilizationReviewSimulation
+
+
+def _build_service_requests_from_lines(
+    service_lines: List[ServiceLineRequest],
+    case_type: str
+) -> List[Dict[str, Any]]:
+    """build service_request dicts from all service lines for prompts"""
+    service_requests = []
+    for line in service_lines:
+        service_request = {
+            "line_number": line.line_number,
+            "service_name": line.service_name,
+            "dosage": line.dosage,
+            "frequency": line.frequency,
+            "clinical_rationale": line.clinical_rationale,
+            "cpt_code": line.cpt_code,
+            "ndc_code": line.ndc_code,
+            "j_code": line.j_code,
+            "procedure_code": line.procedure_code,
+            "code_type": line.code_type,
+            "service_description": line.service_description,
+            "requested_quantity": line.requested_quantity,
+        }
+        if case_type == "specialty_medication":
+            service_request["medication_name"] = line.service_name
+        service_requests.append(service_request)
+    return service_requests
 
 
 def _provider_claim_submission_decision(
@@ -36,21 +63,25 @@ def _provider_claim_submission_decision(
     import json
     from langchain_core.messages import HumanMessage
 
-    # must have service lines from Phase 2
     if not state.service_lines:
         return "skip"
 
-    # check first service line status (MVP: single line)
-    first_line = state.service_lines[0]
-    p2_status = first_line.authorization_status
-
-    if p2_status == "approved":
+    # check if any service line was approved - auto-submit if so
+    any_approved = any(
+        line.authorization_status == "approved" for line in state.service_lines
+    )
+    if any_approved:
         return "submit_claim"
 
-    # PA was denied/modified/pended - provider must decide whether to submit claim anyway
-    decision_reason = "Not specified"
-    if first_line.decision_reason:
-        decision_reason = "; ".join(first_line.decision_reason)
+    # build per-line status summary
+    line_summaries = []
+    for line in state.service_lines:
+        status = line.authorization_status or "unknown"
+        reason = line.decision_reason or "not specified"
+        line_summaries.append(f"Line {line.line_number}: {status} - {reason}")
+
+    p2_status = "; ".join(line_summaries) if line_summaries else "unknown"
+    decision_reason = p2_status  # same info, per-line breakdown
 
     prompt = create_phase3_claim_submission_decision_prompt(
         state=state,
@@ -61,7 +92,6 @@ def _provider_claim_submission_decision(
     response = sim.provider.llm.invoke([HumanMessage(content=prompt)])
     response_text = response.content.strip()
 
-    # parse decision
     try:
         if "```json" in response_text:
             response_text = response_text.split("```json")[1].split("```")[0].strip()
@@ -74,7 +104,6 @@ def _provider_claim_submission_decision(
         return decision if decision in ["submit_claim", "skip"] else "skip"
 
     except (json.JSONDecodeError, KeyError) as e:
-        # parsing failed - raise error to surface the bug
         raise ValueError(f"failed to parse provider claim submission decision: {e}\nResponse: {response_text}")
 
 
@@ -97,42 +126,26 @@ def run_phase_3_claims(
 
     CRITICAL: Provider decides whether to submit claim even if PA was denied
     """
-    # provider decision: should I submit a claim? this decision is made even if PA was denied
     provider_decision = _provider_claim_submission_decision(sim, state, case, case_type)
 
     if provider_decision == "skip":
-        # internal flow control, not an action in the action space
         return state
 
-    # REUSE service_lines from Phase 2 (already populated by unified_review.py)
-    # extract service details from first service line (MVP: single line)
     if not state.service_lines:
         raise ValueError("Phase 3: no service lines found - Phase 2 must populate service_lines")
 
-    first_line = state.service_lines[0]
+    # build service_requests from all lines
+    service_requests = _build_service_requests_from_lines(state.service_lines, case_type)
 
-    # build service_request dict for prompts (maintains backward compatibility with existing prompts)
-    service_request = {
-        "service_name": first_line.service_name,
-        "dosage": first_line.dosage,
-        "frequency": first_line.frequency,
-        "clinical_rationale": first_line.clinical_rationale,
-        "cpt_code": first_line.cpt_code,
-        "ndc_code": first_line.ndc_code,
-        "j_code": first_line.j_code,
-    }
-
-    if case_type == "specialty_medication":
-        service_request["medication_name"] = first_line.service_name
+    # for backwards compatibility, also provide single service_request (first line)
+    service_request = service_requests[0] if service_requests else {}
 
     cost_ref = case.get("cost_reference", {})
     phase_2_evidence = {}
 
-    # extract coding options for DRG upcoding scenarios (grey zone cases)
     environment_data = case.get("environment_hidden_data", {})
     coding_options = environment_data.get("coding_options", [])
 
-    # Call unified review with Phase 3 prompts
     state = run_unified_multi_level_review(
         sim=sim,
         state=state,
@@ -142,6 +155,7 @@ def run_phase_3_claims(
         payor_prompt_fn=create_unified_phase3_payor_review_prompt,
         provider_prompt_kwargs={
             "service_request": service_request,
+            "service_requests": service_requests,
             "cost_ref": cost_ref,
             "phase_2_evidence": phase_2_evidence,
             "case_type": case_type,
@@ -149,6 +163,7 @@ def run_phase_3_claims(
         },
         payor_prompt_kwargs={
             "service_request": service_request,
+            "service_requests": service_requests,
             "cost_ref": cost_ref,
             "case": case,
             "phase_2_evidence": phase_2_evidence,

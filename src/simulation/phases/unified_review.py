@@ -267,13 +267,11 @@ def run_unified_multi_level_review(
         if state.friction_metrics:
             state.friction_metrics.provider_actions += 1
             state.friction_metrics.payor_actions += 1
-            # count probing tests
-            svc = provider_request.get("requested_service", {}) or {}
-            tests = svc.get("tests_requested")
-            if isinstance(tests, list) and tests:
-                state.friction_metrics.probing_tests_count += len(tests)
-            elif request_type == "diagnostic_test":
-                state.friction_metrics.probing_tests_count += 1
+            # count probing tests from all requested services
+            requested_services = provider_request.get("requested_services", [])
+            for svc in requested_services:
+                if svc.get("request_type") == "diagnostic_test":
+                    state.friction_metrics.probing_tests_count += 1
             state.friction_metrics.escalation_depth = max(
                 state.friction_metrics.escalation_depth, current_level
             )
@@ -368,7 +366,20 @@ def _get_provider_request(
             raise ValueError("expected dict, got {}".format(type(provider_response_full)))
 
         provider_request = provider_response_full.get("insurer_request", {})
-        request_type = provider_request.get("request_type")
+
+        # extract request_type from requested_services array
+        requested_services = provider_request.get("requested_services", [])
+        if not requested_services or not isinstance(requested_services, list):
+            raise ValueError("provider_request missing required field 'requested_services'")
+        request_type = requested_services[0].get("request_type")
+        for svc in requested_services:
+            svc_type = svc.get("request_type")
+            if not svc_type:
+                raise ValueError("requested_services entry missing required field 'request_type'")
+            if svc_type not in VALID_REQUEST_TYPES:
+                raise ValueError(
+                    f"invalid request_type '{svc_type}'. must be one of: {VALID_REQUEST_TYPES}"
+                )
 
         # PHASE 3 ONLY: process line-level claim submission
         if phase == "phase_3_claims":
@@ -516,7 +527,7 @@ def _handle_payor_decision_outcome(
 
     elif payor_action == "modified":
         outcome = handle_modification(
-            sim, state, payor_decision, request_type, phase, current_level,
+            sim, state, provider_request, payor_decision, request_type, phase, current_level,
             iteration_record, prior_iterations
         )
         return {
@@ -529,7 +540,7 @@ def _handle_payor_decision_outcome(
 
     elif payor_action == "denied":
         outcome, provider_abandoned = handle_denial(
-            sim, state, payor_decision, request_type, phase, current_level,
+            sim, state, provider_request, payor_decision, request_type, phase, current_level,
             iteration_record, prior_iterations
         )
         return {

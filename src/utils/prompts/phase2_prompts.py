@@ -32,6 +32,52 @@ from .prompt_renderers import (
 )
 
 
+def _render_request_summary(requested_service: dict) -> str:
+    """render summary for a single requested service based on its type"""
+    request_type = requested_service.get("request_type")
+    if request_type == "diagnostic_test":
+        return phase2_diagnostic_request_summary(requested_service)
+    if request_type == "level_of_care":
+        return phase2_level_of_care_request_summary(requested_service)
+    if request_type == "treatment":
+        guideline_refs = requested_service.get("guideline_references", [])
+        return phase2_treatment_request_summary(requested_service, guideline_refs)
+    raise ValueError(f"unknown request_type '{request_type}'")
+
+
+def _render_all_request_summaries(requested_services: list[dict]) -> str:
+    """render summaries for all requested services"""
+    if len(requested_services) == 1:
+        return _render_request_summary(requested_services[0])
+    parts = []
+    for svc in requested_services:
+        line_num = svc.get("line_number", "?")
+        parts.append(f"SERVICE LINE {line_num}:")
+        parts.append(_render_request_summary(svc))
+        parts.append("")
+    return "\n".join(parts)
+
+
+def _render_evaluation_criteria(request_types: list[str]) -> str:
+    """render evaluation criteria for all request types in the batch"""
+    criteria = []
+    for req_type in sorted(set(request_types)):
+        if req_type == "diagnostic_test":
+            criteria.append("- Is diagnostic test medically necessary to establish diagnosis?")
+            criteria.append("- Will test results meaningfully change clinical management?")
+        elif req_type == "level_of_care":
+            criteria.append("- Does clinical severity justify requested level of care?")
+            criteria.append("- Do severity indicators meet criteria for requested status vs alternative?")
+        elif req_type == "treatment":
+            criteria.append("- Is treatment medically necessary based on clinical evidence?")
+            criteria.append("- Has step therapy been completed (if applicable)?")
+        else:
+            raise ValueError(f"unknown request_type '{req_type}'")
+    criteria.append("- Does request align with clinical guidelines?")
+    criteria.append("- Is documentation sufficient?")
+    return "\n".join(criteria)
+
+
 def create_unified_provider_request_prompt(state, case, iteration, prior_iterations, level):
     """Unified provider prompt for Phase 2 pre-adjudication utilization review.
     """
@@ -164,55 +210,27 @@ Use your clinical judgment and documentation constraints to guide this decision.
 
 
 def create_unified_payor_review_prompt(state, provider_request, iteration, level, pend_count_at_level=0):
-    """Unified payor prompt for Phase 2 pre-adjudication utilization review.
-    """
-
+    """Unified payor prompt for Phase 2 pre-adjudication utilization review."""
     if level not in WORKFLOW_LEVELS:
         raise ValueError(f"unknown level '{level}' in create_unified_payor_review_prompt")
 
     level_config = WORKFLOW_LEVELS[level]
 
-    if 'request_type' not in provider_request:
-        raise ValueError("provider_request missing required field 'request_type'")
-    request_type = provider_request.get('request_type')
-    if not request_type:
-        raise ValueError("provider_request.request_type is empty")
+    # extract requested_services (new multi-line format)
+    if "requested_services" not in provider_request:
+        raise ValueError("provider_request missing required field 'requested_services'")
+    requested_services = provider_request["requested_services"]
+    if not isinstance(requested_services, list) or not requested_services:
+        raise ValueError("provider_request.requested_services must be a non-empty list")
 
-    if 'requested_service' not in provider_request:
-        raise ValueError("provider_request missing required field 'requested_service'")
-    requested_service = provider_request.get('requested_service')
-    if not isinstance(requested_service, dict):
-        raise ValueError("provider_request.requested_service must be a dict")
+    request_types = []
+    for svc in requested_services:
+        request_type = svc.get("request_type")
+        if not request_type:
+            raise ValueError("requested_services entry missing required field 'request_type'")
+        request_types.append(request_type)
 
-    if request_type == 'diagnostic_test':
-        if 'service_name' not in requested_service:
-            raise ValueError("requested_service missing required field 'service_name' for diagnostic_test")
-        if 'test_justification' not in requested_service:
-            raise ValueError("requested_service missing required field 'test_justification' for diagnostic_test")
-        if 'expected_findings' not in requested_service:
-            raise ValueError("requested_service missing required field 'expected_findings' for diagnostic_test")
-        request_summary = phase2_diagnostic_request_summary(requested_service)
-    elif request_type == 'level_of_care':
-        if 'requested_status' not in requested_service:
-            raise ValueError("requested_service missing required field 'requested_status' for level_of_care")
-        if 'alternative_status' not in requested_service:
-            raise ValueError("requested_service missing required field 'alternative_status' for level_of_care")
-        if 'severity_indicators' not in requested_service:
-            raise ValueError("requested_service missing required field 'severity_indicators' for level_of_care")
-        request_summary = phase2_level_of_care_request_summary(requested_service)
-    elif request_type == 'treatment':
-        if 'service_name' not in requested_service:
-            raise ValueError("requested_service missing required field 'service_name' for treatment")
-        if 'clinical_evidence' not in requested_service:
-            raise ValueError("requested_service missing required field 'clinical_evidence' for treatment")
-        if 'guideline_references' not in requested_service:
-            raise ValueError("requested_service missing required field 'guideline_references' for treatment")
-        guideline_references = requested_service.get('guideline_references')
-        if not isinstance(guideline_references, list):
-            raise ValueError("requested_service.guideline_references must be a list for treatment")
-        request_summary = phase2_treatment_request_summary(requested_service, guideline_references)
-    else:
-        raise ValueError(f"unknown request_type '{request_type}' - must be 'diagnostic_test', 'level_of_care', or 'treatment'")
+    request_summary = _render_all_request_summaries(requested_services)
 
     # get diagnosis codes if present
     if 'diagnosis_codes' not in provider_request:
@@ -302,18 +320,7 @@ PATIENT CONTEXT:
 TASK: Review the Phase 2 pre-adjudication utilization review request and issue a coverage decision (or REQUEST_INFO) based on medical necessity and coverage criteria.
 
 EVALUATION CRITERIA:
-{
-    "- Is diagnostic test medically necessary to establish diagnosis?" if request_type == 'diagnostic_test'
-    else "- Does clinical severity justify requested level of care?" if request_type == 'level_of_care'
-    else "- Is treatment medically necessary based on clinical evidence?"
-}
-{
-    "- Will test results meaningfully change clinical management?" if request_type == 'diagnostic_test'
-    else "- Do severity indicators meet criteria for requested status vs alternative?" if request_type == 'level_of_care'
-    else "- Has step therapy been completed (if applicable)?"
-}
-- Does request align with clinical guidelines?
-- Is documentation sufficient?
+{_render_evaluation_criteria(request_types)}
 
 RESPONSE: Return ONLY valid JSON (no narrative text, no explanation). Do not deviate from this format.
 

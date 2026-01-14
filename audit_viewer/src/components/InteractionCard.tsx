@@ -58,25 +58,40 @@ export function InteractionCard({ interaction, index }: InteractionCardProps) {
 
       {/* metadata */}
       {interaction.metadata && Object.keys(interaction.metadata).length > 0 && (
-        <div className="mb-4 text-xs text-gray-600">
-          {interaction.metadata.iteration !== undefined && (
-            <span className="mr-4">
-              <strong>Iteration:</strong> {interaction.metadata.iteration}
-            </span>
-          )}
-          {interaction.metadata.stage && (
-            <span className="mr-4">
-              <strong>Stage:</strong> {interaction.metadata.stage}
-            </span>
-          )}
+        <div className="mb-4 text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
           {interaction.metadata.level !== undefined && (
-            <span className="mr-4">
+            <span>
               <strong>Level:</strong> {interaction.metadata.level}
             </span>
           )}
+          {interaction.metadata.stage && (
+            <span>
+              <strong>Stage:</strong> {interaction.metadata.stage}
+            </span>
+          )}
+          {interaction.metadata.request_type && (
+            <span>
+              <strong>Type:</strong> {interaction.metadata.request_type}
+            </span>
+          )}
           {interaction.metadata.oversight_level && (
-            <span className="mr-4">
+            <span>
               <strong>Oversight:</strong> {interaction.metadata.oversight_level}
+            </span>
+          )}
+          {interaction.metadata.copilot_model && (
+            <span>
+              <strong>Copilot:</strong> {interaction.metadata.copilot_model}
+            </span>
+          )}
+          {interaction.metadata.copilot_active === false && (
+            <span className="text-amber-600">
+              <strong>Direct LLM</strong> (no copilot)
+            </span>
+          )}
+          {interaction.metadata.cache_hit && (
+            <span className="text-green-600">
+              <strong>Cache Hit</strong>
             </span>
           )}
         </div>

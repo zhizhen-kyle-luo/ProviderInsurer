@@ -35,26 +35,18 @@ Severity Indicators: {requested_service.get('severity_indicators')}
 
 
 def phase3_provider_service_details(service_request: Dict[str, Any], case_type) -> str:
-    """render Phase 3 provider service details summary"""
-    from src.models import CaseType
-    if case_type == CaseType.SPECIALTY_MEDICATION:
+    """render Phase 3 provider service details summary from ServiceLineRequest fields"""
+    if case_type == "specialty_medication":
         return f"""SERVICE DELIVERED:
-- Medication: {service_request.get('medication_name')}
-- Dosage Administered: {service_request.get('dosage')}
-- Route: {service_request.get('route', 'N/A')}
-- Frequency: {service_request.get('frequency', 'N/A')}"""
+- Medication: {service_request.get('medication_name') or 'N/A'}
+- Dosage Administered: {service_request.get('dosage') or 'N/A'}
+- Frequency: {service_request.get('frequency') or 'N/A'}"""
 
-    service_name = service_request.get(
-        'service_name',
-        service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
-    )
-    clinical_indication = service_request.get(
-        'clinical_indication',
-        service_request.get('treatment_justification', 'N/A')
-    )
+    service_name = service_request.get('service_name') or 'N/A'
+    clinical_rationale = service_request.get('clinical_rationale') or 'N/A'
     return f"""SERVICE DELIVERED:
 - Procedure/Service: {service_name}
-- Clinical Indication: {clinical_indication}"""
+- Clinical Rationale: {clinical_rationale}"""
 
 
 def phase3_provider_coding_section(
@@ -63,7 +55,6 @@ def phase3_provider_coding_section(
     case_type
 ) -> str:
     """render Phase 3 provider coding & billing section"""
-    from src.models import CaseType
     if coding_options:
         coding_section_parts = ["CODING & BILLING OPTIONS:"]
         coding_section_parts.append("You must select ONE diagnosis code based on clinical documentation:")
@@ -76,7 +67,7 @@ def phase3_provider_coding_section(
         return "\n".join(coding_section_parts)
 
     if cost_ref:
-        if case_type == CaseType.SPECIALTY_MEDICATION:
+        if case_type == "specialty_medication":
             total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
             return f"""BILLING INFORMATION:
 - Drug Acquisition Cost: ${cost_ref.get('drug_acquisition_cost', 7800):.2f}
@@ -90,24 +81,17 @@ def phase3_provider_coding_section(
 
 
 def phase3_payor_service_summary(service_request: Dict[str, Any], case_type) -> str:
-    """render Phase 3 payor claim submitted summary"""
-    from src.models import CaseType
-    if case_type == CaseType.SPECIALTY_MEDICATION:
+    """render Phase 3 payor claim submitted summary from ServiceLineRequest fields"""
+    if case_type == "specialty_medication":
         return f"""CLAIM SUBMITTED:
-- Medication: {service_request.get('medication_name')}
-- Dosage Administered: {service_request.get('dosage')}"""
+- Medication: {service_request.get('medication_name') or 'N/A'}
+- Dosage Administered: {service_request.get('dosage') or 'N/A'}"""
 
-    service_name = service_request.get(
-        'service_name',
-        service_request.get('treatment_name', service_request.get('procedure_name', 'procedure'))
-    )
-    clinical_indication = service_request.get(
-        'clinical_indication',
-        service_request.get('treatment_justification', 'N/A')
-    )
+    service_name = service_request.get('service_name') or 'N/A'
+    clinical_rationale = service_request.get('clinical_rationale') or 'N/A'
     return f"""CLAIM SUBMITTED:
 - Procedure/Service: {service_name}
-- Clinical Indication: {clinical_indication}"""
+- Clinical Rationale: {clinical_rationale}"""
 
 
 def render_diagnosis_summary(diagnosis_codes: list[Dict[str, Any]]) -> str:

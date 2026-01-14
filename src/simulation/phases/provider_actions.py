@@ -134,10 +134,12 @@ def provider_treatment_decision_after_phase2_denial(
 
     This is a conditional branch after ABANDON action, not a new action in action space.
     """
-    # get denial reason from first service line if exists
+    # summarize denial reasons from all service lines
     decision_reason = "Phase 2 exhausted without approval"
-    if state.service_lines and state.service_lines[0].authorization_status:
-        decision_reason = f"Phase 2 {state.service_lines[0].authorization_status}"
+    if state.service_lines:
+        statuses = [line.authorization_status for line in state.service_lines if line.authorization_status]
+        if statuses:
+            decision_reason = f"Phase 2 {', '.join(set(statuses))}"
 
     prompt = create_treatment_decision_after_phase2_denial_prompt(
         state=state,

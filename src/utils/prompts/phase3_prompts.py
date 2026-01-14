@@ -26,12 +26,26 @@ from .prompt_renderers import (
 )
 
 
+def _render_service_lines_summary(state) -> str:
+    """render summary of all service lines for prompts"""
+    if not state.service_lines:
+        return "- No service lines"
+    lines = []
+    for line in state.service_lines:
+        status = line.authorization_status or line.adjudication_status or "pending"
+        reviewer = line.reviewer_type or "Unknown"
+        level = line.current_review_level if line.current_review_level is not None else "N/A"
+        lines.append(f"  Line {line.line_number}: {line.service_name or 'N/A'} - {status} ({reviewer}, Level {level})")
+    return "\n".join(lines)
+
+
 def create_phase3_claim_submission_decision_prompt(
     state,
     p2_status: str,
     decision_reason: str,
 ):
     """Prompt for provider decision to submit a claim after phase 2 denial."""
+    service_lines_summary = _render_service_lines_summary(state)
     return f"""PHASE 3: CLAIM SUBMISSION DECISION
 
 SITUATION: Your Phase 2 utilization review request was DENIED, but the patient still received care under your decision.
@@ -40,7 +54,8 @@ You must decide: Submit a claim for payment, or skip claim submission?
 PHASE 2 OUTCOME:
 - Status: {p2_status}
 - Denial Reason: {decision_reason}
-- Service: {state.service_lines[0].service_name if state.service_lines else 'N/A'}
+SERVICE LINES:
+{service_lines_summary}
 
 CLINICAL CONTEXT:
 - Patient Age: {state.admission.patient_demographics.age}
@@ -200,10 +215,8 @@ PATIENT INFORMATION:
 
 {service_details}
 
-PHASE 2 UTILIZATION REVIEW DECISION:
-- Status: {state.service_lines[0].authorization_status if state.service_lines else 'N/A'}
-- Reviewer: {state.service_lines[0].reviewer_type if state.service_lines and state.service_lines[0].reviewer_type else 'Unknown'} (Level {state.service_lines[0].current_review_level if state.service_lines else 'N/A'})
-- Service: {state.service_lines[0].service_name if state.service_lines else 'N/A'}
+PHASE 2 UTILIZATION REVIEW DECISIONS:
+{_render_service_lines_summary(state)}
 
 CLINICAL DOCUMENTATION:
 {combined_clinical_doc}
@@ -418,10 +431,8 @@ Your decision must be based solely on the submitted claim documentation.
 - Amount Billed: ${total_billed:,.2f}
 {diagnosis_summary}{procedure_summary}
 
-PHASE 2 UTILIZATION REVIEW DECISION:
-- Status: {state.service_lines[0].authorization_status if state.service_lines else 'N/A'}
-- Reviewer: {state.service_lines[0].reviewer_type if state.service_lines and state.service_lines[0].reviewer_type else 'Unknown'} (Level {state.service_lines[0].current_review_level if state.service_lines else 'N/A'})
-- Service Approved: {state.service_lines[0].service_name if state.service_lines else 'N/A'}
+PHASE 2 UTILIZATION REVIEW DECISIONS:
+{_render_service_lines_summary(state)}
 
 CLINICAL DOCUMENTATION:
 {combined_clinical_doc}
