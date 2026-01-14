@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from .case_types import CaseType
 from .patient import AdmissionNotification, ClinicalPresentation
 from .authorization import AuthorizationRequest
-from .financial import FinancialSettlement, ClaimLineItem
+from .financial import ClaimLineItem
 from .metrics import FrictionMetrics
 
 if TYPE_CHECKING:
@@ -25,8 +25,6 @@ class EncounterState(BaseModel):
 
     admission: AdmissionNotification
     clinical_presentation: ClinicalPresentation
-
-    financial_settlement: Optional[FinancialSettlement] = None
 
     # unified authorization request (includes both request and payer decision)
     authorization_request: Optional[AuthorizationRequest] = None
