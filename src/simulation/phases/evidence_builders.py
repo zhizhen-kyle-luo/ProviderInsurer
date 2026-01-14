@@ -42,7 +42,7 @@ def build_payor_evidence_packet(
 
     return {
         "policy_content": content_data,
-        "missing_items": provider_request.get("decision_reason", []),
+        "missing_items": provider_request.get("requested_documents", []),
         "provider_diagnosis_codes": [
             d.get("icd10") for d in provider_request.get("diagnosis_codes", [])
         ],

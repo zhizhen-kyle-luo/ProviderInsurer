@@ -1,9 +1,12 @@
 """handle different payor decision outcomes"""
-from typing import Dict, Any, List, Tuple, TYPE_CHECKING
+from typing import Dict, Any, List, Tuple, Optional, TYPE_CHECKING
 
-from src.models import EncounterState
+from src.models import EncounterState, ServiceLineRequest
 from .provider_actions import get_provider_action_after_payor_decision
-from .service_line_builder import create_or_update_service_line_from_approval
+from .service_line_builder import (
+    create_or_update_service_line_from_approval,
+    create_service_lines_from_provider_request
+)
 
 if TYPE_CHECKING:
     from src.simulation.game_runner import UtilizationReviewSimulation
@@ -15,6 +18,62 @@ class DecisionOutcome:
         self.should_continue = should_continue  # continue at same level
         self.should_escalate = should_escalate  # escalate to next level
         self.is_terminal = is_terminal  # end simulation
+
+
+def _find_service_line_by_number(state: EncounterState, line_number: int) -> Optional[ServiceLineRequest]:
+    """find service line by line_number, returns None if not found"""
+    for line in state.service_lines:
+        if line.line_number == line_number:
+            return line
+    return None
+
+
+def _apply_line_adjudication(line: ServiceLineRequest, adjudication: Dict[str, Any], phase: str) -> None:
+    """apply a single line adjudication from payor response to a service line"""
+    if "adjudication_status" not in adjudication:
+        raise ValueError("line_adjudication missing required field 'adjudication_status'")
+    status = adjudication["adjudication_status"]
+
+    if phase == "phase_2_utilization_review":
+        line.authorization_status = status
+        if status == "modified":
+            line.approved_quantity = adjudication.get("approved_quantity")
+            line.modification_type = adjudication.get("modification_type")
+    else:
+        line.adjudication_status = status
+        line.allowed_amount = adjudication.get("allowed_amount")
+        line.paid_amount = adjudication.get("paid_amount")
+        if status == "modified":
+            line.adjustment_amount = adjudication.get("adjustment_amount")
+
+    if adjudication.get("decision_reason"):
+        line.decision_reason = adjudication["decision_reason"]
+    if adjudication.get("requested_documents"):
+        requested_docs = adjudication["requested_documents"]
+        if not isinstance(requested_docs, list):
+            raise ValueError("line_adjudication.requested_documents must be a list")
+        line.requested_documents = requested_docs
+
+
+def _apply_all_line_adjudications(state: EncounterState, payor_decision: Dict[str, Any], phase: str) -> None:
+    """apply line_adjudications array from payor response to all matching service lines"""
+    if not state.service_lines:
+        raise ValueError("cannot apply line_adjudications without service_lines")
+    if "line_adjudications" not in payor_decision:
+        raise ValueError("payor_decision missing required field 'line_adjudications'")
+
+    line_adjudications = payor_decision["line_adjudications"]
+    if not isinstance(line_adjudications, list):
+        raise ValueError("payor_decision.line_adjudications must be a list")
+
+    for adj in line_adjudications:
+        if "line_number" not in adj:
+            raise ValueError("line_adjudication missing required field 'line_number'")
+        line_number = adj["line_number"]
+        line = _find_service_line_by_number(state, line_number)
+        if not line:
+            raise ValueError(f"line_adjudication references unknown line_number {line_number}")
+        _apply_line_adjudication(line, adj, phase)
 
 
 def _all_service_lines_terminal(state: EncounterState, phase: str) -> bool:
@@ -77,15 +136,29 @@ def handle_approval(
 
     Returns: (DecisionOutcome, approved_provider_request or None)
     """
+    if phase == "phase_2_utilization_review" and not state.service_lines:
+        create_service_lines_from_provider_request(state, provider_request, payor_decision)
+
     # TERMINAL SUCCESS: APPROVE of TREATMENT or LEVEL_OF_CARE
     if request_type in ["treatment", "level_of_care"]:
-        # create/update service line with approval
+        # create/update service lines first, then apply payor adjudications
         create_or_update_service_line_from_approval(
             state=state,
             provider_request=provider_request,
             payor_decision=payor_decision,
             request_type=request_type
         )
+        if phase == "phase_2_utilization_review":
+            _apply_all_line_adjudications(state, payor_decision, phase)
+            test_results = {}
+            for line in state.service_lines:
+                if line.request_type == "diagnostic_test" and line.authorization_status == "approved":
+                    if not line.service_name:
+                        raise ValueError("approved diagnostic line missing service_name")
+                    test_result = sim._generate_test_result(line.service_name, case)
+                    test_results[line.service_name] = test_result["value"]
+            if test_results:
+                iteration_record["test_results"] = test_results
 
         prior_iterations.append(iteration_record)
 
@@ -100,15 +173,16 @@ def handle_approval(
     elif request_type == "diagnostic_test":
         # diagnostic test approved - generate result and provider will CONTINUE
         if phase == "phase_2_utilization_review":
-            test_name = provider_request.get("requested_service", {}).get("service_name")
-            if not test_name:
-                test_name = provider_request.get("request_details", {}).get("test_name")
+            _apply_all_line_adjudications(state, payor_decision, phase)
+            test_results = {}
+            for line in state.service_lines:
+                if line.request_type == "diagnostic_test" and line.authorization_status == "approved":
+                    if not line.service_name:
+                        raise ValueError("approved diagnostic line missing service_name")
+                    test_result = sim._generate_test_result(line.service_name, case)
+                    test_results[line.service_name] = test_result["value"]
 
-            if test_name:
-                test_result = sim._generate_test_result(test_name, case)
-                iteration_record["test_results"] = {test_name: test_result["value"]}
-            else:
-                iteration_record["test_results"] = {}
+            iteration_record["test_results"] = test_results
 
         # provider will automatically CONTINUE at same level (not an action choice)
         prior_iterations.append(iteration_record)
@@ -120,13 +194,12 @@ def handle_approval(
         state.claim_rejected = False
         prior_iterations.append(iteration_record)
 
-        # mark this line as approved (update first line for MVP)
-        if state.service_lines:
-            state.service_lines[0].adjudication_status = "approved"
-            state.service_lines[0].paid_amount = payor_decision.get("paid_amount")
-            state.service_lines[0].allowed_amount = payor_decision.get("allowed_amount")
+        if not state.service_lines:
+            raise ValueError("phase 3 approval requires service_lines")
+        if "line_adjudications" not in payor_decision:
+            raise ValueError("phase 3 payor_decision missing required field 'line_adjudications'")
+        _apply_all_line_adjudications(state, payor_decision, phase)
 
-        # check if all lines terminal
         is_terminal = _all_service_lines_terminal(state, phase)
         return DecisionOutcome(False, False, is_terminal), None
 
@@ -138,6 +211,7 @@ def handle_approval(
 def handle_modification(
     sim: "UtilizationReviewSimulation",
     state: EncounterState,
+    provider_request: Dict[str, Any],
     payor_decision: Dict[str, Any],
     request_type: str,
     phase: str,
@@ -155,17 +229,9 @@ def handle_modification(
     # at Level 2 (IRE): final decision, cannot appeal further
     if current_level >= 2:
         prior_iterations.append(iteration_record)
-
-        # mark line as modified (for MVP: first line)
-        if state.service_lines:
-            if phase == "phase_2_utilization_review":
-                state.service_lines[0].authorization_status = "modified"
-                state.service_lines[0].approved_quantity = payor_decision.get("approved_quantity")
-                state.service_lines[0].modification_type = payor_decision.get("modification_type")
-            else:
-                state.service_lines[0].adjudication_status = "modified"
-                state.service_lines[0].allowed_amount = payor_decision.get("allowed_amount")
-
+        if phase == "phase_2_utilization_review" and not state.service_lines:
+            create_service_lines_from_provider_request(state, provider_request, payor_decision)
+        _apply_all_line_adjudications(state, payor_decision, phase)
         is_terminal = _all_service_lines_terminal(state, phase)
         return DecisionOutcome(False, False, is_terminal)
 
@@ -177,31 +243,26 @@ def handle_modification(
         phase=phase,
         current_level=current_level
     )
-    if state.service_lines:
-        state.service_lines[0].provider_action = provider_action
+    for line in state.service_lines:
+        line.provider_action = provider_action
 
     if provider_action == "appeal":
         prior_iterations.append(iteration_record)
         return DecisionOutcome(False, True, False)  # escalate to next authority
-    else:  # abandon
-        # mark line as modified and terminal
-        if state.service_lines:
-            if phase == "phase_2_utilization_review":
-                state.service_lines[0].authorization_status = "modified"
-                state.service_lines[0].approved_quantity = payor_decision.get("approved_quantity")
-                state.service_lines[0].modification_type = payor_decision.get("modification_type")
-            else:
-                state.service_lines[0].adjudication_status = "modified"
-                state.service_lines[0].allowed_amount = payor_decision.get("allowed_amount")
 
-        prior_iterations.append(iteration_record)
-        is_terminal = _all_service_lines_terminal(state, phase)
-        return DecisionOutcome(False, False, is_terminal)  # accept modification, exit
+    # abandon: mark lines as modified and terminal
+    if phase == "phase_2_utilization_review" and not state.service_lines:
+        create_service_lines_from_provider_request(state, provider_request, payor_decision)
+    _apply_all_line_adjudications(state, payor_decision, phase)
+    prior_iterations.append(iteration_record)
+    is_terminal = _all_service_lines_terminal(state, phase)
+    return DecisionOutcome(False, False, is_terminal)  # accept modification, exit
 
 
 def handle_denial(
     sim: "UtilizationReviewSimulation",
     state: EncounterState,
+    provider_request: Dict[str, Any],
     payor_decision: Dict[str, Any],
     request_type: str,
     phase: str,
@@ -223,16 +284,10 @@ def handle_denial(
 
     # at Level 2 (IRE): final decision, cannot appeal
     if current_level >= 2:
-        # mark line as denied (for MVP: first line)
-        if state.service_lines:
-            if phase == "phase_2_utilization_review":
-                state.service_lines[0].authorization_status = "denied"
-            else:
-                state.service_lines[0].adjudication_status = "denied"
-            if "decision_reason" in payor_decision and payor_decision["decision_reason"]:
-                state.service_lines[0].decision_reason = payor_decision["decision_reason"]
-
         prior_iterations.append(iteration_record)
+        if phase == "phase_2_utilization_review" and not state.service_lines:
+            create_service_lines_from_provider_request(state, provider_request, payor_decision)
+        _apply_all_line_adjudications(state, payor_decision, phase)
         is_terminal = _all_service_lines_terminal(state, phase)
         return DecisionOutcome(False, False, is_terminal), False
 
@@ -244,31 +299,27 @@ def handle_denial(
         phase=phase,
         current_level=current_level
     )
-    if state.service_lines:
-        state.service_lines[0].provider_action = provider_action
+    for line in state.service_lines:
+        line.provider_action = provider_action
 
     if provider_action == "appeal":
         prior_iterations.append(iteration_record)
         return DecisionOutcome(False, True, False), False  # escalate to next authority
-    else:  # abandon
-        # mark line as denied and terminal
-        if state.service_lines:
-            if phase == "phase_2_utilization_review":
-                state.service_lines[0].authorization_status = "denied"
-            else:
-                state.service_lines[0].adjudication_status = "denied"
-            if "decision_reason" in payor_decision and payor_decision["decision_reason"]:
-                state.service_lines[0].decision_reason = payor_decision["decision_reason"]
 
-        provider_abandoned = (phase == "phase_2_utilization_review")
-        prior_iterations.append(iteration_record)
-        is_terminal = _all_service_lines_terminal(state, phase)
-        return DecisionOutcome(False, False, is_terminal), provider_abandoned
+    # abandon: mark lines as denied and terminal
+    if phase == "phase_2_utilization_review" and not state.service_lines:
+        create_service_lines_from_provider_request(state, provider_request, payor_decision)
+    _apply_all_line_adjudications(state, payor_decision, phase)
+    provider_abandoned = (phase == "phase_2_utilization_review")
+    prior_iterations.append(iteration_record)
+    is_terminal = _all_service_lines_terminal(state, phase)
+    return DecisionOutcome(False, False, is_terminal), provider_abandoned
 
 
 def handle_pend(
     sim: "UtilizationReviewSimulation",
     state: EncounterState,
+    provider_request: Dict[str, Any],
     payor_decision: Dict[str, Any],
     request_type: str,
     phase: str,
@@ -297,28 +348,18 @@ def handle_pend(
         phase=phase,
         current_level=current_level
     )
-    if state.service_lines:
-        state.service_lines[0].provider_action = provider_action
+    for line in state.service_lines:
+        line.provider_action = provider_action
 
     if provider_action == "continue":
         # stay at same level, provider will address pend
         prior_iterations.append(iteration_record)
         return DecisionOutcome(True, False, False)
-    else:  # abandon
-        # mark line as pending_info and terminal (abandoned pend)
-        if state.service_lines:
-            if phase == "phase_2_utilization_review":
-                state.service_lines[0].authorization_status = "pending_info"
-            else:
-                state.service_lines[0].adjudication_status = "pending_info"
-            if "decision_reason" in payor_decision and payor_decision["decision_reason"]:
-                state.service_lines[0].decision_reason = payor_decision["decision_reason"]
-            if "requested_documents" in payor_decision:
-                requested_docs = payor_decision["requested_documents"]
-                if not isinstance(requested_docs, list):
-                    raise ValueError("payor_decision.requested_documents must be a list for pending_info")
-                state.service_lines[0].requested_documents = requested_docs
 
-        prior_iterations.append(iteration_record)
-        is_terminal = _all_service_lines_terminal(state, phase)
-        return DecisionOutcome(False, False, is_terminal)
+    # abandon: mark lines as pending_info and terminal
+    if phase == "phase_2_utilization_review" and not state.service_lines:
+        create_service_lines_from_provider_request(state, provider_request, payor_decision)
+    _apply_all_line_adjudications(state, payor_decision, phase)
+    prior_iterations.append(iteration_record)
+    is_terminal = _all_service_lines_terminal(state, phase)
+    return DecisionOutcome(False, False, is_terminal)

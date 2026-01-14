@@ -18,27 +18,33 @@ def phase2_provider_response_format() -> str:
                 "description": "<diagnosis description>"
             }
         ],
-        "request_type": "diagnostic_test" or "treatment" or "level_of_care",
-        "requested_service": {
-            // if diagnostic_test:
-            "procedure_code": "<CPT code for test>",
-            "code_type": "CPT",
-            "service_name": "<specific test>",
-            "test_justification": "<why this test will establish diagnosis>",
-            "expected_findings": "<what results would confirm/rule out diagnosis>"
+        "requested_services": [
+            {
+                "line_number": <1-based index>,
+                "request_type": "diagnostic_test" or "treatment" or "level_of_care",
 
-            // if treatment:
-            "procedure_code": "<CPT/HCPCS/J-code>",
-            "code_type": "CPT" or "HCPCS" or "J-code",
-            "service_name": "<specific treatment>",
-            "clinical_evidence": "<objective data supporting request>",
-            "guideline_references": ["<guideline 1>", "<guideline 2>"]
+                // if diagnostic_test:
+                "procedure_code": "<CPT code for test>",
+                "code_type": "CPT",
+                "service_name": "<specific test>",
+                "test_justification": "<why this test will establish diagnosis>",
+                "expected_findings": "<what results would confirm/rule out diagnosis>"
 
-            // if level_of_care:
-            "requested_status": "<inpatient|observation|hospital_infusion|home_infusion|ICU|floor|SNF>",
-            "alternative_status": "<lower level alternative>",
-            "severity_indicators": "<objective clinical indicators: vital signs, lab values, acuity scores, two-midnight rule expectation, specialized monitoring needs, venous access requirements, medical instability factors>"
-        },
+                // if treatment:
+                "procedure_code": "<CPT/HCPCS/J-code>",
+                "code_type": "CPT" or "HCPCS" or "J-code",
+                "service_name": "<specific treatment>",
+                "clinical_evidence": "<objective data supporting request>",
+                "guideline_references": ["<guideline 1>", "<guideline 2>"]
+
+                // if level_of_care:
+                "procedure_code": "<CPT/HCPCS/J-code>",
+                "code_type": "CPT" or "HCPCS" or "J-code",
+                "requested_status": "<inpatient|observation|hospital_infusion|home_infusion|ICU|floor|SNF>",
+                "alternative_status": "<lower level alternative>",
+                "severity_indicators": "<objective clinical indicators>"
+            }
+        ],
         "clinical_notes": "<narrative H&P-style documentation integrating all findings to date>"
     }
 }"""
@@ -61,17 +67,31 @@ def phase2_payor_response_format(
     """Return Phase 2 payor RESPONSE FORMAT (JSON) block."""
     lines = [
         "{",
-        f'    "action": "{decision_options.replace(" | ", "\" or \"")}",',
-        '    "decision_reason": "<specific reason for decision>",',
+        f'    "action": "{decision_options.replace(" | ", "\" or \"")}",  // overall decision',
+        "",
+        "    // LINE-LEVEL ADJUDICATION (X12 278 authorization aligned)",
+        "    // adjudicate each service line separately",
+        "    \"line_adjudications\": [",
+        "        {",
+        "            \"line_number\": <1-based index into service_lines>,",
+        "            \"adjudication_status\": \"approved\" or \"modified\" or \"denied\" or \"pending_info\",",
+        "            \"decision_reason\": \"<reason for this line's decision>\",",
+        "            \"approved_quantity\": <if modified: approved quantity>,",
+        "            \"modification_type\": \"<if modified: quantity_reduction or code_downgrade>\",",
     ]
     if can_pend:
-        lines.append('    "requested_documents": ["<doc1>", "<doc2>"],  // if pending_info: what docs needed')
+        lines.append('            "requested_documents": ["<doc1>", "<doc2>"]  // if pending_info')
     lines.extend([
-        '    "downgrade_alternative": "<if modified: describe approved alternative (e.g., \'observation status instead of inpatient\', \'home infusion instead of hospital infusion\')>",',
+        "        }",
+        "    ],",
+        "",
+        "    // OVERALL CLAIM-LEVEL FIELDS",
+        '    "decision_reason": "<overall reason for decision>",',
+        '    "downgrade_alternative": "<if modified: describe approved alternative>",',
         '    "criteria_used": "<guidelines or policies applied>",',
         f'    "reviewer_type": "{role_label}",',
         f'    "level": {level},',
-        "    \"requires_peer_to_peer\": true or false  // optional, set true if peer-to-peer recommended",
+        "    \"requires_peer_to_peer\": true or false  // optional",
         "}",
     ])
     return "\n".join(lines)
