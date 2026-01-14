@@ -94,22 +94,33 @@ def create_unified_phase3_provider_request_prompt(
     # build line-level claim status summary (provider memory of what was approved/denied)
     claim_lines_summary = ""
     if state.claim_lines:
-        level_names = {0: 'Initial', 1: 'Internal Appeal', 2: 'IRE'}
         claim_lines_summary = "\nCLAIM LINE STATUS (your submitted lines and payor decisions):\n"
         for line in state.claim_lines:
+            if line.current_review_level not in WORKFLOW_LEVELS:
+                raise ValueError(f"unknown review level '{line.current_review_level}' in claim_lines")
+            if not line.provider_action:
+                raise ValueError("claim_lines entry missing required field 'provider_action'")
+
             claim_lines_summary += f"\nLine {line.line_number}: {line.procedure_code} - {line.service_description}\n"
             claim_lines_summary += f"  Billed: {format_currency(line.billed_amount)} (qty: {line.quantity})\n"
 
             if line.adjudication_status:
                 claim_lines_summary += f"  Status: {line.adjudication_status.upper()}\n"
-                if line.adjudication_status in ["approved", "partial"]:
+                if line.adjudication_status == "approved":
                     claim_lines_summary += f"  Paid: {format_currency(line.paid_amount)}\n"
+                elif line.adjudication_status == "downgrade":
+                    claim_lines_summary += f"  Downgrade Reason: {line.adjustment_reason}\n"
                 elif line.adjudication_status == "denied":
                     claim_lines_summary += f"  Denial Reason: {line.adjustment_reason}\n"
+                elif line.adjudication_status == "pending_info":
+                    claim_lines_summary += f"  Pending Reason: {line.adjustment_reason}\n"
 
-            level_name = level_names.get(line.current_review_level, f'Level {line.current_review_level}')
-            claim_lines_summary += f"  Review Level: L{line.current_review_level} ({level_name})\n"
-            claim_lines_summary += f"  Your Action: {line.provider_action or 'PENDING DECISION'}\n"
+            level_config = WORKFLOW_LEVELS[line.current_review_level]
+            claim_lines_summary += (
+                f"  Review Level: L{line.current_review_level} "
+                f"({level_config['name'].upper()} - {level_config['role_label']})\n"
+            )
+            claim_lines_summary += f"  Your Action: {line.provider_action}\n"
 
         claim_lines_summary += "\n"
 
@@ -433,7 +444,7 @@ RESPONSE FORMAT (JSON):
 IMPORTANT:
 - You are reviewing payment for services ALREADY RENDERED
 - You must adjudicate EACH procedure code line separately in line_adjudications array
-- Set overall status to "partial" if some lines approved and some denied
+- Ensure line adjudications match overall action
 - Cannot prevent care (it already happened), can only approve/deny/pend payment"""
 
     return base_prompt

@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import uuid
 import json
-from src.models.schemas import AuditLog, LLMInteraction, EnvironmentAction
+from src.models import AuditLog, LLMInteraction, EnvironmentAction
 
 
 class AuditLogger:

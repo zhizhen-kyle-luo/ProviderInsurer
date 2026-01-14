@@ -5,17 +5,6 @@ from pydantic import BaseModel, Field
 import json
 
 
-class Message(BaseModel):
-    id: str
-    session_id: str
-    turn_id: int
-    speaker: Literal["user", "agent"]
-    agent: Optional[Literal["Provider", "Payer"]] = None
-    role: Literal["system", "assistant", "user"]
-    content: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-
-
 class LLMInteraction(BaseModel):
     """Single LLM prompt-response interaction."""
     interaction_id: str
