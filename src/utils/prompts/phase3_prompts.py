@@ -31,13 +31,13 @@ def create_phase3_claim_submission_decision_prompt(
     pa_status: str,
     denial_reason: str,
 ):
-    """Prompt for provider decision to submit a claim after PA denial."""
+    """Prompt for provider decision to submit a claim after phase 2 denial."""
     return f"""PHASE 3: CLAIM SUBMISSION DECISION
 
-SITUATION: Your prior authorization (Phase 2) was DENIED, but the patient still received care under your decision.
+SITUATION: Your Phase 2 utilization review request was DENIED, but the patient still received care under your decision.
 You must decide: Submit a claim for payment, or skip claim submission?
 
-PHASE 2 AUTHORIZATION STATUS:
+PHASE 2 OUTCOME:
 - Status: {pa_status}
 - Denial Reason: {denial_reason}
 - Service: {state.authorization_request.service_name if state.authorization_request and state.authorization_request.service_name else 'N/A'}
@@ -48,7 +48,7 @@ CLINICAL CONTEXT:
 - Medical History: {', '.join(state.clinical_presentation.medical_history)}
 
 TWO DECISIONS:
-1. submit_claim: Submit claim for payment despite PA denial. This will enter the claims adjudication process (appeals, documentation submission, etc.)
+1. submit_claim: Submit claim for payment despite the denial. This will enter the claims adjudication process (appeals, documentation submission, etc.)
 2. skip: Do not submit claim. Write off the cost. No further administrative effort.
 
 TASK: Decide whether to submit a claim for payment.
@@ -189,7 +189,7 @@ PATIENT INFORMATION:
 
 {service_details}
 
-PHASE 2 COVERAGE/UTILIZATION REVIEW DECISION:
+PHASE 2 UTILIZATION REVIEW DECISION:
 - Status: {state.authorization_request.authorization_status if state.authorization_request else 'approved'}
 - Reviewer: {state.authorization_request.reviewer_type if state.authorization_request and state.authorization_request.reviewer_type else 'Unknown'} (Level {state.authorization_request.review_level if state.authorization_request and state.authorization_request.review_level is not None else 'N/A'})
 - Service: {state.authorization_request.service_name if state.authorization_request else 'N/A'}
@@ -403,7 +403,7 @@ Your decision must be based solely on the submitted claim documentation.
 - Amount Billed: ${total_billed:,.2f}
 {diagnosis_summary}{procedure_summary}
 
-PHASE 2 COVERAGE/UTILIZATION REVIEW DECISION:
+PHASE 2 UTILIZATION REVIEW DECISION:
 - Status: {state.authorization_request.authorization_status if state.authorization_request else 'approved'}
 - Reviewer: {state.authorization_request.reviewer_type if state.authorization_request and state.authorization_request.reviewer_type else 'Unknown'} (Level {state.authorization_request.review_level if state.authorization_request and state.authorization_request.review_level is not None else 'N/A'})
 - Service Approved: {state.authorization_request.service_name if state.authorization_request else 'N/A'}
@@ -433,7 +433,7 @@ RESPONSE FORMAT (JSON):
 IMPORTANT:
 - You are reviewing payment for services ALREADY RENDERED
 - You must adjudicate EACH procedure code line separately in line_adjudications array
-- Set overall authorization_status to "partial" if some lines approved and some denied
+- Set overall status to "partial" if some lines approved and some denied
 - Cannot prevent care (it already happened), can only approve/deny/pend payment"""
 
     return base_prompt
