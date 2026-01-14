@@ -28,7 +28,6 @@ def print_results(result):
     print(f"patient: {result.admission.patient_demographics.age}yo {result.admission.patient_demographics.sex}")
     if result.clinical_presentation.medical_history:
         print(f"history: {', '.join(result.clinical_presentation.medical_history[:2])}")
-    print(f"insurance: {result.admission.insurance.payer_name}")
 
     print("\nphase 2: prior authorization")
     if result.authorization_request:

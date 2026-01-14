@@ -3,9 +3,8 @@ Convert raw case dictionaries to structured Pydantic models
 """
 import json
 from pathlib import Path
-from src.models.schemas import (
+from src.models import (
     PatientDemographics,
-    InsuranceInfo,
     AdmissionNotification,
     ClinicalPresentation
 )
@@ -39,25 +38,14 @@ def convert_case_to_models(case_dict):
         mrn=patient_pres.get("patient_id")
     )
 
-    insurance_info = InsuranceInfo(
-        plan_type="MA",
-        payer_name="Medicare Advantage",
-        member_id=patient_demographics.patient_id,
-        authorization_required=True
-    )
-
     admission = AdmissionNotification(
         patient_demographics=patient_demographics,
-        insurance=insurance_info,
-        admission_source=patient_pres.get("admission_source", ""),
-        chief_complaint=patient_pres["chief_complaint"],
         preliminary_diagnoses=[]
     )
 
     clinical_presentation = ClinicalPresentation(
         chief_complaint=patient_pres["chief_complaint"],
         history_of_present_illness=patient_pres.get("presenting_symptoms", ""),
-        vital_signs=patient_pres["vital_signs"],
         physical_exam_findings="",
         medical_history=patient_pres["medical_history"]
     )

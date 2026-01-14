@@ -2,27 +2,14 @@
 from .case_types import CaseType
 from .patient import (
     PatientDemographics,
-    InsuranceInfo,
     AdmissionNotification,
     ClinicalPresentation
 )
-from .clinical import (
-    DiagnosticTest,
-    LabResult,
-    ImagingResult,
-    TestOrdered
-)
 from .authorization import AuthorizationRequest
-from .financial import (
-    ClaimLineItem,
-    ServiceLineItem,
-    DRGAssignment,
-    FinancialSettlement
-)
+from .financial import ClaimLineItem
 from .metrics import FrictionMetrics
 from .state import EncounterState
 from .audit import (
-    Message,
     LLMInteraction,
     EnvironmentAction,
     AgentConfiguration,
@@ -38,27 +25,17 @@ __all__ = [
     "CaseType",
     # patient data
     "PatientDemographics",
-    "InsuranceInfo",
     "AdmissionNotification",
     "ClinicalPresentation",
-    # clinical data
-    "DiagnosticTest",
-    "LabResult",
-    "ImagingResult",
-    "TestOrdered",
     # authorization
     "AuthorizationRequest",
     # financial
     "ClaimLineItem",
-    "ServiceLineItem",
-    "DRGAssignment",
-    "FinancialSettlement",
     # metrics
     "FrictionMetrics",
     # state
     "EncounterState",
     # audit
-    "Message",
     "LLMInteraction",
     "EnvironmentAction",
     "AgentConfiguration",
