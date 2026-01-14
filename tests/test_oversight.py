@@ -92,7 +92,7 @@ class TestApplyOversightEdit:
     def test_with_edits(self, mock_llm_with_edits, sample_evidence):
         """oversight with edits should track changes"""
         draft = "The patient presents with symptoms."
-        revised, metadata = apply_oversight_edit(
+        revised, metadata, prompt, llm_response = apply_oversight_edit(
             role="provider",
             oversight_level="medium",
             draft_text=draft,
@@ -101,6 +101,8 @@ class TestApplyOversightEdit:
         )
 
         assert isinstance(revised, str)
+        assert isinstance(prompt, str)
+        assert isinstance(llm_response, str)
         assert metadata["oversight_level"] == "medium"
         assert metadata["needs_editing"] == True
         assert metadata["tokens_changed"] > 0
@@ -109,7 +111,7 @@ class TestApplyOversightEdit:
     def test_approve_as_is(self, mock_llm_no_edits, sample_evidence):
         """oversight can approve draft without changes"""
         draft = "The patient presents with symptoms."
-        revised, metadata = apply_oversight_edit(
+        revised, metadata, prompt, llm_response = apply_oversight_edit(
             role="provider",
             oversight_level="low",
             draft_text=draft,
@@ -125,7 +127,7 @@ class TestApplyOversightEdit:
     def test_metadata_tracking(self, mock_llm_with_edits, sample_evidence):
         """should track oversight metrics"""
         draft = "The patient presents with symptoms."
-        _, metadata = apply_oversight_edit(
+        _, metadata, _, _ = apply_oversight_edit(
             role="provider",
             oversight_level="high",
             draft_text=draft,
@@ -151,7 +153,7 @@ class TestApplyOversightEdit:
 
         draft = "Original text should be preserved."
 
-        final_text, metadata = apply_oversight_edit(
+        final_text, metadata, _, _ = apply_oversight_edit(
             role="provider",
             oversight_level="medium",
             draft_text=draft,
