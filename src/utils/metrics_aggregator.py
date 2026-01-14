@@ -2,7 +2,7 @@
 aggregate population-level metrics from simulation results for macro-validation
 """
 from typing import List, Dict, Any
-from src.models.schemas import EncounterState, CaseType
+from src.models import EncounterState, CaseType
 
 
 class MetricsAggregator:
@@ -75,24 +75,13 @@ class MetricsAggregator:
 
     @staticmethod
     def _calculate_phase_4_metrics(states: List[EncounterState]) -> Dict[str, float]:
-        """calculate phase 4 financial metrics"""
-        # collect all administrative costs
-        admin_costs = []
-        for state in states:
-            if state.financial_settlement:
-                admin_costs.append(state.financial_settlement.total_administrative_cost)
-            elif state.financial_settlement:
-                # inpatient cases may have different cost structure
-                # for now, skip or handle differently if needed
-                pass
-
-        total_admin_cost = sum(admin_costs) if admin_costs else 0.0
-        per_case_admin_cost = (total_admin_cost / len(admin_costs)) if admin_costs else 0.0
-
+        """calculate phase 4 financial metrics - currently placeholder"""
+        # financial settlement model removed as it was never instantiated
+        # phase 4 financial modeling to be implemented when needed
         return {
-            "total_admin_cost": total_admin_cost,
-            "per_case_admin_cost": per_case_admin_cost,
-            "cases_with_financial_data": len(admin_costs),
+            "total_admin_cost": 0.0,
+            "per_case_admin_cost": 0.0,
+            "cases_with_financial_data": 0,
         }
 
     @staticmethod

@@ -31,13 +31,13 @@ def create_phase3_claim_submission_decision_prompt(
     pa_status: str,
     denial_reason: str,
 ):
-    """Prompt for provider decision to submit a claim after PA denial."""
+    """Prompt for provider decision to submit a claim after phase 2 denial."""
     return f"""PHASE 3: CLAIM SUBMISSION DECISION
 
-SITUATION: Your prior authorization (Phase 2) was DENIED, but the patient still received care under your decision.
+SITUATION: Your Phase 2 utilization review request was DENIED, but the patient still received care under your decision.
 You must decide: Submit a claim for payment, or skip claim submission?
 
-PHASE 2 AUTHORIZATION STATUS:
+PHASE 2 OUTCOME:
 - Status: {pa_status}
 - Denial Reason: {denial_reason}
 - Service: {state.authorization_request.service_name if state.authorization_request and state.authorization_request.service_name else 'N/A'}
@@ -48,7 +48,7 @@ CLINICAL CONTEXT:
 - Medical History: {', '.join(state.clinical_presentation.medical_history)}
 
 TWO DECISIONS:
-1. submit_claim: Submit claim for payment despite PA denial. This will enter the claims adjudication process (appeals, documentation submission, etc.)
+1. submit_claim: Submit claim for payment despite the denial. This will enter the claims adjudication process (appeals, documentation submission, etc.)
 2. skip: Do not submit claim. Write off the cost. No further administrative effort.
 
 TASK: Decide whether to submit a claim for payment.
@@ -94,22 +94,33 @@ def create_unified_phase3_provider_request_prompt(
     # build line-level claim status summary (provider memory of what was approved/denied)
     claim_lines_summary = ""
     if state.claim_lines:
-        level_names = {0: 'Initial', 1: 'Internal Appeal', 2: 'IRE'}
         claim_lines_summary = "\nCLAIM LINE STATUS (your submitted lines and payor decisions):\n"
         for line in state.claim_lines:
+            if line.current_review_level not in WORKFLOW_LEVELS:
+                raise ValueError(f"unknown review level '{line.current_review_level}' in claim_lines")
+            if not line.provider_action:
+                raise ValueError("claim_lines entry missing required field 'provider_action'")
+
             claim_lines_summary += f"\nLine {line.line_number}: {line.procedure_code} - {line.service_description}\n"
             claim_lines_summary += f"  Billed: {format_currency(line.billed_amount)} (qty: {line.quantity})\n"
 
             if line.adjudication_status:
                 claim_lines_summary += f"  Status: {line.adjudication_status.upper()}\n"
-                if line.adjudication_status in ["approved", "partial"]:
+                if line.adjudication_status == "approved":
                     claim_lines_summary += f"  Paid: {format_currency(line.paid_amount)}\n"
+                elif line.adjudication_status == "downgrade":
+                    claim_lines_summary += f"  Downgrade Reason: {line.adjustment_reason}\n"
                 elif line.adjudication_status == "denied":
                     claim_lines_summary += f"  Denial Reason: {line.adjustment_reason}\n"
+                elif line.adjudication_status == "pending_info":
+                    claim_lines_summary += f"  Pending Reason: {line.adjustment_reason}\n"
 
-            level_name = level_names.get(line.current_review_level, f'Level {line.current_review_level}')
-            claim_lines_summary += f"  Review Level: L{line.current_review_level} ({level_name})\n"
-            claim_lines_summary += f"  Your Action: {line.provider_action or 'PENDING DECISION'}\n"
+            level_config = WORKFLOW_LEVELS[line.current_review_level]
+            claim_lines_summary += (
+                f"  Review Level: L{line.current_review_level} "
+                f"({level_config['name'].upper()} - {level_config['role_label']})\n"
+            )
+            claim_lines_summary += f"  Your Action: {line.provider_action}\n"
 
         claim_lines_summary += "\n"
 
@@ -189,7 +200,7 @@ PATIENT INFORMATION:
 
 {service_details}
 
-PHASE 2 COVERAGE/UTILIZATION REVIEW DECISION:
+PHASE 2 UTILIZATION REVIEW DECISION:
 - Status: {state.authorization_request.authorization_status if state.authorization_request else 'approved'}
 - Reviewer: {state.authorization_request.reviewer_type if state.authorization_request and state.authorization_request.reviewer_type else 'Unknown'} (Level {state.authorization_request.review_level if state.authorization_request and state.authorization_request.review_level is not None else 'N/A'})
 - Service: {state.authorization_request.service_name if state.authorization_request else 'N/A'}
@@ -403,7 +414,7 @@ Your decision must be based solely on the submitted claim documentation.
 - Amount Billed: ${total_billed:,.2f}
 {diagnosis_summary}{procedure_summary}
 
-PHASE 2 COVERAGE/UTILIZATION REVIEW DECISION:
+PHASE 2 UTILIZATION REVIEW DECISION:
 - Status: {state.authorization_request.authorization_status if state.authorization_request else 'approved'}
 - Reviewer: {state.authorization_request.reviewer_type if state.authorization_request and state.authorization_request.reviewer_type else 'Unknown'} (Level {state.authorization_request.review_level if state.authorization_request and state.authorization_request.review_level is not None else 'N/A'})
 - Service Approved: {state.authorization_request.service_name if state.authorization_request else 'N/A'}
@@ -433,7 +444,7 @@ RESPONSE FORMAT (JSON):
 IMPORTANT:
 - You are reviewing payment for services ALREADY RENDERED
 - You must adjudicate EACH procedure code line separately in line_adjudications array
-- Set overall authorization_status to "partial" if some lines approved and some denied
+- Ensure line adjudications match overall action
 - Cannot prevent care (it already happened), can only approve/deny/pend payment"""
 
     return base_prompt

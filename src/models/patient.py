@@ -11,25 +11,13 @@ class PatientDemographics(BaseModel):
     mrn: str
 
 
-class InsuranceInfo(BaseModel):
-    plan_type: Literal["MA", "Commercial", "Medicare_FFS", "Medicaid"]
-    payer_name: str
-    member_id: str
-    group_number: Optional[str] = None
-    authorization_required: bool = True
-
-
 class AdmissionNotification(BaseModel):
     patient_demographics: PatientDemographics
-    insurance: InsuranceInfo
-    admission_source: str  # free text: "ER", "Direct", "Transfer", or ""
-    chief_complaint: str
     preliminary_diagnoses: List[str]
 
 
 class ClinicalPresentation(BaseModel):
     chief_complaint: str
     history_of_present_illness: str
-    vital_signs: Dict[str, Any]
     physical_exam_findings: str
     medical_history: List[str]

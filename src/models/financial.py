@@ -1,4 +1,4 @@
-"""financial settlement and DRG assignment models (Phase 4)"""
+"""financial models - claim line items for Phase 3 adjudication"""
 from __future__ import annotations
 from typing import List, Optional
 from pydantic import BaseModel, Field
@@ -21,50 +21,11 @@ class ClaimLineItem(BaseModel):
     diagnosis_pointers: List[int] = Field(default_factory=list)  # references to diagnosis_codes array
 
     # adjudication status (X12 835 CAS segment)
-    adjudication_status: Optional[str] = None  # "approved", "denied", "partial", "pending"
-    allowed_amount: Optional[float] = None  # payor's allowed amount (contractual rate)
-    paid_amount: Optional[float] = None  # actual payment
-    adjustment_reason: Optional[str] = None  # denial/adjustment reason
-    adjustment_code: Optional[str] = None  # CARC/RARC code (optional)
+    adjudication_status: Optional[str] = None  # "approved", "downgrade", "denied", "pending_info"
+    allowed_amount: Optional[float] = None
+    paid_amount: Optional[float] = None
+    adjustment_reason: Optional[str] = None
 
-    # review level tracking (enables line-level appeals)
-    current_review_level: int = 0  # 0 (initial), 1 (internal appeal), 2 (IRE)
-    reviewer_type: Optional[str] = None  # who adjudicated this line
-
-    # provider decision on this line
-    provider_action: Optional[str] = None  # "accept", "appeal", "withdrawn"
-
-
-class ServiceLineItem(BaseModel):
-    """
-    DEPRECATED: kept for backward compatibility
-    use ClaimLineItem for Phase 3 claims adjudication
-    """
-    service_description: str
-    cpt_or_drg_code: str
-    billed_amount: float
-    allowed_amount: float
-    paid_amount: float
-
-
-class DRGAssignment(BaseModel):
-    drg_code: str
-    drg_description: str
-    relative_weight: float
-    geometric_mean_los: float
-    base_payment_rate: float
-    total_drg_payment: float
-
-
-class FinancialSettlement(BaseModel):
-    line_items: List[ServiceLineItem] = Field(default_factory=list)
-    drg_assignment: Optional[DRGAssignment] = None
-    total_billed_charges: float
-    total_allowed_amount: float
-    payer_payment: float
-    patient_responsibility: float
-    outlier_payment: float = 0.0
-    quality_adjustments: float = 0.0
-    total_hospital_revenue: float
-    estimated_hospital_cost: float
-    hospital_margin: float
+    current_review_level: int = 0 
+    reviewer_type: Optional[str] = None
+    provider_action: Optional[str] = None

@@ -11,7 +11,7 @@ Uses unified_review.py for core 3-level logic.
 
 from typing import Dict, Any, TYPE_CHECKING
 
-from src.models.schemas import EncounterState
+from src.models import EncounterState
 from src.utils.prompts import (
     create_unified_provider_request_prompt,
     create_unified_payor_review_prompt

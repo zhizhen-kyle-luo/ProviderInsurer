@@ -1,5 +1,5 @@
 from typing import Dict, Any
-from src.models.schemas import EncounterState
+from src.models import EncounterState
 
 
 class GameAgent:

@@ -6,12 +6,11 @@ import json
 import os
 from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import HumanMessage
-from src.models.schemas import (
+from src.models import (
     EncounterState,
     CaseType,
     AdmissionNotification,
     PatientDemographics,
-    InsuranceInfo,
     ClinicalPresentation,
     FrictionMetrics
 )
@@ -279,7 +278,6 @@ class UtilizationReviewSimulation:
         from datetime import datetime
 
         patient_data = case["patient_visible_data"]
-        insurance_data = case.get("insurance_info", {})
 
         demographics = PatientDemographics(
             patient_id=patient_data.get("patient_id", "UNKNOWN"),
@@ -288,22 +286,8 @@ class UtilizationReviewSimulation:
             mrn=patient_data.get("patient_id", "UNKNOWN")
         )
 
-        insurance = InsuranceInfo(
-            plan_type=insurance_data.get("plan_type", "MA"),
-            payer_name=insurance_data.get("payer_name", "Unknown"),
-            member_id=patient_data.get("patient_id", "UNKNOWN"),
-            authorization_required=insurance_data.get("authorization_required", True)
-        )
-
-        admission_date_str = patient_data.get("admission_date", "2024-01-01")
-        admission_date = datetime.strptime(admission_date_str, "%Y-%m-%d").date()
-
         return AdmissionNotification(
             patient_demographics=demographics,
-            insurance=insurance,
-            admission_date=admission_date,
-            admission_source=patient_data.get("admission_source", "Direct"),
-            chief_complaint=patient_data.get("chief_complaint", ""),
             preliminary_diagnoses=patient_data.get("medical_history", [])
         )
 
@@ -314,7 +298,6 @@ class UtilizationReviewSimulation:
         return ClinicalPresentation(
             chief_complaint=patient_data.get("chief_complaint", ""),
             history_of_present_illness=patient_data.get("presenting_symptoms", patient_data.get("chief_complaint", "")),
-            vital_signs=patient_data.get("vital_signs", {}),
             physical_exam_findings=patient_data.get("presenting_symptoms", ""),
             medical_history=patient_data.get("medical_history", [])
         )

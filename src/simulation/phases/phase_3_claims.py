@@ -8,7 +8,7 @@ Uses unified_review.py for core 3-level logic, same structure as Phase 2:
 """
 
 from typing import Dict, Any, TYPE_CHECKING
-from src.models.schemas import EncounterState
+from src.models import EncounterState
 from src.utils.prompts import (
     create_phase3_claim_submission_decision_prompt,
     create_unified_phase3_provider_request_prompt,

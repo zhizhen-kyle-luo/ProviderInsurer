@@ -137,7 +137,7 @@ def phase3_payor_response_format(
         "        {",
         "            \"line_number\": <1-based index into procedure_codes array>,",
         "            \"procedure_code\": \"<CPT/HCPCS code from submission>\",",
-        "            \"adjudication_status\": \"approved\" or \"denied\" or \"partial\" or \"downgraded\",",
+        "            \"adjudication_status\": \"approved\" or \"downgrade\" or \"denied\" or \"pending_info\",",
         "            \"billed_amount\": <amount provider billed>,",
         "            \"allowed_amount\": <payor's contractual allowed amount>,",
         "            \"paid_amount\": <actual payment amount>,",
