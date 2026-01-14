@@ -58,5 +58,5 @@ export function formatPhase(phase: string): string {
     'phase_4_financial': 'Phase 4: Financial Settlement'
   };
 
-  return phaseMap[phase] || phase.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+  return phaseMap[phase] || phase.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase());
 }
