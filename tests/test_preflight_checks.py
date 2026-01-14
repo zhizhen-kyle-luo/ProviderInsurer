@@ -88,8 +88,8 @@ def main() -> int:
     provider_request = {
         "diagnosis_codes": [{"icd10": "K50.012", "description": "Crohn's"}],
         "procedure_codes": [
-            {"code": "J1745", "code_type": "J-code", "description": "Infliximab", "quantity": 10, "amount_billed": 100.0},
-            {"code": "96413", "code_type": "CPT", "description": "Infusion", "quantity": 1, "amount_billed": 250.0},
+            {"code": "J1745", "code_type": "J-code", "description": "Infliximab", "requested_quantity": 10, "charge_amount": 100.0},
+            {"code": "96413", "code_type": "CPT", "description": "Infusion", "requested_quantity": 1, "charge_amount": 250.0},
         ],
         # deliberately omit total_amount_billed to test fallback
     }
@@ -110,8 +110,8 @@ def main() -> int:
         failures.append(f"Phase 3 payor prompt Amount Billed expected $1250.00, got {amount_billed}.")
     if "Line 1: J1745" not in payor_prompt or "Line 2: 96413" not in payor_prompt:
         failures.append("Phase 3 payor prompt missing procedure line details.")
-    if "Decision options: approved | downgrade | denied | pending_info" not in payor_prompt:
-        failures.append("Phase 3 level 0 payor prompt missing DOWNGRADE or pending_info option.")
+    if "Decision options: approved | modified | denied | pending_info" not in payor_prompt:
+        failures.append("Phase 3 level 0 payor prompt missing MODIFIED or pending_info option.")
 
     # Phase 3 payor prompt: level 2 should not allow pending_info.
     payor_prompt_level2 = create_unified_phase3_payor_review_prompt(
@@ -126,8 +126,8 @@ def main() -> int:
         case_type=case["case_type"],
         provider_billed_amount=None,
     )
-    if "Decision options: approved | downgrade | denied" not in payor_prompt_level2:
-        failures.append("Phase 3 level 2 payor prompt still allows pending_info or missing DOWNGRADE.")
+    if "Decision options: approved | modified | denied" not in payor_prompt_level2:
+        failures.append("Phase 3 level 2 payor prompt still allows pending_info or missing MODIFIED.")
     if "REQUEST_INFO (pending_info) is NOT available at this level." not in payor_prompt_level2:
         failures.append("Phase 3 level 2 payor prompt missing no-pend warning.")
 
@@ -139,8 +139,8 @@ def main() -> int:
     provider_request_with_commas = {
         "diagnosis_codes": [{"icd10": "K50.012", "description": "Crohn's"}],
         "procedure_codes": [
-            {"code": "J1745", "code_type": "J-code", "description": "Infliximab", "quantity": 1, "amount_billed": 1000.0},
-            {"code": "96413", "code_type": "CPT", "description": "Infusion", "quantity": 2, "amount_billed": 250.0},
+            {"code": "J1745", "code_type": "J-code", "description": "Infliximab", "requested_quantity": 1, "charge_amount": 1000.0},
+            {"code": "96413", "code_type": "CPT", "description": "Infusion", "requested_quantity": 2, "charge_amount": 250.0},
         ],
     }
     payor_prompt_commas = create_unified_phase3_payor_review_prompt(

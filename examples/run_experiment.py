@@ -100,15 +100,12 @@ def print_results(result):
     print("RESULTS")
     print("-" * 80)
 
-    # Phase 2: Prior Authorization
-    print("\nPHASE 2: PRIOR AUTHORIZATION")
-    if result.authorization_request:
-        print(f"  Service: {result.authorization_request.service_name}")
-        print(f"  Type: {result.authorization_request.request_type}")
-        status = result.authorization_request.authorization_status
-        print(f"  PA Status: {status.upper()}")
-        if result.authorization_request.denial_reason:
-            print(f"  Denial Reason: {result.authorization_request.denial_reason[:100]}...")
+    # Phase 2: Utilization Review
+    print("\nPHASE 2: UTILIZATION REVIEW")
+    if result.service_lines:
+        line = result.service_lines[0]
+        status = line.authorization_status
+        print(f"  Authorization Status: {status.upper() if status else 'N/A'}")
 
     # Metrics
     print("\nMETRICS")
@@ -131,15 +128,16 @@ def print_results(result):
 
 def collect_metrics(result):
     """collect key metrics from result"""
-    # validate required fields exist
-    if not result.authorization_request:
-        raise ValueError("result.authorization_request is missing - cannot extract PA status")
-    if not hasattr(result.authorization_request, 'authorization_status') or not result.authorization_request.authorization_status:
-        raise ValueError("result.authorization_request.authorization_status is missing or empty")
+    if not result.service_lines:
+        raise ValueError("result.service_lines is missing - cannot extract phase 2 status")
+
+    line = result.service_lines[0]
+    if not line.authorization_status:
+        raise ValueError("service_lines[0].authorization_status is missing or empty")
 
     return {
         'case_id': result.admission.case_id if hasattr(result.admission, 'case_id') else 'unknown',
-        'pa_status': result.authorization_request.authorization_status,
+        'phase_2_status': line.authorization_status,
         'pa_level_reached': result.current_level,
         'appeal_filed': result.appeal_filed,
         'appeal_successful': result.appeal_successful,
@@ -266,12 +264,12 @@ Examples:
 
     if results:
         print(f"\nCompleted {len(results)}/{len(runs_to_execute)} runs\n")
-        print("RUN | CONFIG | PA | ITERATIONS | TESTS | APPEAL")
-        print("-" * 62)
+        print("RUN | CONFIG | P2_STATUS | ITERATIONS | TESTS | APPEAL")
+        print("-" * 66)
         for r in results:
-            pa = r['pa_status'][:4].upper()
+            p2_status = r['phase_2_status'][:4].upper()
             appeal = 'YES' if r['appeal_filed'] else 'NO'
-            print(f"{r['run_id']:3} | {r['config']['name']:20} | {pa:4} | {r['total_iterations']:3} | {r['probing_tests']:2} | {appeal:3}")
+            print(f"{r['run_id']:3} | {r['config']['name']:20} | {p2_status:9} | {r['total_iterations']:3} | {r['probing_tests']:2} | {appeal:3}")
 
         # Save summary
         summary_path = f"{args.output_dir}/experiment_summary.json"

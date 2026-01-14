@@ -406,7 +406,7 @@ class AuditLog(BaseModel):
                     outcome = req_type
                 else:
                     status = parsed.get("authorization_status", "?")
-                    reason = parsed.get("denial_reason", "")[:30] if parsed.get("denial_reason") else ""
+                    reason = parsed.get("decision_reason", "")[:30] if parsed.get("decision_reason") else ""
                     key_decision = status.upper()
                     outcome = reason + "..." if reason else status
 

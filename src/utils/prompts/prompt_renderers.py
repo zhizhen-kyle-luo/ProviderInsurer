@@ -1,11 +1,11 @@
-"""Request summary templates for prompt rendering."""
+"""text renderers for prompt context summaries"""
 from __future__ import annotations
 
 from typing import Dict, Any
 
 
 def phase2_diagnostic_request_summary(requested_service: Dict[str, Any]) -> str:
-    """Render Phase 2 diagnostic test request summary."""
+    """render Phase 2 diagnostic test request summary"""
     return f"""
 DIAGNOSTIC TEST REVIEW REQUEST (Phase 2):
 Test: {requested_service.get('service_name')}
@@ -15,7 +15,7 @@ Expected Findings: {requested_service.get('expected_findings')}
 
 
 def phase2_treatment_request_summary(requested_service: Dict[str, Any], guideline_references: list[str]) -> str:
-    """Render Phase 2 treatment request summary."""
+    """render Phase 2 treatment request summary"""
     return f"""
 TREATMENT REVIEW REQUEST (Phase 2):
 Treatment: {requested_service.get('service_name')}
@@ -25,7 +25,7 @@ Guidelines: {', '.join(guideline_references)}
 
 
 def phase2_level_of_care_request_summary(requested_service: Dict[str, Any]) -> str:
-    """Render Phase 2 level-of-care request summary."""
+    """render Phase 2 level-of-care request summary"""
     return f"""
 LEVEL OF CARE REVIEW REQUEST (Phase 2):
 Requested Status: {requested_service.get('requested_status')}
@@ -35,7 +35,7 @@ Severity Indicators: {requested_service.get('severity_indicators')}
 
 
 def phase3_provider_service_details(service_request: Dict[str, Any], case_type) -> str:
-    """Render Phase 3 provider service details summary."""
+    """render Phase 3 provider service details summary"""
     from src.models import CaseType
     if case_type == CaseType.SPECIALTY_MEDICATION:
         return f"""SERVICE DELIVERED:
@@ -62,7 +62,7 @@ def phase3_provider_coding_section(
     cost_ref: Dict[str, Any] | None,
     case_type
 ) -> str:
-    """Render Phase 3 provider coding & billing section."""
+    """render Phase 3 provider coding & billing section"""
     from src.models import CaseType
     if coding_options:
         coding_section_parts = ["CODING & BILLING OPTIONS:"]
@@ -90,7 +90,7 @@ def phase3_provider_coding_section(
 
 
 def phase3_payor_service_summary(service_request: Dict[str, Any], case_type) -> str:
-    """Render Phase 3 payor claim submitted summary."""
+    """render Phase 3 payor claim submitted summary"""
     from src.models import CaseType
     if case_type == CaseType.SPECIALTY_MEDICATION:
         return f"""CLAIM SUBMITTED:
@@ -110,8 +110,8 @@ def phase3_payor_service_summary(service_request: Dict[str, Any], case_type) -> 
 - Clinical Indication: {clinical_indication}"""
 
 
-def phase3_payor_diagnosis_summary(diagnosis_codes: list[Dict[str, Any]]) -> str:
-    """Render Phase 3 payor diagnosis code summary."""
+def render_diagnosis_summary(diagnosis_codes: list[Dict[str, Any]]) -> str:
+    """render diagnosis codes as formatted text for prompts (shared by phase 2 and 3)"""
     if not diagnosis_codes:
         return ""
     return "\nDiagnosis Codes:\n" + "\n".join([
@@ -120,13 +120,13 @@ def phase3_payor_diagnosis_summary(diagnosis_codes: list[Dict[str, Any]]) -> str
 
 
 def phase3_payor_procedure_summary(procedure_codes: list[Dict[str, Any]]) -> str:
-    """Render Phase 3 payor procedure code summary."""
+    """render Phase 3 payor procedure code summary"""
     if not procedure_codes:
         return ""
     procedure_summary = "\nProcedure Codes Submitted:\n"
     for idx, proc in enumerate(procedure_codes, 1):
-        procedure_summary += f"  Line {idx}: {proc.get('code')} ({proc.get('code_type')})\n"
-        procedure_summary += f"    Description: {proc.get('description')}\n"
-        procedure_summary += f"    Quantity: {proc.get('quantity')}\n"
-        procedure_summary += f"    Amount Billed: ${proc.get('amount_billed', 0):.2f}\n"
+        procedure_summary += f"  Line {idx}: {proc.get('procedure_code')} ({proc.get('code_type')})\n"
+        procedure_summary += f"    Description: {proc.get('service_description')}\n"
+        procedure_summary += f"    Quantity: {proc.get('requested_quantity')}\n"
+        procedure_summary += f"    Amount Billed: ${proc.get('charge_amount', 0):.2f}\n"
     return procedure_summary

@@ -47,25 +47,24 @@ PROVIDER ACTION SPACE (choose one each turn):
 PAYOR_ACTIONS_GUIDE = """
 PAYOR ACTION SPACE (choose one each turn):
 
-1. APPROVE - authorize coverage/service as requested (X12 278: A1)
+1. APPROVE - authorize coverage/service as requested (X12 278 HCR: A1)
    When to use: medical necessity criteria met, documentation complete
    Examples: approve inpatient status, approve medication, approve diagnostic test
-   Note: can include restrictions like approved for certain quantity limits
 
-2. DOWNGRADE - approve alternative/lower level of service (X12 278: A6 Modified)
-   When to use: medical necessity not met for requested level, but lower level is appropriate
+2. MODIFY - approve with changes (X12 278 HCR: A2/A6 Modified)
+   When to use: approve with quantity reduction OR code/service downgrade
    Examples:
-   - Approve observation instead of requested inpatient (classic grey zone)
-   - Approve home infusion instead of hospital infusion
-   - Approve outpatient procedure instead of inpatient admission
-   Note: this is NOT a denial - provider gets authorization, just not what they wanted
+   - Quantity reduction: approve 3 of 5 requested infusions (set approved_quantity + modification_type="quantity_reduction")
+   - Code downgrade: approve observation instead of inpatient (set modification_type="code_downgrade")
+   - Service downgrade: approve home infusion instead of hospital infusion (modification_type="code_downgrade")
+   Note: this is NOT a denial - provider gets authorization, just modified
 
-3. DENY - adverse determination without authorization (X12 278: A3 Not Certified)
+3. DENY - adverse determination without authorization (X12 278 HCR: A3)
    When to use: medical necessity not met, step therapy incomplete, documentation insufficient
    Examples: deny for not meeting policy criteria, deny for incomplete step therapy, deny as experimental/investigational
    CMS 2026 rule: must provide specific denial reason
 
-4. REQUEST_INFO - pend decision pending additional documentation (X12 278: A2 partial approval, A4 Pended)
+4. REQUEST_INFO - pend decision pending additional documentation (X12 278 HCR: A4)
    When to use: cannot adjudicate with current documentation, need specific clinical data
    Examples: request vital signs from admission, request lab values (troponin, BNP, lactate), request imaging reports, request medication administration record (MAR)
    Note: NOT available at Level 2 (independent review must decide on submitted record per 42 CFR §422.592)
@@ -80,7 +79,8 @@ Payor Decision      | Request Type           | Valid Provider Actions | Strategi
 APPROVE             | TREATMENT              | (None) - SUCCESS       | Terminal win. Treatment authorized. Simulation ends.
 APPROVE             | DIAGNOSTIC             | CONTINUE               | Information gain. Got test result. Use it to request treatment.
 APPROVE             | LEVEL_OF_CARE          | (None) - SUCCESS       | Terminal win. Got inpatient/site you wanted. Simulation ends.
-DOWNGRADE           | LEVEL_OF_CARE          | APPEAL, ABANDON        | Grey zone choice. APPEAL=fight for higher reimbursement. ABANDON=accept lower status.
+MODIFY              | LEVEL_OF_CARE          | APPEAL, ABANDON        | Grey zone choice. APPEAL=fight for higher reimbursement. ABANDON=accept modified status.
+MODIFY              | TREATMENT              | APPEAL, ABANDON        | Partial approval. APPEAL=fight for full quantity. ABANDON=accept reduced quantity.
 REQUEST_INFO (pend) | ANY                    | CONTINUE, ABANDON      | Open door. CONTINUE=answer question. ABANDON=give up. (Cannot APPEAL a pend)
 DENY                | ANY                    | APPEAL, ABANDON        | Closed door. APPEAL=escalate to next authority. ABANDON=accept loss.
 """
@@ -105,11 +105,12 @@ VALID_PROVIDER_ACTIONS = {
 }
 
 # canonical payor action values (lowercase)
+# unified for both Phase 2 (278) and Phase 3 (835)
 VALID_PAYOR_ACTIONS = {
-    "approved",
-    "downgrade",
-    "denied",
-    "pending_info"
+    "approved",      # X12 278 HCR-01: A1, X12 835: paid in full
+    "modified",      # X12 278 HCR-01: A2/A6 (partial qty or code downgrade), X12 835: reduced payment
+    "denied",        # X12 278 HCR-01: A3, X12 835: $0 paid
+    "pending_info"   # X12 278 HCR-01: A4, X12 835: awaiting documentation
 }
 
 # canonical request type values (lowercase)

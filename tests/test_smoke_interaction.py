@@ -67,8 +67,8 @@ class _FakeLLM:
                 "insurer_request": {
                     "diagnosis_codes": [{"icd10": "K50.012", "description": "Crohn's"}],
                     "procedure_codes": [
-                        {"code": "J1745", "code_type": "J-code", "description": "Infliximab", "quantity": 10, "amount_billed": 100.0},
-                        {"code": "96413", "code_type": "CPT", "description": "Infusion", "quantity": 1, "amount_billed": 250.0},
+                        {"code": "J1745", "code_type": "J-code", "description": "Infliximab", "requested_quantity": 10, "charge_amount": 100.0},
+                        {"code": "96413", "code_type": "CPT", "description": "Infusion", "requested_quantity": 1, "charge_amount": 250.0},
                     ],
                     "total_amount_billed": 1250.0,
                     "clinical_notes": "Infliximab infusion administered as authorized.",
@@ -83,7 +83,7 @@ class _FakeLLM:
             has_lines = "Procedure Codes Submitted:" in prompt
             status = "approved" if amount_billed and amount_billed > 0 and has_lines else "denied"
             payload = {
-                "authorization_status": status,
+                "action": status,
                 "total_paid_amount": amount_billed if status == "approved" else 0.0,
                 "criteria_used": "Test criteria",
             }

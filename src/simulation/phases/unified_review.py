@@ -18,7 +18,6 @@ Both phases use the same 3-level WORKFLOW_LEVELS structure:
 - Level 2: independent_review (final clinical review, no pend)
 """
 
-import json
 from typing import Dict, Any, List, Callable, TYPE_CHECKING
 from langchain_core.messages import HumanMessage
 
@@ -31,16 +30,22 @@ from src.utils.prompts import (
     create_provider_prompt,
     create_payor_prompt,
     WORKFLOW_LEVELS,
-    create_treatment_decision_after_phase2_denial_prompt,
-    PROVIDER_ACTIONS_GUIDE,
-    PROVIDER_RESPONSE_MATRIX,
     VALID_PROVIDER_ACTIONS,
     VALID_PAYOR_ACTIONS,
     VALID_REQUEST_TYPES,
-    VALID_TREATMENT_DECISIONS,
 )
 from src.utils.oversight import apply_oversight_edit
 from src.utils.json_parsing import extract_json_from_text
+
+from .evidence_builders import build_provider_evidence_packet, build_payor_evidence_packet
+from .service_line_builder import finalize_service_line_after_non_approval
+from .provider_actions import provider_treatment_decision_after_phase2_denial
+from .decision_handlers import (
+    handle_approval,
+    handle_modification,
+    handle_denial,
+    handle_pend
+)
 
 if TYPE_CHECKING:
     from src.simulation.game_runner import UtilizationReviewSimulation
@@ -181,11 +186,11 @@ def run_unified_multi_level_review(
     sim: "UtilizationReviewSimulation",
     state: EncounterState,
     case: Dict[str, Any],
-    phase: str,  # "phase_2" or "phase_3"
-    provider_prompt_fn: Callable,  # function to create provider request prompt
-    payor_prompt_fn: Callable,  # function to create payor review prompt
-    provider_prompt_kwargs: Dict[str, Any],  # additional kwargs for provider prompt
-    payor_prompt_kwargs: Dict[str, Any],  # additional kwargs for payor prompt
+    phase: str,  # "phase_2_utilization_review" or "phase_3_claims"
+    provider_prompt_fn: Callable,
+    payor_prompt_fn: Callable,
+    provider_prompt_kwargs: Dict[str, Any],
+    payor_prompt_kwargs: Dict[str, Any],
     max_iterations: int = 3
 ) -> EncounterState:
     """
@@ -200,9 +205,9 @@ def run_unified_multi_level_review(
         sim: simulation instance
         state: encounter state
         case: case data
-        phase: "phase_2" or "phase_3"
-        provider_prompt_fn: function(state, case, iteration, prior_iterations, stage, **kwargs) -> str
-        payor_prompt_fn: function(state, provider_request, iteration, stage, level, **kwargs) -> str
+        phase: "phase_2_utilization_review" or "phase_3_claims"
+        provider_prompt_fn: function(state, case, iteration, prior_iterations, level, **kwargs) -> str
+        payor_prompt_fn: function(state, provider_request, iteration, level, pend_count_at_level, **kwargs) -> str
         provider_prompt_kwargs: additional kwargs to pass to provider prompt function
         payor_prompt_kwargs: additional kwargs to pass to payor prompt function
         max_iterations: maximum number of review levels (default 3)
@@ -210,7 +215,6 @@ def run_unified_multi_level_review(
     Returns:
         Updated EncounterState with review results
     """
-
     prior_iterations = []
     treatment_approved = False
     provider_abandoned_after_denial = False
@@ -220,12 +224,12 @@ def run_unified_multi_level_review(
     # separate level (authority: 0/1/2) from turn count
     current_level = 0
     turn_count = 0
-    max_turns_per_simulation = max_iterations * 3  # safety limit to prevent infinite loops
+    max_turns_per_simulation = max_iterations * 3  # safety limit
 
-    # track pend count per level to enforce MAX_REQUEST_INFO_PER_LEVEL
+    # track pend count per level
     pend_count_at_level = {0: 0, 1: 0, 2: 0}
 
-    # verify policy views are loaded (critical for information asymmetry)
+    # verify policy views are loaded
     if not state.provider_policy_view:
         print(f"[WARNING] {phase}: provider_policy_view is empty - LLM will guess clinical criteria")
     if not state.payor_policy_view:
@@ -233,109 +237,138 @@ def run_unified_multi_level_review(
 
     while turn_count < max_turns_per_simulation:
         turn_count += 1
-        stage = stage_map.get(current_level, "unknown")
-
+        if current_level not in stage_map:
+            raise ValueError(f"invalid review level: {current_level}")
+        stage = stage_map[current_level]
         print(f"\n[{phase}] Turn {turn_count}, Level {current_level} ({stage})")
 
-        provider_system_prompt = create_provider_prompt(sim.provider_params)
-        # pass turn_count-1 as iteration for display (0-indexed)
-        provider_user_prompt = provider_prompt_fn(
-            state, case, turn_count - 1, prior_iterations, level=current_level,
-            **provider_prompt_kwargs
+        # === PROVIDER REQUEST ===
+        provider_request, request_type, draft_cache_hit = _get_provider_request(
+            sim, state, case, phase, current_level, prior_iterations,
+            provider_prompt_fn, provider_prompt_kwargs, stage
         )
 
-        full_prompt = f"{provider_system_prompt}\n\n{provider_user_prompt}"
-        messages = [HumanMessage(content=full_prompt)]
+        # update state tracking
+        state.current_level = current_level
 
-        # copilot generates draft
-        print(f"  provider copilot drafting request...")
-        draft_response = sim.provider_copilot.invoke(messages)
-        draft_text = draft_response.content
-        draft_cache_hit = draft_response.additional_kwargs.get('cache_hit', False) if hasattr(draft_response, 'additional_kwargs') else False
-
-        # log copilot draft
-        sim.audit_logger.log_interaction(
-            phase=phase,
-            agent="provider",
-            action="copilot_draft",
-            system_prompt=provider_system_prompt,
-            user_prompt=provider_user_prompt,
-            llm_response=draft_text,
-            parsed_output={},
-            metadata={
-                "iteration": current_level,
-                "stage": stage,
-                "level": current_level,
-                "copilot_model": sim.provider_copilot_name,
-                "cache_hit": draft_cache_hit
-            }
+        # === PAYOR REVIEW ===
+        payor_decision, payor_cache_hit = _get_payor_decision(
+            sim, state, provider_request, phase, current_level, pend_count_at_level,
+            payor_prompt_fn, payor_prompt_kwargs, stage, request_type
         )
 
-        # apply oversight editing
-        print(f"  provider oversight editing (level={sim.provider_params.get('oversight_intensity', 'medium')})...")
-        oversight_level = sim.provider_params.get('oversight_intensity', 'medium')
-        evidence_packet = build_provider_evidence_packet(state, case, prior_iterations)
-        provider_response_text, oversight_metadata, oversight_prompt, oversight_llm_response = apply_oversight_edit(
-            role="provider",
-            oversight_level=oversight_level,
-            draft_text=draft_text,
-            evidence_packet=evidence_packet,
-            llm=sim.provider_base_llm,
-            rng_seed=sim.master_seed
+        # validate and log
+        payor_action = _validate_and_log_payor_decision(
+            sim, payor_decision, state, provider_request, phase, current_level,
+            stage, request_type, payor_cache_hit
         )
 
-        # log oversight edit
-        sim.audit_logger.log_interaction(
-            phase=phase,
-            agent="provider",
-            action="oversight_edit",
-            system_prompt="",
-            user_prompt=oversight_prompt,
-            llm_response=oversight_llm_response,
-            parsed_output=oversight_metadata,
-            metadata={
-                "iteration": current_level,
-                "stage": stage,
-                "level": current_level,
-                "oversight_level": oversight_level,
-                "evidence_packet": evidence_packet
-            }
-        )
-
-        # parse provider response
-        try:
-            provider_response_full = extract_json_from_text(provider_response_text)
-
-            if not isinstance(provider_response_full, dict):
-                raise ValueError("expected dict, got {}".format(type(provider_response_full)))
-
-            # extract insurer request (what payor sees)
-            provider_request = provider_response_full.get("insurer_request", {})
-
-        except Exception as e:
-            # log parse error to audit for debugging
-            error_snippet = provider_response_text[:200] + "..." if len(provider_response_text) > 200 else provider_response_text
-            sim.audit_logger.log_interaction(
-                phase=phase,
-                agent="provider",
-                action="parse_error",
-                system_prompt="",
-                user_prompt="",
-                llm_response=provider_response_text,
-                parsed_output={"error": "json_parse_failed", "exception": str(e)},
-                metadata={
-                    "iteration": current_level,
-                    "stage": stage,
-                    "error_type": "provider_response_parse_error",
-                    "raw_response_snippet": error_snippet
-                }
+        # friction counting
+        if state.friction_metrics:
+            state.friction_metrics.provider_actions += 1
+            state.friction_metrics.payor_actions += 1
+            # count probing tests
+            svc = provider_request.get("requested_service", {}) or {}
+            tests = svc.get("tests_requested")
+            if isinstance(tests, list) and tests:
+                state.friction_metrics.probing_tests_count += len(tests)
+            elif request_type == "diagnostic_test":
+                state.friction_metrics.probing_tests_count += 1
+            state.friction_metrics.escalation_depth = max(
+                state.friction_metrics.escalation_depth, current_level
             )
-            raise ValueError(f"failed to parse provider response at iteration {current_level}: {e}\nResponse snippet: {error_snippet}")
 
-        # extract request_type from nested structure if not at top level
+        # create iteration record
+        iteration_record = {
+            "provider_request_type": request_type,
+            "payor_decision": payor_action,
+            "payor_decision_reason": payor_decision.get("decision_reason")
+        }
+
+        # === HANDLE DECISION OUTCOME ===
+        outcome = _handle_payor_decision_outcome(
+            sim, state, case, provider_request, payor_decision, payor_action,
+            request_type, phase, current_level, iteration_record,
+            prior_iterations, pend_count_at_level
+        )
+
+        if outcome["terminal"]:
+            treatment_approved = outcome["treatment_approved"]
+            approved_provider_request = outcome["approved_request"]
+            provider_abandoned_after_denial = outcome["provider_abandoned"]
+            break
+
+        if outcome["escalate"]:
+            current_level += 1
+            continue
+
+        # continue at same level (diagnostic test approved or pend addressed)
+        continue
+
+    # === FINALIZATION ===
+    _finalize_review(
+        sim, state, case, phase, treatment_approved, provider_abandoned_after_denial,
+        approved_provider_request, prior_iterations, current_level, stage_map
+    )
+
+    return state
+
+
+def _get_provider_request(
+    sim, state, case, phase, current_level, prior_iterations,
+    provider_prompt_fn, provider_prompt_kwargs, stage
+):
+    """get provider request with copilot + oversight"""
+    provider_system_prompt = create_provider_prompt(sim.provider_params)
+    provider_user_prompt = provider_prompt_fn(
+        state, case, current_level, prior_iterations, level=current_level,
+        **provider_prompt_kwargs
+    )
+
+    full_prompt = f"{provider_system_prompt}\n\n{provider_user_prompt}"
+    messages = [HumanMessage(content=full_prompt)]
+
+    # copilot draft
+    print(f"  provider copilot drafting request...")
+    draft_response = sim.provider_copilot.invoke(messages)
+    draft_text = draft_response.content
+    draft_cache_hit = draft_response.additional_kwargs.get('cache_hit', False) if hasattr(draft_response, 'additional_kwargs') else False
+
+    # log copilot draft
+    sim.audit_logger.log_interaction(
+        phase=phase, agent="provider", action="copilot_draft",
+        system_prompt=provider_system_prompt, user_prompt=provider_user_prompt,
+        llm_response=draft_text, parsed_output={},
+        metadata={"iteration": current_level, "stage": stage, "level": current_level,
+                  "copilot_model": sim.provider_copilot_name, "cache_hit": draft_cache_hit}
+    )
+
+    # oversight editing
+    print(f"  provider oversight editing (level={sim.provider_params.get('oversight_intensity', 'medium')})...")
+    oversight_level = sim.provider_params.get('oversight_intensity', 'medium')
+    evidence_packet = build_provider_evidence_packet(state, case, prior_iterations)
+    provider_response_text, oversight_metadata, oversight_prompt, oversight_llm_response = apply_oversight_edit(
+        role="provider", oversight_level=oversight_level, draft_text=draft_text,
+        evidence_packet=evidence_packet, llm=sim.provider_base_llm, rng_seed=sim.master_seed
+    )
+
+    # log oversight
+    sim.audit_logger.log_interaction(
+        phase=phase, agent="provider", action="oversight_edit",
+        system_prompt="", user_prompt=oversight_prompt,
+        llm_response=oversight_llm_response, parsed_output=oversight_metadata,
+        metadata={"iteration": current_level, "stage": stage, "level": current_level,
+                  "oversight_level": oversight_level, "evidence_packet": evidence_packet}
+    )
+
+    # parse response
+    try:
+        provider_response_full = extract_json_from_text(provider_response_text)
+        if not isinstance(provider_response_full, dict):
+            raise ValueError("expected dict, got {}".format(type(provider_response_full)))
+
+        provider_request = provider_response_full.get("insurer_request", {})
         request_type = provider_request.get("request_type")
-        if not request_type and "insurer_request" in provider_response_full:
-            request_type = provider_response_full.get("insurer_request", {}).get("request_type")
 
         # PHASE 3 ONLY: process line-level claim submission
         if phase == "phase_3_claims":
@@ -343,376 +376,169 @@ def run_unified_multi_level_review(
 
         # log provider request
         sim.audit_logger.log_interaction(
-            phase=phase,
-            agent="provider",
-            action=f"{request_type}_request",
-            system_prompt=provider_system_prompt,
-            user_prompt=provider_user_prompt,
-            llm_response=provider_response_text,
-            parsed_output=provider_request,
-            metadata={
-                "iteration": current_level,
-                "stage": stage,
-                "request_type": request_type,
-                "cache_hit": draft_cache_hit
-            }
+            phase=phase, agent="provider", action=f"{request_type}_request",
+            system_prompt=provider_system_prompt, user_prompt=provider_user_prompt,
+            llm_response=provider_response_text, parsed_output=provider_request,
+            metadata={"iteration": current_level, "stage": stage, "request_type": request_type,
+                      "cache_hit": draft_cache_hit}
         )
 
-        # friction counting: provider action
-        if state.friction_metrics:
-            state.friction_metrics.provider_actions += 1
-            # count probing tests: robust extraction
-            svc = provider_request.get("requested_service", {}) or {}
-            tests = svc.get("tests_requested")
-            if isinstance(tests, list) and tests:
-                state.friction_metrics.probing_tests_count += len(tests)
-            elif request_type == "diagnostic_test":
-                state.friction_metrics.probing_tests_count += 1
-            # escalation depth tracks iteration
-            state.friction_metrics.escalation_depth = max(
-                state.friction_metrics.escalation_depth, current_level - 1
-            )
+        return provider_request, request_type, draft_cache_hit
 
-        payor_system_prompt = create_payor_prompt(sim.payor_params)
-
-        # call payor prompt function with kwargs
-        # pass turn_count-1 as iteration for display (0-indexed)
-        # pass pend_count_at_level for enforcing MAX_REQUEST_INFO_PER_LEVEL
-        payor_user_prompt = payor_prompt_fn(
-            state, provider_request, turn_count - 1, level=current_level,
-            pend_count_at_level=pend_count_at_level[current_level],
-            **payor_prompt_kwargs
-        )
-
-        full_prompt = f"{payor_system_prompt}\n\n{payor_user_prompt}"
-        messages = [HumanMessage(content=full_prompt)]
-
-        # check if copilot is active at this level (Level 2 = independent review, no copilot)
-        level_config = WORKFLOW_LEVELS.get(current_level, WORKFLOW_LEVELS[0])
-        copilot_active = level_config.get("copilot_active", True)
-
-        if copilot_active:
-            # STEP 1: payor copilot generates draft decision
-            print(f"  payor copilot reviewing...")
-            payor_draft_response = sim.payor_copilot.invoke(messages)
-            payor_draft_text = payor_draft_response.content
-            payor_draft_cache_hit = payor_draft_response.additional_kwargs.get('cache_hit', False) if hasattr(payor_draft_response, 'additional_kwargs') else False
-
-            # log payor copilot draft
-            sim.audit_logger.log_interaction(
-                phase=phase,
-                agent="payor",
-                action="copilot_draft",
-                system_prompt=payor_system_prompt,
-                user_prompt=payor_user_prompt,
-                llm_response=payor_draft_text,
-                parsed_output={},
-                metadata={
-                    "iteration": current_level,
-                    "stage": stage,
-                    "level": current_level,
-                    "copilot_model": sim.payor_copilot_name,
-                    "cache_hit": payor_draft_cache_hit
-                }
-            )
-
-            # STEP 2: apply payor oversight editing
-            payor_oversight_level = sim.payor_params.get('oversight_intensity', 'medium')
-            payor_evidence_packet = build_payor_evidence_packet(state, provider_request)
-            payor_response_text, payor_oversight_metadata, payor_oversight_prompt, payor_oversight_llm_response = apply_oversight_edit(
-                role="payor",
-                oversight_level=payor_oversight_level,
-                draft_text=payor_draft_text,
-                evidence_packet=payor_evidence_packet,
-                llm=sim.payor_base_llm,
-                rng_seed=sim.master_seed
-            )
-
-            # log payor oversight edit
-            sim.audit_logger.log_interaction(
-                phase=phase,
-                agent="payor",
-                action="oversight_edit",
-                system_prompt="",
-                user_prompt=payor_oversight_prompt,
-                llm_response=payor_oversight_llm_response,
-                parsed_output=payor_oversight_metadata,
-                metadata={
-                    "iteration": current_level,
-                    "stage": stage,
-                    "level": current_level,
-                    "oversight_level": payor_oversight_level,
-                    "evidence_packet": payor_evidence_packet
-                }
-            )
-
-            payor_cache_hit = payor_draft_cache_hit
-        else:
-            # Level 2 (independent review): no copilot, base LLM only
-            payor_direct_response = sim.payor_base_llm.invoke(messages)
-            payor_response_text = payor_direct_response.content
-            payor_cache_hit = payor_direct_response.additional_kwargs.get('cache_hit', False) if hasattr(payor_direct_response, 'additional_kwargs') else False
-
-            # log independent review (no copilot, no oversight edit)
-            sim.audit_logger.log_interaction(
-                phase=phase,
-                agent="payor",
-                action="independent_review",
-                system_prompt=payor_system_prompt,
-                user_prompt=payor_user_prompt,
-                llm_response=payor_response_text,
-                parsed_output={},
-                metadata={
-                    "iteration": current_level,
-                    "stage": stage,
-                    "level": current_level,
-                    "copilot_active": False,
-                    "reviewer_type": level_config.get("role_label", "Independent Review Entity (IRE)"),
-                    "cache_hit": payor_cache_hit
-                }
-            )
-
-        # parse payor decision
-        try:
-            payor_decision = extract_json_from_text(payor_response_text)
-        except Exception as e:
-            # log parse error to audit for debugging
-            error_snippet = payor_response_text[:200] + "..." if len(payor_response_text) > 200 else payor_response_text
-            sim.audit_logger.log_interaction(
-                phase=phase,
-                agent="payor",
-                action="parse_error",
-                system_prompt="",
-                user_prompt="",
-                llm_response=payor_response_text,
-                parsed_output={"error": "json_parse_failed", "exception": str(e)},
-                metadata={
-                    "iteration": current_level,
-                    "stage": stage,
-                    "error_type": "payor_decision_parse_error",
-                    "raw_response_snippet": error_snippet
-                }
-            )
-            raise ValueError(f"failed to parse payor decision at iteration {current_level}: {e}\nResponse snippet: {error_snippet}")
-
-        # level 2 enforcement: independent review must issue final decision (no endless pend)
-        if current_level == 2:
-            state.independent_review_reached = True
-            action = payor_decision.get("action", "")
-            if action == "pending_info":
-                payor_decision["action"] = "denied"
-                payor_decision["denial_reason"] = (
-                    payor_decision.get("denial_reason", "") +
-                    " [COERCED: independent review cannot pend - insufficient objective documentation]"
-                )
-                payor_decision["level_2_coerced"] = True
-
-        # enforce level-consistent reviewer types using WORKFLOW_LEVELS
-        payor_decision["reviewer_type"] = level_config.get("role_label", "Unknown Reviewer")
-        payor_decision["level"] = current_level
-
-        # log payor decision
+    except Exception as e:
+        error_snippet = provider_response_text[:200] + "..." if len(provider_response_text) > 200 else provider_response_text
         sim.audit_logger.log_interaction(
-            phase=phase,
-            agent="payor",
-            action=f"{request_type}_review",
-            system_prompt=payor_system_prompt,
-            user_prompt=payor_user_prompt,
-            llm_response=payor_response_text,
-            parsed_output=payor_decision,
-            metadata={
-                "iteration": current_level,
-                "stage": stage,
-                "level": current_level,
-                "request_type": request_type,
-                "copilot_active": copilot_active,
-                "cache_hit": payor_cache_hit
-            }
+            phase=phase, agent="provider", action="parse_error",
+            system_prompt="", user_prompt="", llm_response=provider_response_text,
+            parsed_output={"error": "json_parse_failed", "exception": str(e)},
+            metadata={"iteration": current_level, "stage": stage,
+                      "error_type": "provider_response_parse_error",
+                      "raw_response_snippet": error_snippet}
+        )
+        raise ValueError(f"failed to parse provider response at iteration {current_level}: {e}\nResponse snippet: {error_snippet}")
+
+
+def _get_payor_decision(
+    sim, state, provider_request, phase, current_level, pend_count_at_level,
+    payor_prompt_fn, payor_prompt_kwargs, stage, request_type
+):
+    """get payor decision with copilot + oversight (or direct for L2)"""
+    if current_level not in WORKFLOW_LEVELS:
+        raise ValueError(f"invalid review level: {current_level}")
+    level_config = WORKFLOW_LEVELS[current_level]
+    copilot_active = level_config.get("copilot_active", True)
+
+    payor_system_prompt = create_payor_prompt(sim.payor_params)
+    payor_user_prompt = payor_prompt_fn(
+        state, provider_request, current_level, level=current_level,
+        pend_count_at_level=pend_count_at_level[current_level],
+        **payor_prompt_kwargs
+    )
+
+    full_prompt = f"{payor_system_prompt}\n\n{payor_user_prompt}"
+    messages = [HumanMessage(content=full_prompt)]
+
+    if copilot_active:
+        # copilot + oversight
+        print(f"  payor copilot reviewing...")
+        payor_draft_response = sim.payor_copilot.invoke(messages)
+        payor_draft_text = payor_draft_response.content
+        payor_cache_hit = payor_draft_response.additional_kwargs.get('cache_hit', False) if hasattr(payor_draft_response, 'additional_kwargs') else False
+
+        sim.audit_logger.log_interaction(
+            phase=phase, agent="payor", action="copilot_draft",
+            system_prompt=payor_system_prompt, user_prompt=payor_user_prompt,
+            llm_response=payor_draft_text, parsed_output={},
+            metadata={"iteration": current_level, "stage": stage, "level": current_level,
+                      "copilot_model": sim.payor_copilot_name, "cache_hit": payor_cache_hit}
         )
 
-        # friction counting: payor action
-        if state.friction_metrics:
-            state.friction_metrics.payor_actions += 1
+        payor_oversight_level = sim.payor_params.get('oversight_intensity', 'medium')
+        payor_evidence_packet = build_payor_evidence_packet(state, provider_request)
+        payor_response_text, payor_oversight_metadata, payor_oversight_prompt, payor_oversight_llm_response = apply_oversight_edit(
+            role="payor", oversight_level=payor_oversight_level, draft_text=payor_draft_text,
+            evidence_packet=payor_evidence_packet, llm=sim.payor_base_llm, rng_seed=sim.master_seed
+        )
+
+        sim.audit_logger.log_interaction(
+            phase=phase, agent="payor", action="oversight_edit",
+            system_prompt="", user_prompt=payor_oversight_prompt,
+            llm_response=payor_oversight_llm_response, parsed_output=payor_oversight_metadata,
+            metadata={"iteration": current_level, "stage": stage, "level": current_level,
+                      "oversight_level": payor_oversight_level, "evidence_packet": payor_evidence_packet}
+        )
+    else:
+        # Level 2: independent review, no copilot
+        payor_direct_response = sim.payor_base_llm.invoke(messages)
+        payor_response_text = payor_direct_response.content
+        payor_cache_hit = payor_direct_response.additional_kwargs.get('cache_hit', False) if hasattr(payor_direct_response, 'additional_kwargs') else False
+
+        sim.audit_logger.log_interaction(
+            phase=phase, agent="payor", action="independent_review",
+            system_prompt=payor_system_prompt, user_prompt=payor_user_prompt,
+            llm_response=payor_response_text, parsed_output={},
+            metadata={"iteration": current_level, "stage": stage, "level": current_level,
+                      "copilot_active": False,
+                      "reviewer_type": level_config.get("role_label", "Independent Review Entity (IRE)"),
+                      "cache_hit": payor_cache_hit}
+        )
 
         # PHASE 3 ONLY: process line-level adjudications
         if phase == "phase_3_claims":
             process_phase3_payor_adjudications(state, payor_decision, iteration_num)
 
-        # track iteration for next round
-        iteration_record = {
-            "provider_request_type": request_type,
-            "payor_decision": payor_action,
-            "payor_denial_reason": payor_decision.get("denial_reason")
+    # validate action
+    if "action" not in payor_decision:
+        raise ValueError(
+            f"payor response missing required field 'action'. must be one of: {VALID_PAYOR_ACTIONS}"
+        )
+
+    payor_action = payor_decision["action"]
+    if payor_action not in VALID_PAYOR_ACTIONS:
+        raise ValueError(
+            f"invalid action '{payor_action}'. must be one of: {VALID_PAYOR_ACTIONS}"
+        )
+
+    print(f"  payor decision: {payor_action}")
+
+    # log decision
+    copilot_active = level_config.get("copilot_active", True)
+    sim.audit_logger.log_interaction(
+        phase=phase, agent="payor", action=f"{request_type}_review",
+        system_prompt="", user_prompt="",  # already logged in _get_payor_decision
+        llm_response="", parsed_output=payor_decision,
+        metadata={"iteration": current_level, "stage": stage, "level": current_level,
+                  "request_type": request_type, "copilot_active": copilot_active,
+                  "cache_hit": payor_cache_hit}
+    )
+
+    return payor_action
+
+
+def _handle_payor_decision_outcome(
+    sim, state, case, provider_request, payor_decision, payor_action,
+    request_type, phase, current_level, iteration_record,
+    prior_iterations, pend_count_at_level
+):
+    """route to appropriate decision handler"""
+    if payor_action == "approved":
+        outcome, approved_request = handle_approval(
+            sim, state, provider_request, payor_decision, request_type, phase,
+            iteration_record, prior_iterations, case
+        )
+        return {
+            "terminal": outcome.is_terminal,
+            "escalate": outcome.should_escalate,
+            "treatment_approved": outcome.is_terminal and request_type in ["treatment", "level_of_care"],
+            "approved_request": approved_request,
+            "provider_abandoned": False
         }
 
-        #important!
-        state.current_level = current_level
+    elif payor_action == "modified":
+        outcome = handle_modification(
+            sim, state, payor_decision, request_type, phase, current_level,
+            iteration_record, prior_iterations
+        )
+        return {
+            "terminal": outcome.is_terminal,
+            "escalate": outcome.should_escalate,
+            "treatment_approved": False,
+            "approved_request": None,
+            "provider_abandoned": False
+        }
 
-        # handle decision outcomes based on PROVIDER_RESPONSE_MATRIX
-        print(f"  payor decision: {payor_action}")
-
-        # TERMINAL SUCCESS: APPROVE of TREATMENT or LEVEL_OF_CARE
-        if payor_action == "approved" and request_type in ["treatment", "level_of_care"]:
-            treatment_approved = True
-            approved_provider_request = provider_request
-
-            # extract service details from provider_request
-            requested_service = provider_request.get("requested_service", {})
-            service_name = requested_service.get("service_name", "")
-            clinical_rationale = requested_service.get(
-                "clinical_evidence",
-                requested_service.get("severity_indicators", "")
-            )
-
-            # extract diagnosis codes
-            diagnosis_codes = []
-            for diag in provider_request.get("diagnosis_codes", []):
-                if isinstance(diag, dict):
-                    diagnosis_codes.append(diag.get("icd10", ""))
-                elif isinstance(diag, str):
-                    diagnosis_codes.append(diag)
-
-            # set decision on authorization_request (create if needed)
-            if not state.authorization_request:
-                state.authorization_request = AuthorizationRequest(
-                    request_type=request_type,
-                    service_name=service_name,
-                    clinical_rationale=clinical_rationale,
-                    diagnosis_codes=diagnosis_codes
-                )
-            else:
-                # update existing authorization_request
-                state.authorization_request.request_type = request_type
-                state.authorization_request.service_name = service_name
-                state.authorization_request.clinical_rationale = clinical_rationale
-                state.authorization_request.diagnosis_codes = diagnosis_codes
-
-            # extract coding information (CPT, NDC, J-code)
-            state.authorization_request.cpt_code = requested_service.get("procedure_code",
-                                                                        requested_service.get("cpt_code"))
-            state.authorization_request.ndc_code = requested_service.get("ndc_code")
-            state.authorization_request.j_code = requested_service.get("j_code")
-
-            # extract service details (dosage, frequency, etc.)
-            state.authorization_request.dosage = requested_service.get("dosage")
-            state.authorization_request.frequency = requested_service.get("frequency")
-            state.authorization_request.duration = requested_service.get("duration")
-
-            # set payor decision fields
-            state.authorization_request.authorization_status = "approved"
-            state.authorization_request.denial_reason = None
-            state.authorization_request.missing_documentation = []
-            approved_quantity = payor_decision.get("approved_quantity_amount")
-            if approved_quantity is None:
-                approved_quantity = payor_decision.get("approved_quantity")
-            state.authorization_request.approved_quantity_amount = approved_quantity
-            state.authorization_request.reviewer_type = payor_decision.get("reviewer_type")
-            state.authorization_request.review_level = payor_decision.get("level")
-
-            prior_iterations.append(iteration_record)
-            break  # TERMINAL - simulation ends
-
-        # NON-TERMINAL: APPROVE of DIAGNOSTIC - provider must CONTINUE with result
-        elif payor_action == "approved" and request_type == "diagnostic_test":
-            # diagnostic test approved - generate result and provider will CONTINUE
-            if phase == "phase_2_utilization_review":
-                test_name = provider_request.get("requested_service", {}).get("service_name")
-                if not test_name:
-                    test_name = provider_request.get("request_details", {}).get("test_name")
-
-                if test_name:
-                    test_result = sim._generate_test_result(test_name, case)
-                    iteration_record["test_results"] = {test_name: test_result["value"]}
-                else:
-                    iteration_record["test_results"] = {}
-
-            # provider will automatically CONTINUE at same level (not an action choice)
-            prior_iterations.append(iteration_record)
-            continue  # stay at same level, provider submits next request
-
-        # APPROVE in Phase 3 claims (payment approved)
-        elif payor_action == "approved" and phase == "phase_3_claims":
-            state.claim_pended = False
-            state.claim_rejected = False
-            prior_iterations.append(iteration_record)
-            break  # claim approved, done
-
-        # DOWNGRADE: grey zone - provider must choose APPEAL or ABANDON
-        elif payor_action == "downgrade":
-            state.denial_occurred = False  # not a full denial
-
-            # ask provider: APPEAL (fight for higher level) or ABANDON (accept downgrade)?
-            if current_level >= 2:
-                # at Level 2 (IRE): final decision, cannot appeal further
-                prior_iterations.append(iteration_record)
-                break
-
-            provider_action = _get_provider_action_after_payor_decision(
-                sim=sim,
-                state=state,
-                payor_decision=payor_decision,
-                request_type=request_type,
-                phase=phase,
-                current_level=current_level
-            )
-
-            if provider_action == "appeal":
-                current_level += 1  # escalate to next authority
-                prior_iterations.append(iteration_record)
-                continue  # next iteration at higher level
-            else:  # abandon
-                # accept downgrade, exit simulation
-                prior_iterations.append(iteration_record)
-                break
-
-        # DENY: provider must choose APPEAL or ABANDON
-        elif payor_action == "denied":
-            state.denial_occurred = True
-            if phase == "phase_3_claims":
-                state.claim_pended = False
-                state.claim_rejected = True
-
-            # at Level 2 (IRE): final decision, cannot appeal
-            if current_level >= 2:
-                prior_iterations.append(iteration_record)
-                break
-
-            provider_action = _get_provider_action_after_payor_decision(
-                sim=sim,
-                state=state,
-                payor_decision=payor_decision,
-                request_type=request_type,
-                phase=phase,
-                current_level=current_level
-            )
-
-            if provider_action == "appeal":
-                current_level += 1  # escalate to next authority
-                prior_iterations.append(iteration_record)
-                continue  # next iteration at higher level
-            else:  # abandon
-                if phase == "phase_2_utilization_review":
-                    provider_abandoned_after_denial = True
-                prior_iterations.append(iteration_record)
-                break
-
-        # REQUEST_INFO (pend): provider should CONTINUE or ABANDON (cannot APPEAL a pend)
-        elif payor_action == "pending_info":
-            if phase == "phase_3_claims":
-                state.claim_pended = True
-
-            # increment pend count for current level (for next iteration's prompt)
-            pend_count_at_level[current_level] += 1
-
-            # provider decides to continue or abandon
-            provider_action = _get_provider_action_after_payor_decision(
-                sim=sim,
-                state=state,
-                payor_decision=payor_decision,
-                request_type=request_type,
-                phase=phase,
-                current_level=current_level
-            )
+    elif payor_action == "denied":
+        outcome, provider_abandoned = handle_denial(
+            sim, state, payor_decision, request_type, phase, current_level,
+            iteration_record, prior_iterations
+        )
+        return {
+            "terminal": outcome.is_terminal,
+            "escalate": outcome.should_escalate,
+            "treatment_approved": False,
+            "approved_request": None,
+            "provider_abandoned": provider_abandoned
+        }
 
         # PHASE 3 ONLY: check for early termination (all lines finalized)
         if phase == "phase_3_claims" and check_phase3_all_lines_finalized(state):
@@ -751,102 +577,27 @@ def run_unified_multi_level_review(
                 diagnosis_codes=last_diagnosis_codes
             )
 
-        # set authorization status based on last payor decision
-        state.authorization_request.authorization_status = last_payor_action
-        if last_payor_action == "denied":
-            state.authorization_request.denial_reason = f"{phase}: max iterations reached without approval"
-            state.denial_occurred = True
-        elif last_payor_action == "pending_info":
-            state.authorization_request.denial_reason = f"{phase}: provider abandoned after pend"
-            state.denial_occurred = False
-        else:
-            # downgrade or other terminal status
-            state.authorization_request.denial_reason = f"{phase}: provider abandoned after {last_payor_action}"
-            state.denial_occurred = (last_payor_action == "denied")
+        # update state flags
+        state.denial_occurred = (last_payor_action == "denied")
 
-        state.authorization_request.reviewer_type = level_config.get("role_label", "Unknown Reviewer")
-        state.authorization_request.review_level = current_level
-
-        # CRITICAL: Phase 2 denied and provider abandoned - decide whether to treat patient anyway
-        # this captures the financial-legal tension: risk nonpayment vs medical abandonment
+        # CRITICAL: Phase 2 denied and provider abandoned - decide whether to treat anyway
         if last_payor_action == "denied" and provider_abandoned_after_denial:
-            treatment_decision = _provider_treatment_decision_after_phase2_denial(sim, state, case)
+            treatment_decision = provider_treatment_decision_after_phase2_denial(sim, state, case)
             state.provider_treated_despite_denial = (treatment_decision == "treat_anyway")
 
             if treatment_decision == "no_treat":
-                # provider chose not to treat - patient abandons care
-                # Phase 3 will not run (no services rendered, no claim to submit)
                 state.care_abandoned = True
 
-    # collect all evidence for downstream use
+    # collect test results
     accumulated_test_results = {}
     for iteration in prior_iterations:
         if "test_results" in iteration:
             accumulated_test_results.update(iteration["test_results"])
 
-    # store evidence on state (phase-specific attribute)
+    # store evidence
     evidence_attr = f"_{phase}_evidence"
     setattr(state, evidence_attr, {
         "approved_request": approved_provider_request,
         "test_results": accumulated_test_results,
         "iterations": prior_iterations
     })
-
-    return state
-
-
-def _provider_treatment_decision_after_phase2_denial(
-    sim: "UtilizationReviewSimulation",
-    state: EncounterState,
-    case: Dict[str, Any]
-) -> str:
-    """
-    After Phase 2 denial, provider decides whether to treat patient anyway.
-
-    Returns: "treat_anyway" or "no_treat"
-
-    This captures the financial-legal tension documented in utilization review literature:
-    - Treat anyway = risk nonpayment (OOP/charity/hope for retro approval)
-    - No treat = risk medical abandonment (legal liability)
-
-    This is a conditional branch after ABANDON action, not a new action in action space.
-    """
-    import json
-    from langchain_core.messages import HumanMessage
-    denial_reason = state.authorization_request.denial_reason if state.authorization_request else "Phase 2 exhausted without approval"
-    prompt = create_treatment_decision_after_phase2_denial_prompt(
-        state=state,
-        denial_reason=denial_reason,
-    )
-
-    response = sim.provider.llm.invoke([HumanMessage(content=prompt)])
-    response_text = response.content.strip()
-
-    # parse decision
-    try:
-        decision_data = extract_json_from_text(response_text)
-
-        # validate decision field exists
-        if "decision" not in decision_data:
-            raise ValueError(
-                f"treatment decision response missing required field 'decision'. "
-                f"must be one of: {VALID_TREATMENT_DECISIONS}"
-            )
-
-        decision = decision_data["decision"]
-
-        # validate decision is valid
-        if decision not in VALID_TREATMENT_DECISIONS:
-            raise ValueError(
-                f"invalid treatment decision '{decision}'. "
-                f"must be one of: {VALID_TREATMENT_DECISIONS}"
-            )
-
-        return decision
-
-    except ValueError as e:
-        # validation error - re-raise (no defaults)
-        raise
-    except Exception as e:
-        # JSON parsing failed - raise error to surface the bug
-        raise ValueError(f"failed to parse provider treatment decision after Phase 2 denial: {e}\nResponse: {response_text}")

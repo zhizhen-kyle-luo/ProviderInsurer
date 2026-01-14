@@ -370,11 +370,11 @@ class UtilizationReviewSimulation:
         # applies to ALL PA types
         # provider decides whether to submit claim (even if PA denied)
         # skip if provider chose not to treat after PA denial (no services rendered)
-        if state.authorization_request and not getattr(state, 'care_abandoned', False):
+        if state.service_lines and not getattr(state, 'care_abandoned', False):
             state = run_phase_3_claims(self, state, case, case_type)
 
         # phase 4: financial settlement
-        if state.authorization_request:
+        if state.service_lines:
             state = run_phase_4_financial(state, case)
 
         if "ground_truth" in case:

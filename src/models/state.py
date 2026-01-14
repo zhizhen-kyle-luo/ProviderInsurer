@@ -6,8 +6,7 @@ from pydantic import BaseModel, Field
 
 from .case_types import CaseType
 from .patient import AdmissionNotification, ClinicalPresentation
-from .authorization import AuthorizationRequest
-from .financial import ClaimLineItem
+from .financial import ServiceLineRequest
 from .metrics import FrictionMetrics
 
 if TYPE_CHECKING:
@@ -26,8 +25,8 @@ class EncounterState(BaseModel):
     admission: AdmissionNotification
     clinical_presentation: ClinicalPresentation
 
-    # unified authorization request (includes both request and payer decision)
-    authorization_request: Optional[AuthorizationRequest] = None
+    # unified service lines for both Phase 2 (278 authorization) and Phase 3 (837/835 claims)
+    service_lines: List[ServiceLineRequest] = Field(default_factory=list)
 
     denial_occurred: bool = False
     appeal_filed: bool = False
@@ -44,8 +43,10 @@ class EncounterState(BaseModel):
     phase_3_billed_amount: Optional[float] = None
     phase_3_diagnosis_code: Optional[str] = None
 
-    # phase 3 line-level claim tracking (X12 837/835 aligned)
-    claim_lines: List[ClaimLineItem] = Field(default_factory=list)  # individual service lines with adjudication status
+    # X12 837 CLM / 835 CLP claim-level totals (sum of all service_lines)
+    claim_total_charge: Optional[float] = None  # X12 837 CLM-02: total billed
+    claim_total_allowed: Optional[float] = None  # X12 835 CLP-03: payer allowed amount
+    claim_total_paid: Optional[float] = None  # X12 835 CLP-04: actual payment
 
     # friction model - policy asymmetry and friction tracking
     friction_metrics: Optional[FrictionMetrics] = None

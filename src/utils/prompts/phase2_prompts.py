@@ -19,15 +19,16 @@ from .config import (
     PROVIDER_REQUEST_TYPES,
     PAYOR_ACTIONS_GUIDE,
 )
-from src.models.prompt_formats import (
+from .response_schemas import (
     phase2_provider_response_format,
     phase2_treatment_decision_response_format,
     phase2_payor_response_format,
 )
-from src.models.request_formats import (
+from .prompt_renderers import (
     phase2_diagnostic_request_summary,
     phase2_treatment_request_summary,
     phase2_level_of_care_request_summary,
+    render_diagnosis_summary,
 )
 
 
@@ -47,8 +48,8 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
             prior_context += f"\nIteration {i}:\n"
             prior_context += f"  Your request: {iter_data['provider_request_type']}\n"
             prior_context += f"  Payor decision: {iter_data['payor_decision']}\n"
-            if iter_data.get('payor_denial_reason'):
-                prior_context += f"  Denial reason: {iter_data['payor_denial_reason']}\n"
+            if iter_data.get('payor_decision_reason'):
+                prior_context += f"  Denial reason: {iter_data['payor_decision_reason']}\n"
             if iter_data.get('test_results'):
                 prior_context += f"  NEW TEST RESULTS RECEIVED: {json.dumps(iter_data['test_results'], indent=4)}\n"
                 # track completed tests to prevent re-requesting
@@ -128,7 +129,7 @@ RESPONSE FORMAT (JSON):
 
 def create_treatment_decision_after_phase2_denial_prompt(
     state,
-    denial_reason: str,
+    decision_reason: str,
 ):
     """Prompt for provider decision to treat after Phase 2 denial."""
     return f"""TREATMENT DECISION AFTER PHASE 2 DENIAL
@@ -138,7 +139,7 @@ You must decide: Provide care anyway (risking nonpayment), or decline treatment?
 
 PHASE 2 OUTCOME:
 - Status: denied
-- Denial Reason: {denial_reason}
+- Denial Reason: {decision_reason}
 
 CLINICAL CONTEXT:
 - Patient Age: {state.admission.patient_demographics.age}
@@ -219,11 +220,7 @@ def create_unified_payor_review_prompt(state, provider_request, iteration, level
     diagnosis_codes = provider_request.get('diagnosis_codes')
     if not isinstance(diagnosis_codes, list):
         raise ValueError("provider_request.diagnosis_codes must be a list")
-    diagnosis_summary = ""
-    if diagnosis_codes:
-        diagnosis_summary = "\nDiagnosis Codes:\n" + "\n".join([
-            f"  - {d.get('icd10')}: {d.get('description')}" for d in diagnosis_codes
-        ])
+    diagnosis_summary = render_diagnosis_summary(diagnosis_codes)
 
     # inject payor policy view if available
     policy_section = ""
@@ -253,9 +250,9 @@ CRITICAL: Apply your coverage criteria strictly. Deny if documentation does not 
     pend_limit_reached = can_pend_by_level and (pend_count_at_level >= MAX_REQUEST_INFO_PER_LEVEL)
 
     if can_pend:
-        decision_options = "approved | downgrade | denied | pending_info"
+        decision_options = "approved | modified | denied | pending_info"
     else:
-        decision_options = "approved | downgrade | denied"
+        decision_options = "approved | modified | denied"
 
     stage_instruction = f"""LEVEL {level} - {level_config['name'].upper()} ({role_label}):
 Reviewer: {role_label}
@@ -268,7 +265,7 @@ Decision options: {decision_options}
 """
     if pend_limit_reached:
         stage_instruction += f"""CRITICAL: You have reached the maximum REQUEST_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends) at this level.
-You MUST issue a final decision: APPROVED, DOWNGRADE, or DENIED.
+You MUST issue a final decision: APPROVED, MODIFIED, or DENIED.
 REQUEST_INFO (pending_info) is NO LONGER available.
 
 """

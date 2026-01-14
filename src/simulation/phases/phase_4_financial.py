@@ -16,8 +16,7 @@ def run_phase_4_financial(
 
     Cost modeling removed for now
     """
-    # Final outcome is already recorded in state.authorization_request.authorization_status
-    # Iteration counts tracked in audit_log
-    # Appeal/pend metrics tracked in state flags (appeal_filed, claim_pended, etc.)
-    # Nothing to calculate for now, just return state with all outcomes recorded
+    # final outcomes already recorded in state.service_lines (authorization_status, adjudication_status)
+    # iteration counts tracked in audit_log
+    # appeal/pend metrics tracked in state flags (appeal_filed, claim_pended, etc.)
     return state
