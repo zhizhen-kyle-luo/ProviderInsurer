@@ -235,7 +235,7 @@ Examples:
 
     # Default to all runs if none specified
     if not runs_to_execute:
-        runs_to_execute = ['A', 'B', 'C', "C'"]
+        runs_to_execute = ['A', 'B', 'C', 'C_prime']
 
     print("=" * 80)
     print("HYPOTHESIS TESTING EXPERIMENT")
