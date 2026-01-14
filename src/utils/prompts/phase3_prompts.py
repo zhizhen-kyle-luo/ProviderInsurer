@@ -12,24 +12,24 @@ from .config import (
     WORKFLOW_LEVELS,
     PAYOR_ACTIONS_GUIDE,
 )
-from src.models.prompt_formats import (
+from .response_schemas import (
     phase3_claim_submission_decision_response_format,
     phase3_provider_response_format,
     phase3_payor_response_format,
 )
-from src.models.request_formats import (
+from .prompt_renderers import (
     phase3_provider_service_details,
     phase3_provider_coding_section,
     phase3_payor_service_summary,
-    phase3_payor_diagnosis_summary,
+    render_diagnosis_summary,
     phase3_payor_procedure_summary,
 )
 
 
 def create_phase3_claim_submission_decision_prompt(
     state,
-    pa_status: str,
-    denial_reason: str,
+    p2_status: str,
+    decision_reason: str,
 ):
     """Prompt for provider decision to submit a claim after phase 2 denial."""
     return f"""PHASE 3: CLAIM SUBMISSION DECISION
@@ -38,9 +38,9 @@ SITUATION: Your Phase 2 utilization review request was DENIED, but the patient s
 You must decide: Submit a claim for payment, or skip claim submission?
 
 PHASE 2 OUTCOME:
-- Status: {pa_status}
-- Denial Reason: {denial_reason}
-- Service: {state.authorization_request.service_name if state.authorization_request and state.authorization_request.service_name else 'N/A'}
+- Status: {p2_status}
+- Denial Reason: {decision_reason}
+- Service: {state.service_lines[0].service_name if state.service_lines else 'N/A'}
 
 CLINICAL CONTEXT:
 - Patient Age: {state.admission.patient_demographics.age}
@@ -91,38 +91,38 @@ def create_unified_phase3_provider_request_prompt(
             return "N/A"
         return str(value)
 
-    # build line-level claim status summary (provider memory of what was approved/denied)
-    claim_lines_summary = ""
-    if state.claim_lines:
-        claim_lines_summary = "\nCLAIM LINE STATUS (your submitted lines and payor decisions):\n"
-        for line in state.claim_lines:
+    # build line-level service status summary (provider memory of what was approved/denied)
+    service_lines_summary = ""
+    if state.service_lines:
+        service_lines_summary = "\nSERVICE LINE STATUS (your submitted lines and payor decisions):\n"
+        for line in state.service_lines:
             if line.current_review_level not in WORKFLOW_LEVELS:
-                raise ValueError(f"unknown review level '{line.current_review_level}' in claim_lines")
+                raise ValueError(f"unknown review level '{line.current_review_level}' in service_lines")
             if not line.provider_action:
-                raise ValueError("claim_lines entry missing required field 'provider_action'")
+                raise ValueError("service_lines entry missing required field 'provider_action'")
 
-            claim_lines_summary += f"\nLine {line.line_number}: {line.procedure_code} - {line.service_description}\n"
-            claim_lines_summary += f"  Billed: {format_currency(line.billed_amount)} (qty: {line.quantity})\n"
+            service_lines_summary += f"\nLine {line.line_number}: {line.procedure_code} - {line.service_description}\n"
+            service_lines_summary += f"  Billed: {format_currency(line.charge_amount)} (qty: {line.requested_quantity})\n"
 
             if line.adjudication_status:
-                claim_lines_summary += f"  Status: {line.adjudication_status.upper()}\n"
+                service_lines_summary += f"  Status: {line.adjudication_status.upper()}\n"
                 if line.adjudication_status == "approved":
-                    claim_lines_summary += f"  Paid: {format_currency(line.paid_amount)}\n"
-                elif line.adjudication_status == "downgrade":
-                    claim_lines_summary += f"  Downgrade Reason: {line.adjustment_reason}\n"
+                    service_lines_summary += f"  Paid: {format_currency(line.paid_amount)}\n"
+                elif line.adjudication_status == "modified":
+                    service_lines_summary += f"  Modification: {line.decision_reason}\n"
                 elif line.adjudication_status == "denied":
-                    claim_lines_summary += f"  Denial Reason: {line.adjustment_reason}\n"
+                    service_lines_summary += f"  Denial Reason: {line.decision_reason}\n"
                 elif line.adjudication_status == "pending_info":
-                    claim_lines_summary += f"  Pending Reason: {line.adjustment_reason}\n"
+                    service_lines_summary += f"  Pending Reason: {line.decision_reason}\n"
 
             level_config = WORKFLOW_LEVELS[line.current_review_level]
-            claim_lines_summary += (
+            service_lines_summary += (
                 f"  Review Level: L{line.current_review_level} "
                 f"({level_config['name'].upper()} - {level_config['role_label']})\n"
             )
-            claim_lines_summary += f"  Your Action: {line.provider_action}\n"
+            service_lines_summary += f"  Your Action: {line.provider_action}\n"
 
-        claim_lines_summary += "\n"
+        service_lines_summary += "\n"
 
     # format prior iterations for context
     prior_context = ""
@@ -132,8 +132,8 @@ def create_unified_phase3_provider_request_prompt(
             prior_context += f"\nIteration {i}:\n"
             prior_context += f"  Your submission: {iter_data.get('provider_request_type', 'claim')}\n"
             prior_context += f"  Payor decision: {iter_data.get('payor_decision', 'unknown')}\n"
-            if iter_data.get('payor_denial_reason'):
-                prior_context += f"  Denial/pend reason: {iter_data['payor_denial_reason']}\n"
+            if iter_data.get('payor_decision_reason'):
+                prior_context += f"  Denial/pend reason: {iter_data['payor_decision_reason']}\n"
 
     # stage-specific provider instructions
     stage_instruction = ""
@@ -190,7 +190,7 @@ CRITICAL OPERATIONAL CONTEXT - PHASE 3:
 - Your goal: Demonstrate that documentation supports reimbursement
 - If Phase 2 approved the service, assume it WAS delivered as authorized. Submit a payable, itemized claim.
 
-{prior_context}{claim_lines_summary}
+{prior_context}{service_lines_summary}
 PATIENT INFORMATION:
 - Age: {state.admission.patient_demographics.age}
 - Sex: {state.admission.patient_demographics.sex}
@@ -201,9 +201,9 @@ PATIENT INFORMATION:
 {service_details}
 
 PHASE 2 UTILIZATION REVIEW DECISION:
-- Status: {state.authorization_request.authorization_status if state.authorization_request else 'approved'}
-- Reviewer: {state.authorization_request.reviewer_type if state.authorization_request and state.authorization_request.reviewer_type else 'Unknown'} (Level {state.authorization_request.review_level if state.authorization_request and state.authorization_request.review_level is not None else 'N/A'})
-- Service: {state.authorization_request.service_name if state.authorization_request else 'N/A'}
+- Status: {state.service_lines[0].authorization_status if state.service_lines else 'N/A'}
+- Reviewer: {state.service_lines[0].reviewer_type if state.service_lines and state.service_lines[0].reviewer_type else 'Unknown'} (Level {state.service_lines[0].current_review_level if state.service_lines else 'N/A'})
+- Service: {state.service_lines[0].service_name if state.service_lines else 'N/A'}
 
 CLINICAL DOCUMENTATION:
 {combined_clinical_doc}
@@ -248,17 +248,19 @@ def create_unified_phase3_payor_review_prompt(
     """
     def sum_procedure_billed_amount(procedure_codes):
         total = 0.0
-        has_amount = False
         for proc in procedure_codes:
-            amount = proc.get("amount_billed")
-            quantity = proc.get("quantity", 1)
-            if isinstance(amount, (int, float)):
-                has_amount = True
-                if isinstance(quantity, (int, float)):
-                    total += amount * quantity
-                else:
-                    total += amount
-        return total if has_amount else None
+            if "charge_amount" not in proc:
+                raise ValueError("procedure_codes entry missing required field 'charge_amount'")
+            if "requested_quantity" not in proc:
+                raise ValueError("procedure_codes entry missing required field 'requested_quantity'")
+            amount = proc["charge_amount"]
+            quantity = proc["requested_quantity"]
+            if not isinstance(amount, (int, float)):
+                raise ValueError("procedure_codes.charge_amount must be numeric")
+            if not isinstance(quantity, (int, float)):
+                raise ValueError("procedure_codes.requested_quantity must be numeric")
+            total += amount * quantity
+        return total
 
     if level not in WORKFLOW_LEVELS:
         raise ValueError(f"unknown level '{level}' in create_unified_phase3_payor_review_prompt")
@@ -279,22 +281,20 @@ def create_unified_phase3_payor_review_prompt(
         total_billed = provider_billed_amount
 
     if total_billed is None:
-        provider_total = provider_request.get("total_amount_billed")
-        if isinstance(provider_total, (int, float)):
-            total_billed = provider_total
+        if "total_amount_billed" not in provider_request:
+            raise ValueError("provider_request missing required field 'total_amount_billed'")
+        provider_total = provider_request["total_amount_billed"]
+        if not isinstance(provider_total, (int, float)):
+            raise ValueError("provider_request.total_amount_billed must be numeric")
+        total_billed = provider_total
 
-    procedure_codes = provider_request.get('procedure_codes', [])
-    if total_billed is None and procedure_codes:
-        total_billed = sum_procedure_billed_amount(procedure_codes)
+    if "procedure_codes" not in provider_request:
+        raise ValueError("provider_request missing required field 'procedure_codes'")
+    procedure_codes = provider_request["procedure_codes"]
+    if not isinstance(procedure_codes, list) or not procedure_codes:
+        raise ValueError("provider_request.procedure_codes must be a non-empty list")
 
-    if total_billed is None and cost_ref:
-        if case_type == CaseType.SPECIALTY_MEDICATION:
-            total_billed = cost_ref.get('drug_acquisition_cost', 7800) + cost_ref.get('administration_fee', 150)
-        else:
-            total_billed = cost_ref.get('procedure_cost', 7800)
-
-    if total_billed is None:
-        total_billed = 0.0
+    _ = sum_procedure_billed_amount(procedure_codes)
 
     # build clinical documentation
     clinical_doc_parts = []
@@ -331,8 +331,12 @@ def create_unified_phase3_payor_review_prompt(
     combined_clinical_doc = "\n".join(clinical_doc_parts) if clinical_doc_parts else "No documentation provided"
 
     # get diagnosis codes if present
-    diagnosis_codes = provider_request.get('diagnosis_codes', [])
-    diagnosis_summary = phase3_payor_diagnosis_summary(diagnosis_codes)
+    if "diagnosis_codes" not in provider_request:
+        raise ValueError("provider_request missing required field 'diagnosis_codes'")
+    diagnosis_codes = provider_request["diagnosis_codes"]
+    if not isinstance(diagnosis_codes, list):
+        raise ValueError("provider_request.diagnosis_codes must be a list")
+    diagnosis_summary = render_diagnosis_summary(diagnosis_codes)
 
     # extract procedure codes (line-level billing)
     procedure_summary = phase3_payor_procedure_summary(procedure_codes)
@@ -365,9 +369,9 @@ Review the claim documentation against payment guidelines.
     pend_limit_reached = can_pend_by_level and (pend_count_at_level >= MAX_REQUEST_INFO_PER_LEVEL)
 
     if can_pend:
-        decision_options = "approved | downgrade | denied | pending_info"
+        decision_options = "approved | modified | denied | pending_info"
     else:
-        decision_options = "approved | downgrade | denied"
+        decision_options = "approved | modified | denied"
 
     stage_instruction = f"""LEVEL {level} - {level_config['name'].upper()} ({role_label}):
 Reviewer: {role_label}
@@ -383,12 +387,12 @@ CRITICAL - PHASE 3 OPERATIONAL CONTEXT:
 - Record is FIXED: you cannot request new clinical actions
 - REQUEST_INFO can only ask for EXISTING documentation (discharge summary, records)
 - Provider may abandon pended claims (pends have high abandonment rate)
-- DOWNGRADE in Phase 3 means approving lower-level code/DRG than submitted
+- MODIFY in Phase 3 means approving lower-level code/DRG than submitted
 
 """
     if pend_limit_reached:
         stage_instruction += f"""CRITICAL: You have reached the maximum REQUEST_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends) at this level.
-You MUST issue a final decision: APPROVED, DOWNGRADE, or DENIED.
+You MUST issue a final decision: APPROVED, MODIFIED, or DENIED.
 REQUEST_INFO (pending_info) is NO LONGER available.
 
 """
@@ -415,9 +419,9 @@ Your decision must be based solely on the submitted claim documentation.
 {diagnosis_summary}{procedure_summary}
 
 PHASE 2 UTILIZATION REVIEW DECISION:
-- Status: {state.authorization_request.authorization_status if state.authorization_request else 'approved'}
-- Reviewer: {state.authorization_request.reviewer_type if state.authorization_request and state.authorization_request.reviewer_type else 'Unknown'} (Level {state.authorization_request.review_level if state.authorization_request and state.authorization_request.review_level is not None else 'N/A'})
-- Service Approved: {state.authorization_request.service_name if state.authorization_request else 'N/A'}
+- Status: {state.service_lines[0].authorization_status if state.service_lines else 'N/A'}
+- Reviewer: {state.service_lines[0].reviewer_type if state.service_lines and state.service_lines[0].reviewer_type else 'Unknown'} (Level {state.service_lines[0].current_review_level if state.service_lines else 'N/A'})
+- Service Approved: {state.service_lines[0].service_name if state.service_lines else 'N/A'}
 
 CLINICAL DOCUMENTATION:
 {combined_clinical_doc}

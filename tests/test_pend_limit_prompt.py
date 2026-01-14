@@ -42,7 +42,7 @@ def test_phase2_pend_limit_in_prompt():
         level=0,
         pend_count_at_level=0,
     )
-    assert "Decision options: approved | downgrade | denied | pending_info" in prompt_below_limit
+    assert "Decision options: approved | modified | denied | pending_info" in prompt_below_limit
     assert "maximum REQUEST_INFO limit" not in prompt_below_limit
 
     # prompt with pend_count = limit: should show warning and remove pending_info from decision options
@@ -53,8 +53,8 @@ def test_phase2_pend_limit_in_prompt():
         level=0,
         pend_count_at_level=MAX_REQUEST_INFO_PER_LEVEL,
     )
-    assert "Decision options: approved | downgrade | denied | pending_info" not in prompt_at_limit
-    assert "Decision options: approved | downgrade | denied" in prompt_at_limit
+    assert "Decision options: approved | modified | denied | pending_info" not in prompt_at_limit
+    assert "Decision options: approved | modified | denied" in prompt_at_limit
     assert f"maximum REQUEST_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends)" in prompt_at_limit
     assert "NO LONGER available" in prompt_at_limit
 
@@ -84,7 +84,7 @@ def test_phase3_pend_limit_in_prompt():
     provider_request = {
         "diagnosis_codes": [{"icd10": "K50.012", "description": "Crohn's"}],
         "procedure_codes": [
-            {"code": "J1745", "code_type": "J-code", "description": "Infliximab", "quantity": 10, "amount_billed": 100.0},
+            {"code": "J1745", "code_type": "J-code", "description": "Infliximab", "requested_quantity": 10, "charge_amount": 100.0},
         ],
     }
 
@@ -102,7 +102,7 @@ def test_phase3_pend_limit_in_prompt():
         provider_billed_amount=None,
         pend_count_at_level=0,
     )
-    assert "Decision options: approved | downgrade | denied | pending_info" in prompt_below_limit
+    assert "Decision options: approved | modified | denied | pending_info" in prompt_below_limit
     assert "maximum REQUEST_INFO limit" not in prompt_below_limit
 
     # prompt with pend_count = limit: should show warning and remove pending_info from decision options
@@ -119,8 +119,8 @@ def test_phase3_pend_limit_in_prompt():
         provider_billed_amount=None,
         pend_count_at_level=MAX_REQUEST_INFO_PER_LEVEL,
     )
-    assert "Decision options: approved | downgrade | denied | pending_info" not in prompt_at_limit
-    assert "Decision options: approved | downgrade | denied" in prompt_at_limit
+    assert "Decision options: approved | modified | denied | pending_info" not in prompt_at_limit
+    assert "Decision options: approved | modified | denied" in prompt_at_limit
     assert f"maximum REQUEST_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends)" in prompt_at_limit
     assert "NO LONGER available" in prompt_at_limit
 

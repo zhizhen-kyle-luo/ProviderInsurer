@@ -1,4 +1,4 @@
-"""Prompt response format templates derived from shared schema definitions."""
+"""response schema templates for LLM JSON responses"""
 from __future__ import annotations
 
 from typing import Optional
@@ -59,19 +59,15 @@ def phase2_payor_response_format(
     level: int
 ) -> str:
     """Return Phase 2 payor RESPONSE FORMAT (JSON) block."""
-    missing_doc_line: Optional[str] = None
-    if can_pend:
-        missing_doc_line = "'missing_documentation': ['<doc1>', '<doc2>'],  // if pending_info"
-
     lines = [
         "{",
         f'    "action": "{decision_options.replace(" | ", "\" or \"")}",',
-        '    "denial_reason": "<specific reason if denied' + (" or pended" if can_pend else "") + '>",',
+        '    "decision_reason": "<specific reason for decision>",',
     ]
-    if missing_doc_line:
-        lines.append(f"    {missing_doc_line}")
+    if can_pend:
+        lines.append('    "requested_documents": ["<doc1>", "<doc2>"],  // if pending_info: what docs needed')
     lines.extend([
-        '    "downgrade_alternative": "<if downgrade: describe approved alternative (e.g., \'observation status instead of inpatient\', \'home infusion instead of hospital infusion\')>",',
+        '    "downgrade_alternative": "<if modified: describe approved alternative (e.g., \'observation status instead of inpatient\', \'home infusion instead of hospital infusion\')>",',
         '    "criteria_used": "<guidelines or policies applied>",',
         f'    "reviewer_type": "{role_label}",',
         f'    "level": {level},',
@@ -105,11 +101,11 @@ def phase3_provider_response_format() -> str:
         ],
         "procedure_codes": [
             {
-                "code": "<CPT/HCPCS/J-code>",
+                "procedure_code": "<CPT/HCPCS/J-code>",
                 "code_type": "CPT" or "HCPCS" or "J-code",
-                "description": "<service description>",
-                "quantity": <number>,
-                "amount_billed": <dollar amount per unit>
+                "service_description": "<service description>",
+                "requested_quantity": <number>,
+                "charge_amount": <dollar amount per unit>
             }
         ],
         "total_amount_billed": <total dollar amount>,
@@ -129,7 +125,7 @@ def phase3_payor_response_format(
     """Return Phase 3 payor RESPONSE FORMAT (JSON) block."""
     lines = [
         "{",
-        f'    "action": "{decision_options.replace(" | ", "\" or \"")}",  // overall: approved, downgrade, denied, or pending_info',
+        f'    "action": "{decision_options.replace(" | ", "\" or \"")}",  // overall: approved, modified, denied, or pending_info',
         "",
         "    // LINE-LEVEL ADJUDICATION (X12 835 remittance advice aligned)",
         "    // adjudicate each submitted procedure code line separately",
@@ -137,33 +133,30 @@ def phase3_payor_response_format(
         "        {",
         "            \"line_number\": <1-based index into procedure_codes array>,",
         "            \"procedure_code\": \"<CPT/HCPCS code from submission>\",",
-        "            \"adjudication_status\": \"approved\" or \"downgrade\" or \"denied\" or \"pending_info\",",
-        "            \"billed_amount\": <amount provider billed>,",
+        "            \"adjudication_status\": \"approved\" or \"modified\" or \"denied\" or \"pending_info\",",
+        "            \"charge_amount\": <amount provider billed>,",
         "            \"allowed_amount\": <payor's contractual allowed amount>,",
         "            \"paid_amount\": <actual payment amount>,",
-        "            \"adjustment_reason\": \"<reason for denial or adjustment, if any>\",",
-        "            \"downgraded_code\": \"<if downgraded, the approved alternative code>\"",
+        "            \"decision_reason\": \"<reason for this line's decision>\",",
+        "            \"downgraded_code\": \"<if modified, the approved alternative code>\"",
         "        }",
         "    ],",
         "",
         "    // OVERALL CLAIM-LEVEL FIELDS",
         "    \"total_paid_amount\": <sum of all line paid_amounts>,",
+        "    \"decision_reason\": \"<overall reason for claim decision>\",",
         "",
-        "    // if downgrade:",
+        "    // if modified:",
         "    \"downgrade_alternative\": \"<describe approved alternative level/code>\",",
         "",
     ]
     if can_pend:
         lines.extend([
             "    // if pending_info (only for Levels 0-1):",
-            "    \"pend_reason\": \"<what EXISTING documentation is missing>\",",
             "    \"requested_documents\": [\"<discharge summary>\", \"<operative report>\", etc.],",
             "",
         ])
     lines.extend([
-        "    // if fully denied (all lines denied):",
-        "    \"denial_reason\": \"<overall reason for full claim denial>\",",
-        "",
         "    \"criteria_used\": \"<payment guidelines or policies applied>\",",
         f'    "reviewer_type": "{role_label}",',
         f"    \"level\": {level}",
