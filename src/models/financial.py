@@ -14,12 +14,17 @@ class ServiceLineRequest(BaseModel):
     - X12 835 SVC segment (remittance advice)
 
     represents lifecycle: PA request → PA decision → claim submission → adjudication
+
+    per-line independence:
+    - each line has its own request_type (diagnostic_test, treatment, level_of_care)
+    - each line is adjudicated independently (different statuses per line allowed)
+    - terminal status evaluated per-line: one line terminal doesn't affect others
+    - workflow continues until ALL lines reach terminal status
     """
     # X12 278/837 SV1 segment (shared fields)
     line_number: int  # 837 LX-01 explicit counter, 278 implicit sequence
     procedure_code: str  # SV1-01: CPT/HCPCS/J-code
     code_type: str  # qualifier: "CPT", "HCPCS", "J-code", "NDC"
-    service_description: str
     requested_quantity: int  # SV1-03 or HSD-01
     quantity_unit: Optional[str] = None  # HSD: "days", "visits", "units", "infusions"
 
@@ -56,7 +61,7 @@ class ServiceLineRequest(BaseModel):
     modification_type: Optional[str] = None  # "quantity_reduction" | "code_downgrade"
 
     # shared decision fields (both phases - X12 278 HCR03/MSG, 835 LQ remark)
-    decision_reason: Optional[str] = None  # why approved/denied/modified/pended
+    decision_reason: Optional[str] = None  # why approved/denied/modified/pending_info
     requested_documents: List[str] = Field(default_factory=list)  # if pending_info: what docs needed
 
     # Phase 3 decision fields (X12 835 SVC/CLP response)
@@ -71,4 +76,3 @@ class ServiceLineRequest(BaseModel):
     # workflow tracking (internal, not X12)
     current_review_level: int = 0  # 0=initial, 1=reconsideration, 2=IRE
     reviewer_type: Optional[str] = None  # "UM Triage", "Medical Director", "IRE"
-    provider_action: Optional[str] = None  # "continue", "appeal", "abandon"

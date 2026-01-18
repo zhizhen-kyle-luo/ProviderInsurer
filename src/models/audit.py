@@ -294,7 +294,7 @@ class AuditLog(BaseModel):
         # 3. Phase 3 files - claims adjudication (may have multiple iterations for appeals/resubmissions)
         phase_3_interactions = [i for i in self.interactions if i.phase == "phase_3_claims"]
         if phase_3_interactions:
-            # group by iteration (claims can be pended/appealed)
+            # group by iteration (claims can be pending_info/appealed)
             p3_iterations = {}
             for interaction in phase_3_interactions:
                 iter_num = interaction.metadata.get("iteration", interaction.metadata.get("appeal_round", 1))
@@ -375,6 +375,23 @@ class AuditLog(BaseModel):
                 pay = params["payor"]
                 pay_items = ", ".join(f"{k}={v}" for k, v in pay.items())
                 lines.append(f"**Payor:** {pay_items}")
+            lines.append("")
+
+        # environment actions (test results)
+        test_result_actions = [a for a in self.environment_actions if a.action_type == "generate_test_result"]
+        if test_result_actions:
+            lines.append("## Environment Agent: Test Results")
+            lines.append("")
+            lines.append("| Test Name | Result | Source |")
+            lines.append("|-----------|--------|--------|")
+            for action in test_result_actions:
+                test_name = action.outcome.get("test_name", "?")
+                result = action.outcome.get("test_result", "?")
+                # truncate long results
+                if len(result) > 50:
+                    result = result[:47] + "..."
+                source = action.outcome.get("source", "?")
+                lines.append(f"| {test_name} | {result} | {source} |")
             lines.append("")
 
         # decision trace by phase

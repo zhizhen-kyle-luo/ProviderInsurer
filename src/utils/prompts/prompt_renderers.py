@@ -28,6 +28,7 @@ def phase2_level_of_care_request_summary(requested_service: Dict[str, Any]) -> s
     """render Phase 2 level-of-care request summary"""
     return f"""
 LEVEL OF CARE REVIEW REQUEST (Phase 2):
+Service: {requested_service.get('service_name')}
 Requested Status: {requested_service.get('requested_status')}
 Alternative Status: {requested_service.get('alternative_status')}
 Severity Indicators: {requested_service.get('severity_indicators')}

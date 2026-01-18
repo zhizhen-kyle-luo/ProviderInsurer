@@ -8,8 +8,6 @@ class PatientDemographics(BaseModel):
     patient_id: str
     age: int
     sex: Literal["M", "F"]
-    mrn: str
-
 
 class AdmissionNotification(BaseModel):
     patient_demographics: PatientDemographics

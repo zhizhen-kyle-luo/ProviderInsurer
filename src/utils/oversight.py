@@ -8,7 +8,7 @@ import difflib
 import json
 from langchain_core.messages import HumanMessage
 
-from src.utils.prompts import OVERSIGHT_GUIDANCE
+from src.utils.prompts import OVERSIGHT_GUIDANCE, OVERSIGHT_CONSTRAINTS
 from src.utils.json_parsing import extract_json_from_text
 
 
@@ -108,6 +108,7 @@ def apply_oversight_edit(
     """
     guidance = OVERSIGHT_GUIDANCE.get(oversight_level, OVERSIGHT_GUIDANCE['medium'])
     evidence_summary = _build_evidence_summary(evidence_packet)
+    role_constraints = OVERSIGHT_CONSTRAINTS.get(role, "")
 
     # construct oversight prompt
     prompt = f"""You are reviewing an AI-generated {role} draft.
@@ -115,6 +116,8 @@ def apply_oversight_edit(
 OVERSIGHT LEVEL: {oversight_level}
 GUIDANCE: {guidance['instruction']}
 TYPICAL BEHAVIOR: {guidance['typical_behavior']}
+
+{role_constraints}
 
 DRAFT TO REVIEW:
 {draft_text}
