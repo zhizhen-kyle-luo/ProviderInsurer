@@ -8,7 +8,6 @@ from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import HumanMessage
 from src.models import (
     EncounterState,
-    CaseType,
     AdmissionNotification,
     PatientDemographics,
     ClinicalPresentation,
@@ -23,7 +22,9 @@ from src.utils.cached_llm import CachedLLM
 from src.utils.prompts import (
     DEFAULT_PROVIDER_PARAMS,
     DEFAULT_PAYOR_PARAMS,
-    MAX_ITERATIONS
+    MAX_ITERATIONS,
+    create_post_diagnostic_decision_prompt,
+    VALID_POST_DIAGNOSTIC_DECISIONS
 )
 from src.simulation.phases import (
     run_phase_2_utilization_review,
@@ -273,6 +274,35 @@ class UtilizationReviewSimulation:
         """
         return generate_test_result(test_name, case, self.test_result_cache, self.test_result_llm)
 
+    def _get_post_diagnostic_decision(self, state: EncounterState, service_line, test_result: str) -> str:
+        """
+        get provider decision after diagnostic test approved and result available.
+
+        returns: "request_treatment" or "no_treatment_needed"
+        """
+        prompt = create_post_diagnostic_decision_prompt(state, service_line, test_result)
+
+        response = self.provider_base_llm.invoke([HumanMessage(content=prompt)])
+        response_text = response.content.strip()
+
+        # parse JSON response
+        try:
+            # strip markdown code blocks if present
+            if response_text.startswith("```"):
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+            parsed = json.loads(response_text)
+            decision = parsed.get("decision", "").lower().strip()
+            if decision in VALID_POST_DIAGNOSTIC_DECISIONS:
+                return decision
+            # default to request_treatment if invalid
+            print(f"  warning: invalid post_diagnostic_decision '{decision}', defaulting to request_treatment")
+            return "request_treatment"
+        except json.JSONDecodeError:
+            print("  warning: failed to parse post_diagnostic_decision response, defaulting to request_treatment")
+            return "request_treatment"
+
     def _build_admission_from_patient_data(self, case: Dict[str, Any]) -> AdmissionNotification:
         """construct AdmissionNotification from patient_visible_data (Golden Schema)"""
         from datetime import datetime
@@ -395,7 +425,7 @@ class UtilizationReviewSimulation:
         if state.friction_metrics:
             summary["friction_metrics"] = {
                 "provider_actions": state.friction_metrics.provider_actions,
-                "payor_actions": state.friction_metrics.payor_actions,
+                "VALID_PAYOR_ACTIONS": state.friction_metrics.VALID_PAYOR_ACTIONS,
                 "probing_tests_count": state.friction_metrics.probing_tests_count,
                 "escalation_depth": state.friction_metrics.escalation_depth,
                 "total_friction": state.friction_metrics.total_friction

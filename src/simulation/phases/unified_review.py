@@ -9,7 +9,7 @@ The key distinction:
 
 - Phase 3 = retrospective review / claims adjudication
   - Record is FIXED: clinical events already happened
-  - Payor can REQUEST_INFO: only for existing documentation (discharge summary, etc)
+  - Payor can PENDING_INFO: only for existing documentation (discharge summary, etc)
   - Decision: whether to PAY for care already rendered
 
 Both phases use the same 3-level WORKFLOW_LEVELS structure:
@@ -18,7 +18,7 @@ Both phases use the same 3-level WORKFLOW_LEVELS structure:
 - Level 2: independent_review (final clinical review, no pend)
 """
 
-from typing import Dict, Any, List, Callable, TYPE_CHECKING
+from typing import Dict, Any, Callable, Optional, TYPE_CHECKING
 from langchain_core.messages import HumanMessage
 
 from src.models import (
@@ -30,7 +30,6 @@ from src.utils.prompts import (
     create_provider_prompt,
     create_payor_prompt,
     WORKFLOW_LEVELS,
-    VALID_PROVIDER_ACTIONS,
     VALID_PAYOR_ACTIONS,
     VALID_REQUEST_TYPES,
 )
@@ -237,13 +236,13 @@ def run_unified_multi_level_review(
 
     while turn_count < max_turns_per_simulation:
         turn_count += 1
-        if current_level not in stage_map:
+        stage = stage_map.get(current_level)
+        if stage is None:
             raise ValueError(f"invalid review level: {current_level}")
-        stage = stage_map[current_level]
         print(f"\n[{phase}] Turn {turn_count}, Level {current_level} ({stage})")
 
         # === PROVIDER REQUEST ===
-        provider_request, request_type, draft_cache_hit = _get_provider_request(
+        provider_request, request_type, _ = _get_provider_request(
             sim, state, case, phase, current_level, prior_iterations,
             provider_prompt_fn, provider_prompt_kwargs, stage
         )
@@ -254,34 +253,17 @@ def run_unified_multi_level_review(
         # === PAYOR REVIEW ===
         payor_decision, payor_cache_hit = _get_payor_decision(
             sim, state, provider_request, phase, current_level, pend_count_at_level,
-            payor_prompt_fn, payor_prompt_kwargs, stage, request_type
+            payor_prompt_fn, payor_prompt_kwargs, stage
         )
 
         # validate and log
         payor_action = _validate_and_log_payor_decision(
-            sim, payor_decision, state, provider_request, phase, current_level,
+            sim, payor_decision, state, phase, current_level,
             stage, request_type, payor_cache_hit
         )
 
-        # friction counting
-        if state.friction_metrics:
-            state.friction_metrics.provider_actions += 1
-            state.friction_metrics.payor_actions += 1
-            # count probing tests from all requested services
-            requested_services = provider_request.get("requested_services", [])
-            for svc in requested_services:
-                if svc.get("request_type") == "diagnostic_test":
-                    state.friction_metrics.probing_tests_count += 1
-            state.friction_metrics.escalation_depth = max(
-                state.friction_metrics.escalation_depth, current_level
-            )
-
-        # create iteration record
-        iteration_record = {
-            "provider_request_type": request_type,
-            "payor_decision": payor_action,
-            "payor_decision_reason": payor_decision.get("decision_reason")
-        }
+        _update_friction_metrics(state, provider_request, current_level)
+        iteration_record = _build_iteration_record(request_type, payor_action, payor_decision)
 
         # === HANDLE DECISION OUTCOME ===
         outcome = _handle_payor_decision_outcome(
@@ -301,12 +283,11 @@ def run_unified_multi_level_review(
             continue
 
         # continue at same level (diagnostic test approved or pend addressed)
-        continue
 
     # === FINALIZATION ===
     _finalize_review(
         sim, state, case, phase, treatment_approved, provider_abandoned_after_denial,
-        approved_provider_request, prior_iterations, current_level, stage_map
+        approved_provider_request, prior_iterations, current_level
     )
 
     return state
@@ -327,7 +308,7 @@ def _get_provider_request(
     messages = [HumanMessage(content=full_prompt)]
 
     # copilot draft
-    print(f"  provider copilot drafting request...")
+    print("  provider copilot drafting request...")
     draft_response = sim.provider_copilot.invoke(messages)
     draft_text = draft_response.content
     draft_cache_hit = draft_response.additional_kwargs.get('cache_hit', False) if hasattr(draft_response, 'additional_kwargs') else False
@@ -411,7 +392,7 @@ def _get_provider_request(
 
 def _get_payor_decision(
     sim, state, provider_request, phase, current_level, pend_count_at_level,
-    payor_prompt_fn, payor_prompt_kwargs, stage, request_type
+    payor_prompt_fn, payor_prompt_kwargs, stage
 ):
     """get payor decision with copilot + oversight (or direct for L2)"""
     if current_level not in WORKFLOW_LEVELS:
@@ -431,7 +412,7 @@ def _get_payor_decision(
 
     if copilot_active:
         # copilot + oversight
-        print(f"  payor copilot reviewing...")
+        print("  payor copilot reviewing...")
         payor_draft_response = sim.payor_copilot.invoke(messages)
         payor_draft_text = payor_draft_response.content
         payor_cache_hit = payor_draft_response.additional_kwargs.get('cache_hit', False) if hasattr(payor_draft_response, 'additional_kwargs') else False
@@ -478,20 +459,6 @@ def _get_payor_decision(
         if phase == "phase_3_claims":
             process_phase3_payor_adjudications(state, payor_decision, iteration_num)
 
-    # validate action
-    if "action" not in payor_decision:
-        raise ValueError(
-            f"payor response missing required field 'action'. must be one of: {VALID_PAYOR_ACTIONS}"
-        )
-
-    payor_action = payor_decision["action"]
-    if payor_action not in VALID_PAYOR_ACTIONS:
-        raise ValueError(
-            f"invalid action '{payor_action}'. must be one of: {VALID_PAYOR_ACTIONS}"
-        )
-
-    print(f"  payor decision: {payor_action}")
-
     # log decision
     copilot_active = level_config.get("copilot_active", True)
     sim.audit_logger.log_interaction(
@@ -503,7 +470,7 @@ def _get_payor_decision(
                   "cache_hit": payor_cache_hit}
     )
 
-    return payor_action
+    return payor_decision
 
 
 def _handle_payor_decision_outcome(
@@ -517,10 +484,15 @@ def _handle_payor_decision_outcome(
             sim, state, provider_request, payor_decision, request_type, phase,
             iteration_record, prior_iterations, case
         )
+        # check if any treatment/level_of_care line is approved (per-line logic)
+        treatment_approved = outcome.is_terminal and any(
+            line.request_type in ["treatment", "level_of_care"] and line.authorization_status == "approved"
+            for line in state.service_lines
+        )
         return {
             "terminal": outcome.is_terminal,
             "escalate": outcome.should_escalate,
-            "treatment_approved": outcome.is_terminal and request_type in ["treatment", "level_of_care"],
+            "treatment_approved": treatment_approved,
             "approved_request": approved_request,
             "provider_abandoned": False
         }
@@ -599,16 +571,13 @@ def _handle_payor_decision_outcome(
             if treatment_decision == "no_treat":
                 state.care_abandoned = True
 
-    # collect test results
-    accumulated_test_results = {}
-    for iteration in prior_iterations:
-        if "test_results" in iteration:
-            accumulated_test_results.update(iteration["test_results"])
+    accumulated_test_results = _accumulate_test_results(prior_iterations)
 
-    # store evidence
-    evidence_attr = f"_{phase}_evidence"
-    setattr(state, evidence_attr, {
+    # store evidence in state for cross-phase access
+    evidence_data = {
         "approved_request": approved_provider_request,
         "test_results": accumulated_test_results,
         "iterations": prior_iterations
-    })
+    }
+    if phase == "phase_2_utilization_review":
+        state.phase_2_evidence = evidence_data

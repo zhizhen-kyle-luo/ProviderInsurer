@@ -141,7 +141,7 @@ def run_phase_3_claims(
     service_request = service_requests[0] if service_requests else {}
 
     cost_ref = case.get("cost_reference", {})
-    phase_2_evidence = {}
+    phase_2_evidence = state.phase_2_evidence or {}
 
     environment_data = case.get("environment_hidden_data", {})
     coding_options = environment_data.get("coding_options", [])

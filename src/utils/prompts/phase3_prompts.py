@@ -3,7 +3,7 @@ Phase 3 Prompts: Retrospective Review / Claims Adjudication (Post-Service)
 
 These prompts handle claim review after care is completed.
 Record status: FIXED (clinical events already happened, cannot order new tests)
-Insurer can: PEND only for existing documentation clarification, not new clinical actions
+Insurer can: pending_info only for existing documentation clarification, not new clinical actions
 """
 
 from .config import (
@@ -11,6 +11,7 @@ from .config import (
     MAX_REQUEST_INFO_PER_LEVEL,
     WORKFLOW_LEVELS,
     PAYOR_ACTIONS_GUIDE,
+    VALID_PAYOR_ACTIONS,
 )
 from .response_schemas import (
     phase3_claim_submission_decision_response_format,
@@ -231,6 +232,9 @@ IMPORTANT CONSTRAINTS - PHASE 3:
 3. You CAN clarify documentation, submit discharge summaries, add supporting notes
 4. Each appeal costs staff time - consider abandoning if unlikely to succeed
 
+RESPONSE: Return ONLY valid JSON (no markdown, no explanation).
+CRITICAL: All string values must be on a single line - use spaces instead of newlines within strings.
+
 RESPONSE FORMAT (JSON):
 {phase3_provider_response_format()}
 
@@ -252,12 +256,12 @@ def create_unified_phase3_payor_review_prompt(
     - Timing: AFTER care is complete
     - Record is FIXED: cannot request new clinical actions, only existing documentation
     - Decision: PAYMENT determination (not authorization)
-    - REQUEST_INFO at this phase: "submit discharge summary" NOT "order another test"
+    - PENDING_INFO at this phase: "submit discharge summary" NOT "order another test"
 
     uses WORKFLOW_LEVELS for level-specific semantics (same 3 levels as Phase 2):
-    - Level 0 (initial_determination): claims review, can REQUEST_INFO for missing docs
-    - Level 1 (internal_reconsideration): medical reviewer appeal review, can REQUEST_INFO
-    - Level 2 (independent_review): IRE, terminal, cannot REQUEST_INFO, must decide
+    - Level 0 (initial_determination): claims review, can PENDING_INFO for missing docs
+    - Level 1 (internal_reconsideration): medical reviewer appeal review, can PENDING_INFO
+    - Level 2 (independent_review): IRE, terminal, cannot PENDING_INFO, must decide
     """
     def sum_procedure_billed_amount(procedure_codes):
         total = 0.0
@@ -375,16 +379,16 @@ Review the claim documentation against payment guidelines.
     level_description = level_config["description"]
     can_pend_by_level = level_config["can_pend"]
     is_terminal = level_config["terminal"]
-    is_independent = level_config["independent"]
+    # is_independent = level_config["independent"]
 
     # enforce MAX_REQUEST_INFO_PER_LEVEL: disable pend if limit reached
     can_pend = can_pend_by_level and (pend_count_at_level < MAX_REQUEST_INFO_PER_LEVEL)
     pend_limit_reached = can_pend_by_level and (pend_count_at_level >= MAX_REQUEST_INFO_PER_LEVEL)
 
     if can_pend:
-        decision_options = "approved | modified | denied | pending_info"
+        decision_options = " | ".join(VALID_PAYOR_ACTIONS)
     else:
-        decision_options = "approved | modified | denied"
+        decision_options = " | ".join([a for a in VALID_PAYOR_ACTIONS if a != "pending_info"])
 
     stage_instruction = f"""LEVEL {level} - {level_config['name'].upper()} ({role_label}):
 Reviewer: {role_label}
@@ -398,27 +402,27 @@ CRITICAL - PHASE 3 OPERATIONAL CONTEXT:
 - This is RETROSPECTIVE REVIEW: care already completed
 - You are deciding PAYMENT, not authorization
 - Record is FIXED: you cannot request new clinical actions
-- REQUEST_INFO can only ask for EXISTING documentation (discharge summary, records)
-- Provider may abandon pended claims (pends have high abandonment rate)
+- PENDING_INFO can only ask for EXISTING documentation (discharge summary, records)
+- Provider may abandon pending_info claims (high abandonment rate)
 - MODIFY in Phase 3 means approving lower-level code/DRG than submitted
 
 """
     if pend_limit_reached:
-        stage_instruction += f"""CRITICAL: You have reached the maximum REQUEST_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends) at this level.
-You MUST issue a final decision: APPROVED, MODIFIED, or DENIED.
-REQUEST_INFO (pending_info) is NO LONGER available.
+        stage_instruction += f"""CRITICAL: You have reached the maximum PENDING_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} requests) at this level.
+You MUST issue a final decision: approved, modified, or denied.
+pending_info is no longer available.
 
 """
     if is_terminal:
         stage_instruction += """CRITICAL: This is a TERMINAL review level. You MUST issue a final APPROVED or DENIED decision.
-REQUEST_INFO (pending_info) is NOT available at this level.
+pending_info is not available at this level.
 
 """
-    if is_independent:
-        stage_instruction += """NOTE: As an independent external reviewer, you do NOT have access to plan-internal notes.
-Your decision must be based solely on the submitted claim documentation.
+#     if is_independent:
+#         stage_instruction += """NOTE: As an independent external reviewer, you do NOT have access to plan-internal notes.
+# Your decision must be based solely on the submitted claim documentation.
 
-"""
+# """
 
     base_prompt = f"""ITERATION {iteration}/{MAX_ITERATIONS} - PHASE 3: RETROSPECTIVE REVIEW (CLAIMS ADJUDICATION)
 
@@ -446,20 +450,23 @@ EVALUATION CRITERIA (RETROSPECTIVE):
 - Is documentation complete enough to justify payment?
 
 DECISION GUIDANCE:
-- APPROVED: documentation complete, claim valid, service aligns with Phase 2 decision/record
-- DENIED: service not covered OR clearly contradicts Phase 2 decision/record OR insufficient documentation
-- PENDED (if available at this level): request EXISTING documentation (discharge summary, records)
+- approved: documentation complete, claim valid, service aligns with Phase 2 decision/record
+- modified: approve a lower-level code/DRG or reduced payment based on policy
+- denied: service not covered OR clearly contradicts Phase 2 decision/record OR insufficient documentation
+- pending_info (if available at this level): request EXISTING documentation (discharge summary, records)
   - NOTE: Cannot request new tests or clinical actions (care is complete)
-  - Pended claims have high provider abandonment rate (regulatory arbitrage)
+  - pending_info claims have high provider abandonment rate (regulatory arbitrage)
   - Do NOT cite "no procedure codes" or "$0 billed" if procedure lines are listed or total billed is nonzero
 
+RESPONSE: Return ONLY valid JSON (no markdown, no explanation).
+CRITICAL: All string values must be on a single line - use spaces instead of newlines within strings.
+
 RESPONSE FORMAT (JSON):
-{phase3_payor_response_format(decision_options, role_label, level, can_pend)}
+{phase3_payor_response_format(role_label, level, can_pend)}
 
 IMPORTANT:
 - You are reviewing payment for services ALREADY RENDERED
 - You must adjudicate EACH procedure code line separately in line_adjudications array
-- Ensure line adjudications match overall action
 - Cannot prevent care (it already happened), can only approve/deny/pend payment"""
 
     return base_prompt

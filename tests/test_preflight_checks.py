@@ -128,7 +128,7 @@ def main() -> int:
     )
     if "Decision options: approved | modified | denied" not in payor_prompt_level2:
         failures.append("Phase 3 level 2 payor prompt still allows pending_info or missing MODIFIED.")
-    if "REQUEST_INFO (pending_info) is NOT available at this level." not in payor_prompt_level2:
+    if "PENDING_INFO (pending_info) is NOT available at this level." not in payor_prompt_level2:
         failures.append("Phase 3 level 2 payor prompt missing no-pend warning.")
 
     # AuthorizationRequest should not expose deprecated approved_quantity.

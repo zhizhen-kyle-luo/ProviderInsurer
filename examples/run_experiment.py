@@ -112,8 +112,8 @@ def print_results(result):
     if result.friction_metrics:
         fm = result.friction_metrics
         print(f"  Provider Actions: {fm.provider_actions}")
-        print(f"  Payor Actions: {fm.payor_actions}")
-        print(f"  Total Iterations: {fm.provider_actions + fm.payor_actions}")
+        print(f"  Payor Actions: {fm.VALID_PAYOR_ACTIONS}")
+        print(f"  Total Iterations: {fm.provider_actions + fm.VALID_PAYOR_ACTIONS}")
         print(f"  Probing Tests: {fm.probing_tests_count}")
         print(f"  Escalation Depth: {fm.escalation_depth}")
 
@@ -135,19 +135,25 @@ def collect_metrics(result):
     if not line.authorization_status:
         raise ValueError("service_lines[0].authorization_status is missing or empty")
 
+    # extract test results from phase_2_evidence
+    test_results = {}
+    if result.phase_2_evidence:
+        test_results = result.phase_2_evidence.get('test_results', {})
+
     return {
         'case_id': result.admission.case_id if hasattr(result.admission, 'case_id') else 'unknown',
         'phase_2_status': line.authorization_status,
         'pa_level_reached': result.current_level,
         'appeal_filed': result.appeal_filed,
         'appeal_successful': result.appeal_successful,
-        'total_iterations': (result.friction_metrics.provider_actions + result.friction_metrics.payor_actions) if result.friction_metrics else 0,
+        'total_iterations': (result.friction_metrics.provider_actions + result.friction_metrics.VALID_PAYOR_ACTIONS) if result.friction_metrics else 0,
         'provider_actions': result.friction_metrics.provider_actions if result.friction_metrics else 0,
-        'payor_actions': result.friction_metrics.payor_actions if result.friction_metrics else 0,
+        'VALID_PAYOR_ACTIONS': result.friction_metrics.VALID_PAYOR_ACTIONS if result.friction_metrics else 0,
         'probing_tests': result.friction_metrics.probing_tests_count if result.friction_metrics else 0,
         'escalation_depth': result.friction_metrics.escalation_depth if result.friction_metrics else 0,
         'total_billed': result.financial_settlement.total_billed_charges if result.financial_settlement else 0.0,
-        'payer_payment': result.financial_settlement.payer_payment if result.financial_settlement else 0.0
+        'payer_payment': result.financial_settlement.payer_payment if result.financial_settlement else 0.0,
+        'test_results': test_results
     }
 
 def run_experiment_config(run_id, config, case_id, output_dir="experiment_results"):
@@ -203,6 +209,17 @@ def run_experiment_config(run_id, config, case_id, output_dir="experiment_result
         print(f"ERROR: {e}")
         import traceback
         traceback.print_exc()
+
+        # save partial audit log for debugging even on failure
+        os.makedirs(output_dir, exist_ok=True)
+        if sim and hasattr(sim, 'audit_logger') and sim.audit_logger:
+            debug_path = f"{output_dir}/run_{run_id}_FAILED_audit_log.json"
+            try:
+                sim.audit_logger.save_to_json(debug_path)
+                print(f"\nPartial audit log saved for debugging: {debug_path}")
+            except Exception as save_err:
+                print(f"  (could not save audit log: {save_err})")
+
         return None
 
 

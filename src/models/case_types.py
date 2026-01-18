@@ -2,5 +2,5 @@
 
 
 class CaseType:
-    INPATIENT_ADMISSION = "inpatient_admission"
+    # INPATIENT_ADMISSION = "inpatient_admission"
     SPECIALTY_MEDICATION = "specialty_medication"

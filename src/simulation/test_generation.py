@@ -1,10 +1,12 @@
 """
 test result generation for utilization review simulation
 
+ASSUMPTION: when insurer approves a diagnostic test, the test is always performed.
+the environment agent then generates a realistic result based on ground truth.
+
 generates deterministic test results using:
-1. pre-defined templates from case data
+1. pre-defined templates from case data (test_result_templates)
 2. LLM generation with environment_hidden_data as ground truth
-3. environment-based pattern matching
 """
 
 from typing import Dict, Any

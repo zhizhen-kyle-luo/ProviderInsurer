@@ -7,7 +7,7 @@ Phase 2 is *not always "prior authorization"*.
 - For ER/inpatient episodes: Phase 2 behaves like concurrent review (coverage to continue care).
 
 Key operational property: the record is EVOLVING.
-The payer can REQUEST_INFO (pend), and the provider can respond in real time
+The payer can PENDING_INFO (pend), and the provider can respond in real time
 by adding documentation and ordering tests (when allowed by your simulation).
 """
 
@@ -18,10 +18,12 @@ from .config import (
     WORKFLOW_LEVELS,
     PROVIDER_REQUEST_TYPES,
     PAYOR_ACTIONS_GUIDE,
+    VALID_PAYOR_ACTIONS,
 )
 from .response_schemas import (
     phase2_provider_response_format,
     phase2_treatment_decision_response_format,
+    phase2_post_diagnostic_decision_response_format,
     phase2_payor_response_format,
 )
 from .prompt_renderers import (
@@ -78,12 +80,85 @@ def _render_evaluation_criteria(request_types: list[str]) -> str:
     return "\n".join(criteria)
 
 
+def _render_service_line_status(state) -> str:
+    """render current service line status for provider context"""
+    if not hasattr(state, 'service_lines') or not state.service_lines:
+        return ""
+
+    parts = ["CURRENT SERVICE LINE STATUS:"]
+    approved_treatments = []
+    denied_lines = []
+    modified_lines = []
+    pending_lines = []
+
+    for line in state.service_lines:
+        status = line.authorization_status or "pending_review"
+        req_type = line.request_type or "unknown"
+        service = line.service_description or line.procedure_code or "unknown"
+
+        parts.append(f"  Line {line.line_number}: {service}")
+        parts.append(f"    Request Type: {req_type}")
+        parts.append(f"    Status: {status.upper()}")
+
+        if status == "approved":
+            if req_type == "treatment":
+                approved_treatments.append(service)
+                parts.append(f"    *** TREATMENT APPROVED - authorization complete ***")
+            elif req_type == "level_of_care":
+                parts.append(f"    *** LEVEL OF CARE APPROVED ***")
+            elif req_type == "diagnostic_test":
+                if line.post_diagnostic_decision:
+                    parts.append(f"    Post-diagnostic decision: {line.post_diagnostic_decision}")
+        elif status == "denied":
+            denied_lines.append((line.line_number, service, line.decision_reason))
+            if line.decision_reason:
+                parts.append(f"    Denial reason: {line.decision_reason}")
+            parts.append(f"    Available actions: APPEAL (escalate) or ABANDON (accept denial)")
+        elif status == "modified":
+            modified_lines.append((line.line_number, service, line.decision_reason))
+            if line.decision_reason:
+                parts.append(f"    Modification reason: {line.decision_reason}")
+            parts.append(f"    Available actions: APPEAL (fight for original) or ABANDON (accept modification)")
+        elif status == "pending_info":
+            pending_lines.append((line.line_number, service, line.requested_documents))
+            if line.requested_documents:
+                parts.append(f"    Requested docs: {', '.join(line.requested_documents)}")
+            parts.append(f"    Available actions: CONTINUE (provide info) or ABANDON (exit line)")
+
+        parts.append("")
+
+    # summary section
+    if approved_treatments:
+        parts.append("*** APPROVED TREATMENTS - authorization complete, do NOT request additional tests: ***")
+        for t in approved_treatments:
+            parts.append(f"  - {t}")
+        parts.append("")
+
+    if denied_lines:
+        parts.append("*** DENIED LINES - can APPEAL to escalate or ABANDON: ***")
+        for ln, svc, reason in denied_lines:
+            parts.append(f"  - Line {ln}: {svc} (reason: {reason or 'not specified'})")
+        parts.append("")
+
+    if pending_lines:
+        parts.append("*** PENDING INFO - must CONTINUE with requested documentation or ABANDON: ***")
+        for ln, svc, docs in pending_lines:
+            docs_str = ', '.join(docs) if docs else 'not specified'
+            parts.append(f"  - Line {ln}: {svc} (requested: {docs_str})")
+        parts.append("")
+
+    return "\n".join(parts)
+
+
 def create_unified_provider_request_prompt(state, case, iteration, prior_iterations, level):
     """Unified provider prompt for Phase 2 pre-adjudication utilization review.
     """
     import json
     if level not in WORKFLOW_LEVELS:
         raise ValueError(f"unknown level '{level}' in create_unified_provider_request_prompt")
+
+    # render current service line status
+    service_line_status = _render_service_line_status(state)
 
     # format prior iterations for context
     prior_context = ""
@@ -95,7 +170,14 @@ def create_unified_provider_request_prompt(state, case, iteration, prior_iterati
             prior_context += f"  Your request: {iter_data['provider_request_type']}\n"
             prior_context += f"  Payor decision: {iter_data['payor_decision']}\n"
             if iter_data.get('payor_decision_reason'):
-                prior_context += f"  Denial reason: {iter_data['payor_decision_reason']}\n"
+                prior_context += f"  Reason: {iter_data['payor_decision_reason']}\n"
+            # show line-level adjudications if available
+            if iter_data.get('line_adjudications'):
+                prior_context += "  Line adjudications:\n"
+                for adj in iter_data['line_adjudications']:
+                    line_num = adj.get('line_number', '?')
+                    status = adj.get('adjudication_status', 'unknown')
+                    prior_context += f"    Line {line_num}: {status.upper()}\n"
             if iter_data.get('test_results'):
                 prior_context += f"  NEW TEST RESULTS RECEIVED: {json.dumps(iter_data['test_results'], indent=4)}\n"
                 # track completed tests to prevent re-requesting
@@ -139,6 +221,7 @@ Gather objective evidence to demonstrate clinical necessity.
 {stage_instruction}{policy_section}{provider_behavior_section}{INTERNAL_REASONING}
 
 {prior_context}
+{service_line_status}
 {test_constraint}
 
 PATIENT INFORMATION:
@@ -164,7 +247,10 @@ Update your clinical notes each iteration as you narrow your differential diagno
 
 Your notes should justify the requested service based on clinical data.
 
-RESPONSE: Return ONLY valid JSON (no narrative text, no explanation). Do not deviate from this format.
+LINE NUMBERING: Number your requested_services starting at 1 for EACH request (do not continue from previous iterations).
+
+RESPONSE: Return ONLY valid JSON (no markdown, no explanation).
+CRITICAL: All string values must be on a single line - use spaces instead of newlines within strings.
 
 RESPONSE FORMAT (JSON):
 {phase2_provider_response_format()}
@@ -207,6 +293,42 @@ RESPONSE FORMAT (JSON):
 {phase2_treatment_decision_response_format()}
 
 Use your clinical judgment and documentation constraints to guide this decision."""
+
+
+def create_post_diagnostic_decision_prompt(
+    state,
+    service_line,
+    test_result: str,
+):
+    """Prompt for provider decision after diagnostic test approved and result available.
+
+    This is called when a diagnostic_test line is approved. Provider decides whether
+    to request treatment based on the test result, or exit if no treatment is needed.
+    """
+    return f"""POST-DIAGNOSTIC DECISION
+
+SITUATION: Your diagnostic test was APPROVED and completed. Based on the test result,
+you must decide: Request treatment based on findings, or conclude no treatment is needed?
+
+DIAGNOSTIC TEST COMPLETED:
+- Test: {service_line.service_name}
+- Result: {test_result}
+
+CLINICAL CONTEXT:
+- Patient Age: {state.admission.patient_demographics.age}
+- Chief Complaint: {state.clinical_presentation.chief_complaint}
+- Medical History: {', '.join(state.clinical_presentation.medical_history)}
+
+TWO DECISIONS:
+1. request_treatment: The test result indicates treatment is needed. You will submit a new treatment request.
+2. no_treatment_needed: The test result indicates no treatment is required (e.g., ruled out suspected condition).
+
+TASK: Based on the test result, decide whether to request treatment.
+
+RESPONSE FORMAT (JSON):
+{phase2_post_diagnostic_decision_response_format()}
+
+Use your clinical judgment to interpret the test result and guide this decision."""
 
 
 def create_unified_payor_review_prompt(state, provider_request, iteration, level, pend_count_at_level=0):
@@ -261,16 +383,16 @@ CRITICAL: Apply your coverage criteria strictly. Deny if documentation does not 
     level_description = level_config["description"]
     can_pend_by_level = level_config["can_pend"]
     is_terminal = level_config["terminal"]
-    is_independent = level_config["independent"]
+    # is_independent = level_config["independent"]
 
     # enforce MAX_REQUEST_INFO_PER_LEVEL: disable pend if limit reached
     can_pend = can_pend_by_level and (pend_count_at_level < MAX_REQUEST_INFO_PER_LEVEL)
     pend_limit_reached = can_pend_by_level and (pend_count_at_level >= MAX_REQUEST_INFO_PER_LEVEL)
 
     if can_pend:
-        decision_options = "approved | modified | denied | pending_info"
+        decision_options = " | ".join(VALID_PAYOR_ACTIONS)
     else:
-        decision_options = "approved | modified | denied"
+        decision_options = " | ".join([a for a in VALID_PAYOR_ACTIONS if a != "pending_info"])
 
     stage_instruction = f"""LEVEL {level} - {level_config['name'].upper()} ({role_label}):
 Reviewer: {role_label}
@@ -282,21 +404,21 @@ Decision options: {decision_options}
 
 """
     if pend_limit_reached:
-        stage_instruction += f"""CRITICAL: You have reached the maximum REQUEST_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends) at this level.
-You MUST issue a final decision: APPROVED, MODIFIED, or DENIED.
-REQUEST_INFO (pending_info) is NO LONGER available.
+        stage_instruction += f"""CRITICAL: You have reached the maximum PENDING_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} requests) at this level.
+You MUST issue a final decision: approved, modified, or denied.
+pending_info is no longer available.
 
 """
     if is_terminal:
         stage_instruction += """CRITICAL: This is a TERMINAL review level. You MUST issue a final APPROVED or DENIED decision.
-REQUEST_INFO (pending_info) is NOT available at this level.
+pending_info is not available at this level.
 
 """
-    if is_independent:
-        stage_instruction += """NOTE: As an independent external reviewer, you do NOT have access to plan-internal notes.
-Your decision must be based solely on the submitted clinical record.
+#     if is_independent:
+#         stage_instruction += """NOTE: As an independent external reviewer, you do NOT have access to plan-internal notes.
+# Your decision must be based solely on the submitted clinical record.
 
-"""
+# """
 
     if 'clinical_notes' not in provider_request:
         raise ValueError("provider_request missing required field 'clinical_notes'")
@@ -317,14 +439,15 @@ PATIENT CONTEXT:
 - Medical History: {', '.join(state.clinical_presentation.medical_history)}
 - Current Diagnoses: {', '.join(state.admission.preliminary_diagnoses)}
 
-TASK: Review the Phase 2 pre-adjudication utilization review request and issue a coverage decision (or REQUEST_INFO) based on medical necessity and coverage criteria.
+TASK: Review the Phase 2 pre-adjudication utilization review request and issue a coverage decision (or PENDING_INFO) based on medical necessity and coverage criteria.
 
 EVALUATION CRITERIA:
 {_render_evaluation_criteria(request_types)}
 
-RESPONSE: Return ONLY valid JSON (no narrative text, no explanation). Do not deviate from this format.
+RESPONSE: Return ONLY valid JSON (no markdown, no explanation).
+CRITICAL: All string values must be on a single line - use spaces instead of newlines within strings.
 
 RESPONSE FORMAT (JSON):
-{phase2_payor_response_format(decision_options, can_pend, role_label, level)}"""
+{phase2_payor_response_format(can_pend, role_label, level)}"""
 
     return base_prompt

@@ -43,7 +43,7 @@ def test_phase2_pend_limit_in_prompt():
         pend_count_at_level=0,
     )
     assert "Decision options: approved | modified | denied | pending_info" in prompt_below_limit
-    assert "maximum REQUEST_INFO limit" not in prompt_below_limit
+    assert "maximum PENDING_INFO limit" not in prompt_below_limit
 
     # prompt with pend_count = limit: should show warning and remove pending_info from decision options
     prompt_at_limit = create_unified_payor_review_prompt(
@@ -55,7 +55,7 @@ def test_phase2_pend_limit_in_prompt():
     )
     assert "Decision options: approved | modified | denied | pending_info" not in prompt_at_limit
     assert "Decision options: approved | modified | denied" in prompt_at_limit
-    assert f"maximum REQUEST_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends)" in prompt_at_limit
+    assert f"maximum PENDING_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends)" in prompt_at_limit
     assert "NO LONGER available" in prompt_at_limit
 
     print(f"phase 2 pend limit prompt test passed (limit={MAX_REQUEST_INFO_PER_LEVEL})")
@@ -103,7 +103,7 @@ def test_phase3_pend_limit_in_prompt():
         pend_count_at_level=0,
     )
     assert "Decision options: approved | modified | denied | pending_info" in prompt_below_limit
-    assert "maximum REQUEST_INFO limit" not in prompt_below_limit
+    assert "maximum PENDING_INFO limit" not in prompt_below_limit
 
     # prompt with pend_count = limit: should show warning and remove pending_info from decision options
     prompt_at_limit = create_unified_phase3_payor_review_prompt(
@@ -121,7 +121,7 @@ def test_phase3_pend_limit_in_prompt():
     )
     assert "Decision options: approved | modified | denied | pending_info" not in prompt_at_limit
     assert "Decision options: approved | modified | denied" in prompt_at_limit
-    assert f"maximum REQUEST_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends)" in prompt_at_limit
+    assert f"maximum PENDING_INFO limit ({MAX_REQUEST_INFO_PER_LEVEL} pends)" in prompt_at_limit
     assert "NO LONGER available" in prompt_at_limit
 
     print(f"phase 3 pend limit prompt test passed (limit={MAX_REQUEST_INFO_PER_LEVEL})")

@@ -20,7 +20,7 @@ def phase2_provider_response_format() -> str:
         ],
         "requested_services": [
             {
-                "line_number": <1-based index>,
+                "line_number": <1-based index, ALWAYS start at 1>,
                 "request_type": "diagnostic_test" or "treatment" or "level_of_care",
 
                 // if diagnostic_test:
@@ -40,6 +40,7 @@ def phase2_provider_response_format() -> str:
                 // if level_of_care:
                 "procedure_code": "<CPT/HCPCS/J-code>",
                 "code_type": "CPT" or "HCPCS" or "J-code",
+                "service_name": "<requested level of care, e.g. 'Inpatient admission', 'ICU admission'>",
                 "requested_status": "<inpatient|observation|hospital_infusion|home_infusion|ICU|floor|SNF>",
                 "alternative_status": "<lower level alternative>",
                 "severity_indicators": "<objective clinical indicators>"
@@ -58,8 +59,15 @@ def phase2_treatment_decision_response_format() -> str:
 }"""
 
 
+def phase2_post_diagnostic_decision_response_format() -> str:
+    """Return Phase 2 post-diagnostic decision RESPONSE FORMAT (JSON) block."""
+    return """{
+    "decision": "request_treatment" or "no_treatment_needed",
+    "rationale": "<explain your reasoning based on the test results and clinical picture>"
+}"""
+
+
 def phase2_payor_response_format(
-    decision_options: str,
     can_pend: bool,
     role_label: str,
     level: int
@@ -67,10 +75,9 @@ def phase2_payor_response_format(
     """Return Phase 2 payor RESPONSE FORMAT (JSON) block."""
     lines = [
         "{",
-        f'    "action": "{decision_options.replace(" | ", "\" or \"")}",  // overall decision',
-        "",
         "    // LINE-LEVEL ADJUDICATION (X12 278 authorization aligned)",
-        "    // adjudicate each service line separately",
+        "    // IMPORTANT: you MUST adjudicate EVERY service line - one entry per line_number",
+        "    // IMPORTANT: use EXACTLY these adjudication_status values: approved, modified, denied, pending_info (NOT 'pended')",
         "    \"line_adjudications\": [",
         "        {",
         "            \"line_number\": <1-based index into service_lines>,",
@@ -85,9 +92,9 @@ def phase2_payor_response_format(
         "        }",
         "    ],",
         "",
-        "    // OVERALL CLAIM-LEVEL FIELDS",
-        '    "decision_reason": "<overall reason for decision>",',
-        '    "downgrade_alternative": "<if modified: describe approved alternative>",',
+        "    // OVERALL FIELDS (for documentation, not decision logic)",
+        '    "decision_reason": "<summary of overall rationale>",',
+        '    "downgrade_alternative": "<if any line modified: describe approved alternatives>",',
         '    "criteria_used": "<guidelines or policies applied>",',
         f'    "reviewer_type": "{role_label}",',
         f'    "level": {level},',
@@ -137,7 +144,6 @@ def phase3_provider_response_format() -> str:
 
 
 def phase3_payor_response_format(
-    decision_options: str,
     role_label: str,
     level: int,
     can_pend: bool
@@ -145,10 +151,9 @@ def phase3_payor_response_format(
     """Return Phase 3 payor RESPONSE FORMAT (JSON) block."""
     lines = [
         "{",
-        f'    "action": "{decision_options.replace(" | ", "\" or \"")}",  // overall: approved, modified, denied, or pending_info',
-        "",
         "    // LINE-LEVEL ADJUDICATION (X12 835 remittance advice aligned)",
-        "    // adjudicate each submitted procedure code line separately",
+        "    // IMPORTANT: you MUST adjudicate EVERY procedure code line - one entry per line_number",
+        "    // IMPORTANT: use EXACTLY these adjudication_status values: approved, modified, denied, pending_info (NOT 'pended')",
         "    \"line_adjudications\": [",
         "        {",
         "            \"line_number\": <1-based index into procedure_codes array>,",
@@ -162,19 +167,14 @@ def phase3_payor_response_format(
         "        }",
         "    ],",
         "",
-        "    // OVERALL CLAIM-LEVEL FIELDS",
+        "    // OVERALL FIELDS (for documentation, not decision logic)",
         "    \"total_paid_amount\": <sum of all line paid_amounts>,",
-        "    \"decision_reason\": \"<overall reason for claim decision>\",",
-        "",
-        "    // if modified:",
-        "    \"downgrade_alternative\": \"<describe approved alternative level/code>\",",
-        "",
+        "    \"decision_reason\": \"<summary of overall rationale>\",",
+        "    \"downgrade_alternative\": \"<if any line modified: describe approved alternatives>\",",
     ]
     if can_pend:
         lines.extend([
-            "    // if pending_info (only for Levels 0-1):",
-            "    \"requested_documents\": [\"<discharge summary>\", \"<operative report>\", etc.],",
-            "",
+            "    \"requested_documents\": [\"<if any line pending_info>\"],",
         ])
     lines.extend([
         "    \"criteria_used\": \"<payment guidelines or policies applied>\",",
