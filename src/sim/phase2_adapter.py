@@ -147,6 +147,8 @@ class Phase2Adapter:
             st = (l.authorization_status or "").lower()
             if st in {"approved"}:
                 continue
+            if st == "modified" and getattr(l, "accepted_modification", False):
+                continue
             if st in {"denied", "modified"} and int(l.current_review_level) >= 2:
                 continue
             return False
@@ -277,7 +279,6 @@ class Phase2Adapter:
             state=state,
             line_adjudications=mapped,
             reviewer_type=str(pay.get("reviewer_type") or ""),
-            level=int(pay.get("level") or response.get("level") or 0),
         )
 
         if self.environment is not None:
@@ -302,6 +303,7 @@ class Phase2Adapter:
     def choose_provider_action(self, state, submission: Dict[str, Any], response: Dict[str, Any]) -> Dict[str, Any]:
         lines = getattr(state, "service_lines", []) or []
         appeal = []
+        accept_modify = []
         pending = []
         terminal_bad = []
 
@@ -309,15 +311,27 @@ class Phase2Adapter:
             st = (l.authorization_status or "").lower()
             if st == "pending_info":
                 pending.append(l)
-            if st in {"denied", "modified"} and int(l.current_review_level) < 2:
+            elif st == "modified" and int(l.current_review_level) < 2:
+                mod_type = (l.modification_type or "").lower()
+                if mod_type == "quantity_reduction" and l.approved_quantity and l.approved_quantity >= (l.requested_quantity or 0) * 0.5:
+                    accept_modify.append(l)
+                else:
+                    appeal.append(l)
+            elif st == "denied" and int(l.current_review_level) < 2:
                 appeal.append(l)
-            if st in {"denied", "modified"} and int(l.current_review_level) >= 2:
+            elif st in {"denied", "modified"} and int(l.current_review_level) >= 2:
                 terminal_bad.append(l)
 
         if appeal:
             return {
                 "action": "APPEAL",
                 "lines": [{"line_number": l.line_number, "to_level": l.current_review_level + 1} for l in appeal],
+            }
+
+        if accept_modify:
+            return {
+                "action": "CONTINUE",
+                "lines": [{"line_number": l.line_number, "intent": "ACCEPT_MODIFY"} for l in accept_modify],
             }
 
         if pending:

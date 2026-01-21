@@ -267,7 +267,6 @@ class Phase3Adapter:
             state=state,
             line_adjudications=mapped,
             reviewer_type=str(pay.get("reviewer_type") or ""),
-            level=int(pay.get("level") or response.get("level") or 0),
         )
 
         return deltas

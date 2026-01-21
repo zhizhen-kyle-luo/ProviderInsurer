@@ -32,7 +32,6 @@ def apply_phase2_insurer_line_adjudications(
     state,
     line_adjudications: List[Dict[str, Any]],
     reviewer_type: Optional[str] = None,
-    level: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     deltas: List[Dict[str, Any]] = []
 
@@ -102,8 +101,6 @@ def apply_phase2_insurer_line_adjudications(
 
         if reviewer_type is not None:
             line.reviewer_type = reviewer_type
-        if level is not None:
-            line.current_review_level = int(level)
 
         new = {
             "authorization_status": line.authorization_status,
@@ -258,7 +255,6 @@ def apply_phase3_insurer_line_adjudications(
     state,
     line_adjudications: List[Dict[str, Any]],
     reviewer_type: Optional[str] = None,
-    level: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     deltas: List[Dict[str, Any]] = []
 
@@ -335,8 +331,6 @@ def apply_phase3_insurer_line_adjudications(
 
         if reviewer_type is not None:
             line.reviewer_type = reviewer_type
-        if level is not None:
-            line.current_review_level = int(level)
 
         new = {
             "adjudication_status": line.adjudication_status,
