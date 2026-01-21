@@ -69,3 +69,15 @@ OVERSIGHT_BUDGETS: Dict[str, Dict[str, Dict[str, int]]] = {
 
 DEFAULT_PROVIDER_PARAMS: Dict[str, Any] = {"oversight_intensity": "medium"}
 DEFAULT_PAYOR_PARAMS: Dict[str, Any] = {"oversight_intensity": "medium"}
+
+
+OVERSIGHT_GUIDANCE: Dict[str, Dict[str, str]] = {
+    "low": {"instruction": "minimal review; approve unless obvious error"},
+    "medium": {"instruction": "standard review; check key fields for consistency"},
+    "high": {"instruction": "thorough review; verify all clinical claims against evidence"},
+}
+
+OVERSIGHT_CONSTRAINTS: Dict[str, str] = {
+    "provider": "focus on clinical accuracy and completeness",
+    "payor": "focus on policy compliance and medical necessity criteria",
+}
