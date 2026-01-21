@@ -29,17 +29,28 @@ class Environment:
             pass
 
     def perform_approved_diagnostics(self, *, state) -> List[Dict[str, Any]]:
-        pv = getattr(state, "patient_visible_data", None)
-        ht = getattr(state, "environment_hidden_data", None)
+        from src.models.patient import PatientVisibleData
+        import json
 
-        if not isinstance(pv, dict):
-            raise ValueError("state.patient_visible_data must be dict")
+        pv_obj = getattr(state, "patient_visible_data", None)
+        if pv_obj is None:
+            raise ValueError("state.patient_visible_data is None")
+
+        if hasattr(pv_obj, "model_dump"):
+            pv = pv_obj.model_dump()
+        elif isinstance(pv_obj, dict):
+            pv = pv_obj
+        else:
+            raise ValueError("state.patient_visible_data must be PatientVisibleData model or dict")
+
+        ht = getattr(state, "environment_hidden_data", None)
         if ht is None:
             ht = {}
         if not isinstance(ht, dict):
             raise ValueError("state.environment_hidden_data must be dict")
 
-        pv.setdefault("lab_results", {})
+        if "lab_results" not in pv:
+            pv["lab_results"] = {}
         if not isinstance(pv["lab_results"], dict):
             raise ValueError("patient_visible_data.lab_results must be dict")
 
@@ -56,25 +67,51 @@ class Environment:
                 continue
             if (getattr(line, "request_type", "") or "").lower() != "diagnostic_test":
                 continue
-            if (getattr(line, "authorization_status", "") or "").lower() != "approved":
-                continue
-            if getattr(line, "delivered", False):
-                continue
 
-            line.delivered = True
+            status = (getattr(line, "authorization_status", "") or "").lower()
+            if status in {"approved", "modified"}:
+                pass
+            else:
+                continue
 
             proc = getattr(line, "procedure_code", None)
+            if proc is None or str(proc).strip() == "":
+                continue
+            proc = str(proc)
+
+            # If we already have ground-truth (or previously synthesized) results for this procedure,
+            # skip when all expected labs are already present in the current patient-visible data.
+            existing_payload = results_by_code.get(proc)
+            if isinstance(existing_payload, dict) and existing_payload:
+                missing = {k: v for k, v in existing_payload.items() if k not in pv["lab_results"]}
+                if not missing:
+                    continue
+
             before = dict(pv["lab_results"])
 
             payload = results_by_code.get(proc) if proc else None
             fabricated = False
             raw_llm_output: Optional[str] = None
+            synthesized_payload: Optional[Dict[str, Any]] = None
 
             if payload is None and self.allow_synthesis:
                 if self.synthesis_llm is None:
                     raise ValueError("allow_synthesis=True but synthesis_llm is None")
 
-                prompt = f"""Return ONLY valid JSON:
+                pv_json = json.dumps(pv, ensure_ascii=False, indent=2)
+                ht_json = json.dumps(ht, ensure_ascii=False, indent=2)
+                existing_labs_json = json.dumps(sorted(pv["lab_results"].keys()), ensure_ascii=False)
+
+                prompt = f"""You are simulating a diagnostic test result in a clinical environment.
+Use the CURRENT patient-visible data and environment hidden data for context.
+
+CURRENT PATIENT_VISIBLE_DATA (JSON):
+{pv_json}
+
+ENVIRONMENT_HIDDEN_DATA (JSON):
+{ht_json}
+
+Return ONLY valid JSON:
 {{
   "lab_results_delta": {{
     "<lab_name>": {{"value": <number>, "units": "<units>"}}
@@ -87,9 +124,9 @@ Constraints:
 - procedure_code={proc!r}
 - at most {self.max_labs_per_test} entries
 - ONLY new keys (do not overwrite existing labs)
+- existing_lab_result_keys={existing_labs_json}
 """
                 raw_llm_output = self.synthesis_llm.invoke(prompt).content
-                import json
                 try:
                     obj = json.loads(raw_llm_output)
                 except Exception:
@@ -101,6 +138,7 @@ Constraints:
 
                 payload = obj["lab_results_delta"]
                 fabricated = True
+                synthesized_payload = payload
 
             if payload is None:
                 self._log(
@@ -114,6 +152,15 @@ Constraints:
 
             if not isinstance(payload, dict):
                 raise ValueError("diagnostic result payload must be dict")
+
+            # Persist the per-procedure result set (ground truth or synthesized) so subsequent runs
+            # can determine whether this diagnostic has already been fulfilled.
+            if fabricated:
+                existing = results_by_code.get(proc)
+                if not isinstance(existing, dict) or not existing:
+                    results_by_code[proc] = dict(synthesized_payload or payload)
+                    ht["diagnostic_results_by_code"] = results_by_code
+                    state.environment_hidden_data = ht
 
             # don't overwrite existing labs
             payload = {k: v for k, v in payload.items() if k not in pv["lab_results"]}
@@ -146,5 +193,8 @@ Constraints:
                     "after": dict(pv["lab_results"]),
                 }
             )
+
+        from src.models.patient import PatientVisibleData
+        state.patient_visible_data = PatientVisibleData(**pv)
 
         return deltas

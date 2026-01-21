@@ -62,7 +62,8 @@ def create_phase2_provider_user_prompt(
         f"- labs: {json.dumps(labs, ensure_ascii=False)}\n"
         f"{prior_block}\n"
         "TASK\n"
-        "Construct an insurer_request with one or more service lines.\n"
+        "Construct an insurer_request with ALL service lines you wish to request.\n"
+        "Include all desired services upfront; do not plan to add more lines in later submissions.\n"
         "Return only valid JSON, no extra keys.\n"
         "{\n"
         '  "insurer_request": {\n'

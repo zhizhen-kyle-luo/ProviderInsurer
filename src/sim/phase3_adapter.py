@@ -5,14 +5,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from langchain_core.messages import HumanMessage
 from langchain_core.messages.system import SystemMessage
 
-from src.utils.prompts.phase2_prompts import (
-    create_phase2_payor_system_prompt,
-    create_phase2_payor_user_prompt,
-    create_phase2_provider_system_prompt,
-    create_phase2_provider_user_prompt,
+from src.utils.prompts.phase3_prompts import (
+    create_phase3_payor_system_prompt,
+    create_phase3_payor_user_prompt,
+    create_phase3_provider_system_prompt,
+    create_phase3_provider_user_prompt,
 )
-from src.sim.line_items import ensure_phase2_service_lines
-from src.sim.transitions import apply_phase2_insurer_line_adjudications, apply_phase2_provider_bundle_action
+from src.sim.transitions import apply_phase3_insurer_line_adjudications, apply_phase3_provider_bundle_action
 from src.utils.json_parsing import extract_json_from_text
 from src.utils.oversight import apply_oversight_edit
 
@@ -65,7 +64,7 @@ def _current_level(state) -> int:
 
 def _pend_count_at_level(state, level: int) -> int:
     n = 0
-    for resp in getattr(state, "phase2_responses", []) or []:
+    for resp in getattr(state, "phase3_responses", []) or []:
         if not isinstance(resp, dict) or int(resp.get("level", -1)) != level:
             continue
         pay = resp.get("payor_response")
@@ -77,7 +76,7 @@ def _pend_count_at_level(state, level: int) -> int:
         for adj in line_adjs:
             if not isinstance(adj, dict):
                 continue
-            st = (adj.get("authorization_status") or adj.get("adjudication_status") or "").lower()
+            st = (adj.get("adjudication_status") or "").lower()
             if st == "pending_info":
                 n += 1
                 break
@@ -86,8 +85,8 @@ def _pend_count_at_level(state, level: int) -> int:
 
 def _prior_round_summaries(state) -> List[Dict[str, Any]]:
     summaries: List[Dict[str, Any]] = []
-    submissions = getattr(state, "phase2_submissions", []) or []
-    responses = getattr(state, "phase2_responses", []) or []
+    submissions = getattr(state, "phase3_submissions", []) or []
+    responses = getattr(state, "phase3_responses", []) or []
     for sub, resp in zip(submissions, responses):
         if not isinstance(sub, dict) or not isinstance(resp, dict):
             continue
@@ -96,9 +95,7 @@ def _prior_round_summaries(state) -> List[Dict[str, Any]]:
         line_adjs = pay.get("line_adjudications") if isinstance(pay, dict) else None
         payor_decision = ""
         if isinstance(line_adjs, list) and line_adjs and isinstance(line_adjs[0], dict):
-            payor_decision = str(
-                line_adjs[0].get("authorization_status") or line_adjs[0].get("adjudication_status") or ""
-            )
+            payor_decision = str(line_adjs[0].get("adjudication_status") or "")
         summaries.append(
             {
                 "level": lvl,
@@ -109,8 +106,8 @@ def _prior_round_summaries(state) -> List[Dict[str, Any]]:
     return summaries
 
 
-class Phase2Adapter:
-    phase_name = "phase_2_utilization_review"
+class Phase3Adapter:
+    phase_name = "phase_3_claims"
 
     def __init__(
         self,
@@ -121,7 +118,6 @@ class Phase2Adapter:
         payor_base_llm=None,
         provider_params: Optional[Dict[str, Any]] = None,
         payor_params: Optional[Dict[str, Any]] = None,
-        environment=None,
         audit_logger=None,
     ):
         self.provider_copilot = provider_copilot_llm
@@ -130,21 +126,18 @@ class Phase2Adapter:
         self.payor_base = payor_base_llm or payor_copilot_llm
         self.provider_params = provider_params
         self.payor_params = payor_params
-        self.environment = environment
         self.audit_logger = audit_logger
-
-        if self.environment is not None and getattr(self.environment, "audit_logger", None) is None:
-            try:
-                self.environment.audit_logger = audit_logger
-            except Exception:
-                pass
 
     def is_terminal(self, state) -> bool:
         lines = getattr(state, "service_lines", []) or []
         if not lines:
             return True
+
         for l in lines:
-            st = (l.authorization_status or "").lower()
+            if not getattr(l, "delivered", False):
+                continue
+
+            st = (l.adjudication_status or "").lower()
             if st in {"approved"}:
                 continue
             if st in {"denied", "modified"} and int(l.current_review_level) >= 2:
@@ -153,33 +146,31 @@ class Phase2Adapter:
         return True
 
     def append_submission(self, state, submission: Dict[str, Any]) -> None:
-        if not hasattr(state, "phase2_submissions"):
-            state.phase2_submissions = []
-        state.phase2_submissions.append(submission)
+        if not hasattr(state, "phase3_submissions"):
+            state.phase3_submissions = []
+        state.phase3_submissions.append(submission)
 
     def append_response(self, state, response: Dict[str, Any]) -> None:
-        if not hasattr(state, "phase2_responses"):
-            state.phase2_responses = []
-        state.phase2_responses.append(response)
+        if not hasattr(state, "phase3_responses"):
+            state.phase3_responses = []
+        state.phase3_responses.append(response)
 
     def build_submission(self, state) -> Dict[str, Any]:
         level = _current_level(state)
         prior_rounds = _prior_round_summaries(state)
 
         params = _provider_params(state, self.provider_params)
-        sys_txt = create_phase2_provider_system_prompt(params)
-        user_txt = create_phase2_provider_user_prompt(
+        sys_txt = create_phase3_provider_system_prompt(params)
+        user_txt = create_phase3_provider_user_prompt(
             state, turn=state.turn + 1, level=level, prior_rounds=prior_rounds
         )
 
         draft = _invoke(self.provider_copilot, sys_txt, user_txt)
         parsed = _parse_obj(draft)
 
-        insurer_req = parsed.get("insurer_request")
-        if not isinstance(insurer_req, dict):
-            raise ValueError("provider output missing insurer_request dict")
-
-        ensure_phase2_service_lines(state, insurer_req)
+        claim_submission = parsed.get("claim_submission")
+        if not isinstance(claim_submission, dict):
+            raise ValueError("provider output missing claim_submission dict")
 
         if params.get("oversight_intensity") and self.provider_base is not None:
             ov = str(params["oversight_intensity"])
@@ -193,26 +184,26 @@ class Phase2Adapter:
             )
             try:
                 parsed2 = _parse_obj(revised)
-                if isinstance(parsed2.get("insurer_request"), dict):
+                if isinstance(parsed2.get("claim_submission"), dict):
                     parsed = parsed2
-                    insurer_req = parsed["insurer_request"]
+                    claim_submission = parsed["claim_submission"]
             except Exception:
                 pass
-            submission = {"insurer_request": insurer_req, "raw": draft, "oversight": meta, "level": level}
+            submission = {"claim_submission": claim_submission, "raw": draft, "oversight": meta, "level": level}
         else:
-            submission = {"insurer_request": insurer_req, "raw": draft, "oversight": None, "level": level}
+            submission = {"claim_submission": claim_submission, "raw": draft, "oversight": None, "level": level}
 
         return submission
 
     def build_response(self, state, submission: Dict[str, Any]) -> Dict[str, Any]:
-        insurer_req = submission["insurer_request"]
+        claim_submission = submission["claim_submission"]
         level = int(submission.get("level", 0))
         pend_count = _pend_count_at_level(state, level)
 
         params = _payor_params(state, self.payor_params)
-        sys_txt = create_phase2_payor_system_prompt(params)
-        user_txt = create_phase2_payor_user_prompt(
-            state, insurer_req, turn=state.turn + 1, level=level, pend_count_at_level=pend_count
+        sys_txt = create_phase3_payor_system_prompt(params)
+        user_txt = create_phase3_payor_user_prompt(
+            state, claim_submission, turn=state.turn + 1, level=level, pend_count_at_level=pend_count
         )
 
         draft = _invoke(self.payor_copilot, sys_txt, user_txt)
@@ -252,11 +243,9 @@ class Phase2Adapter:
             if "line_number" not in adj:
                 raise ValueError(f"bad line adjudication: {adj}")
 
-            status = adj.get("authorization_status")
+            status = adj.get("adjudication_status")
             if status is None:
-                status = adj.get("adjudication_status")
-            if status is None:
-                raise ValueError(f"bad line adjudication (missing authorization_status): {adj}")
+                raise ValueError(f"bad line adjudication (missing adjudication_status): {adj}")
 
             if level >= 2 and str(status).lower() == "pending_info":
                 raise ValueError(f"pending_info not allowed at level {level} (IRE/final review)")
@@ -264,38 +253,22 @@ class Phase2Adapter:
             mapped.append(
                 {
                     "line_number": int(adj["line_number"]),
-                    "authorization_status": str(status).lower(),
+                    "adjudication_status": str(status).lower(),
                     "decision_reason": adj.get("decision_reason"),
-                    "approved_quantity": adj.get("approved_quantity"),
-                    "authorization_number": adj.get("authorization_number"),
-                    "modification_type": adj.get("modification_type"),
+                    "allowed_amount": adj.get("allowed_amount"),
+                    "paid_amount": adj.get("paid_amount"),
+                    "adjustment_group_code": adj.get("adjustment_group_code"),
+                    "adjustment_amount": adj.get("adjustment_amount"),
                     "requested_documents": adj.get("requested_documents"),
                 }
             )
 
-        deltas = apply_phase2_insurer_line_adjudications(
+        deltas = apply_phase3_insurer_line_adjudications(
             state=state,
             line_adjudications=mapped,
             reviewer_type=str(pay.get("reviewer_type") or ""),
             level=int(pay.get("level") or response.get("level") or 0),
         )
-
-        if self.environment is not None:
-            try:
-                deltas.extend(self.environment.perform_approved_diagnostics(state=state))
-            except Exception as e:
-                if self.audit_logger is not None:
-                    try:
-                        self.audit_logger.log(
-                            phase="phase_2_utilization_review",
-                            turn=int(getattr(state, "turn", 0)),
-                            kind="env_error",
-                            actor="environment",
-                            payload={"error": str(e)},
-                        )
-                    except Exception:
-                        pass
-                raise
 
         return deltas
 
@@ -306,7 +279,10 @@ class Phase2Adapter:
         terminal_bad = []
 
         for l in lines:
-            st = (l.authorization_status or "").lower()
+            if not getattr(l, "delivered", False):
+                continue
+
+            st = (l.adjudication_status or "").lower()
             if st == "pending_info":
                 pending.append(l)
             if st in {"denied", "modified"} and int(l.current_review_level) < 2:
@@ -327,9 +303,9 @@ class Phase2Adapter:
             }
 
         if terminal_bad:
-            return {"action": "ABANDON", "abandon_mode": "NO_TREAT", "treat_anyway_lines": [], "lines": []}
+            return {"action": "ABANDON", "abandon_mode": "WRITE_OFF", "lines": []}
 
         return {"action": "CONTINUE", "lines": []}
 
     def apply_provider_action(self, state, provider_action: Dict[str, Any]) -> Tuple[List[Delta], bool, Optional[str]]:
-        return apply_phase2_provider_bundle_action(state=state, provider_action=provider_action)
+        return apply_phase3_provider_bundle_action(state=state, provider_action=provider_action)
