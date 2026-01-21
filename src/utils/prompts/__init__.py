@@ -36,7 +36,7 @@ from .system_prompts import (
 )
 
 # Phase 2 prompts (pre-adjudication UR)
-from .phase2_prompts import (
+from .phase2_prompts_old import (
     create_unified_provider_request_prompt,
     create_treatment_decision_after_phase2_denial_prompt,
     create_post_diagnostic_decision_prompt,

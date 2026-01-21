@@ -50,7 +50,6 @@ def phase2_provider_response_format() -> str:
     }
 }"""
 
-
 def phase2_treatment_decision_response_format() -> str:
     """Return Phase 2 treatment decision RESPONSE FORMAT (JSON) block."""
     return """{
@@ -66,23 +65,21 @@ def phase2_post_diagnostic_decision_response_format() -> str:
     "rationale": "<explain your reasoning based on the test results and clinical picture>"
 }"""
 
-
 def phase2_payor_response_format(
     can_pend: bool,
     role_label: str,
     level: int
 ) -> str:
-    """Return Phase 2 payor RESPONSE FORMAT (JSON) block."""
     lines = [
         "{",
-        "    // LINE-LEVEL ADJUDICATION (X12 278 authorization aligned)",
-        "    // IMPORTANT: you MUST adjudicate EVERY service line - one entry per line_number",
-        "    // IMPORTANT: use EXACTLY these adjudication_status values: approved, modified, denied, pending_info (NOT 'pended')",
+        "    // LINE-LEVEL DECISION (Phase 2 authorization)",
+        "    // MUST adjudicate EVERY requested service line - one entry per line_number",
+        "    // IMPORTANT: use EXACTLY: approved, modified, denied, pending_info",
         "    \"line_adjudications\": [",
         "        {",
-        "            \"line_number\": <1-based index into service_lines>,",
-        "            \"adjudication_status\": \"approved\" or \"modified\" or \"denied\" or \"pending_info\",",
-        "            \"decision_reason\": \"<reason for this line's decision>\",",
+        "            \"line_number\": <1-based index into requested_services>,",
+        "            \"authorization_status\": \"approved\" or \"modified\" or \"denied\" or \"pending_info\",",
+        "            \"decision_reason\": \"<reason for this line>\",",
         "            \"approved_quantity\": <if modified: approved quantity>,",
         "            \"modification_type\": \"<if modified: quantity_reduction or code_downgrade>\",",
     ]
@@ -92,13 +89,13 @@ def phase2_payor_response_format(
         "        }",
         "    ],",
         "",
-        "    // OVERALL FIELDS (for documentation, not decision logic)",
-        '    "decision_reason": "<summary of overall rationale>",',
-        '    "downgrade_alternative": "<if any line modified: describe approved alternatives>",',
-        '    "criteria_used": "<guidelines or policies applied>",',
+        "    // OVERALL FIELDS (optional, for narrative not logic)",
+        '    "decision_reason": "<summary rationale>",',
+        '    "downgrade_alternative": "<if any line modified>",',
+        '    "criteria_used": "<guidelines/policies applied>",',
         f'    "reviewer_type": "{role_label}",',
         f'    "level": {level},',
-        "    \"requires_peer_to_peer\": true or false  // optional",
+        "    \"requires_peer_to_peer\": true or false",
         "}",
     ])
     return "\n".join(lines)
