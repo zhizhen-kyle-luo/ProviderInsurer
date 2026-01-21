@@ -76,8 +76,8 @@ def run_single(case, case_id, condition, llms, output_dir):
             json.dump(metrics, f, indent=2)
 
         print("  ✓ completed")
-        print(f"    phase2 turns: {metrics['phase2_turns']}")
-        print(f"    denial rate: {metrics['authorization_denial_rate']:.2%}")
+        print(f"    phase2_turns={metrics['phase2_turns']} denial_rate={metrics['authorization_denial_rate']:.2%}")
+        print(f"    audit: {audit_file}")
 
         return {
             "run_id": run_id,
@@ -91,6 +91,7 @@ def run_single(case, case_id, condition, llms, output_dir):
         traceback.print_exc()
         audit_file = output_dir / f"{run_id}_audit_FAILED.json"
         audit_logger.save_json(str(audit_file))
+        print(f"    audit: {audit_file}")
         return {"run_id": run_id, "condition": condition, "success": False, "error": str(e)}
 
 
@@ -134,8 +135,7 @@ def run_batch(case_ids=None, conditions=None, output_dir="outputs/experiments"):
     with open(summary_file, "w") as f:
         json.dump(results, f, indent=2)
 
-    print(f"\n\nbatch complete: {len(results)} runs")
-    print(f"summary: {summary_file}")
+    print(f"\nbatch complete: {len(results)} runs")
 
     return results
 

@@ -88,7 +88,7 @@ def summarize_draft_lines(draft_obj: Dict[str, Any]) -> Tuple[str, List[Dict[str
     # phase 3: claim_submission (provider) or claim_adjudication (payor)
     if isinstance(draft_obj.get("claim_submission"), dict):
         sub = draft_obj["claim_submission"]
-        lines = sub.get("claim_lines") if isinstance(sub.get("claim_lines"), list) else []
+        lines = sub.get("billed_lines") if isinstance(sub.get("billed_lines"), list) else []
         mode = "claim_submission"
 
         line_map: Dict[int, Dict[str, Any]] = {}
@@ -220,7 +220,6 @@ def build_view_packet(
     mode: str,
     role: str,
     oversight_level: str,
-    line_summary: List[Dict[str, Any]],
     line_map: Dict[int, Dict[str, Any]],
     expand_lines: List[int],
     evidence_packet: Optional[Dict[str, Any]],
@@ -230,20 +229,38 @@ def build_view_packet(
     No truncation; budget is enforced by expand_lines length upstream.
     """
     expanded: List[Dict[str, Any]] = []
+    line_to_index: Dict[int, int] = {}
+    sorted_lines = sorted(line_map.keys())
+    for idx, ln in enumerate(sorted_lines):
+        line_to_index[ln] = idx
+
     for ln in expand_lines:
         full = line_map.get(ln)
         if not isinstance(full, dict):
             raise ValueError(f"expand_lines includes unknown line_number: {ln}")
-        expanded.append({"line_number": ln, "full": full})
+        idx = line_to_index.get(ln, -1)
+        expanded.append({"line_number": ln, "array_index": idx, "full": full})
+
+    # determine the correct path prefix for patches based on mode
+    if mode == "provider_submission":
+        path_hint = "/insurer_request/requested_services/<index>/<field>"
+    elif mode == "payor_response":
+        path_hint = "/line_adjudications/<index>/<field>"
+    elif mode == "claim_submission":
+        path_hint = "/claim_submission/billed_lines/<index>/<field>"
+    elif mode == "claim_adjudication":
+        path_hint = "/claim_adjudication/line_adjudications/<index>/<field>"
+    else:
+        path_hint = "/<array>/<index>/<field>"
 
     packet = {
         "role": role,
         "oversight_level": oversight_level,
         "draft_mode": mode,
-        "line_summary_all": line_summary,
-        "expanded_lines": expanded,
+        "lines": expanded,
         "evidence_packet": evidence_packet or {},
-        "instruction": "Return a JSON Patch array (RFC 6902) to correct the draft. If fine, return [].",
+        "patch_path_format": path_hint,
+        "instruction": f"Return JSON Patch array (RFC 6902). Use array_index to build paths like {path_hint}. If fine, return [].",
     }
 
     text = json.dumps(packet, ensure_ascii=False, indent=2)

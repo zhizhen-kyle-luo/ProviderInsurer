@@ -3,6 +3,23 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
+VALID_STATUSES = {"approved", "modified", "denied", "pending_info"}
+
+# normalize common LLM status variants
+_STATUS_ALIASES = {
+    "pended": "pending_info",
+    "pending": "pending_info",
+    "pend": "pending_info",
+    "approve": "approved",
+    "deny": "denied",
+    "modify": "modified",
+}
+
+
+def _normalize_status(status: str) -> str:
+    s = status.lower().strip()
+    return _STATUS_ALIASES.get(s, s)
+
 
 def _find_line(state, line_number: int):
     for line in state.service_lines:
@@ -42,8 +59,8 @@ def apply_phase2_insurer_line_adjudications(
             raise ValueError(f"bad line_adjudication (need authorization_status): {adj}")
 
         ln = int(adj["line_number"])
-        status = str(adj["authorization_status"]).lower()
-        if status not in {"approved", "modified", "denied", "pending_info"}:
+        status = _normalize_status(str(adj["authorization_status"]))
+        if status not in VALID_STATUSES:
             raise ValueError(f"bad authorization_status={status} for line_number={ln}")
 
         line = _find_line(state, ln)
@@ -265,8 +282,8 @@ def apply_phase3_insurer_line_adjudications(
             raise ValueError(f"bad line_adjudication (need adjudication_status): {adj}")
 
         ln = int(adj["line_number"])
-        status = str(adj["adjudication_status"]).lower()
-        if status not in {"approved", "modified", "denied", "pending_info"}:
+        status = _normalize_status(str(adj["adjudication_status"]))
+        if status not in VALID_STATUSES:
             raise ValueError(f"bad adjudication_status={status} for line_number={ln}")
 
         line = _find_line(state, ln)

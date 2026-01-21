@@ -83,7 +83,6 @@ def apply_oversight_edit(
         mode=mode,
         role=role,
         oversight_level=oversight_level,
-        line_summary=line_summary,
         line_map=line_map,
         expand_lines=expand_lines,
         evidence_packet=evidence_packet,

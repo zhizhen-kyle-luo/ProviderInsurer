@@ -9,7 +9,7 @@ handles common LLM output patterns:
 """
 import json
 import re
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 
 def extract_json_from_text(text: str) -> Any:

@@ -30,6 +30,31 @@ def create_phase2_provider_system_prompt(provider_params: Optional[Dict[str, Any
         f"{WORKFLOW_ACTION_DEFINITIONS}"
     )
 
+def _render_service_lines_state(state: object) -> str:
+    """render current service lines with their authorization status"""
+    lines = getattr(state, "service_lines", []) or []
+    if not lines:
+        return ""
+
+    parts = ["CURRENT SERVICE LINES STATE:"]
+    for l in lines:
+        ln = getattr(l, "line_number", "?")
+        code = getattr(l, "procedure_code", "")
+        name = getattr(l, "service_name", "")
+        status = getattr(l, "authorization_status", None) or "not_reviewed"
+        docs = getattr(l, "requested_documents", []) or []
+        reason = getattr(l, "decision_reason", "") or ""
+
+        line_str = f"- line {ln}: {code} {name} | status={status}"
+        if status == "pending_info" and docs:
+            line_str += f" | requested_docs={docs}"
+        if reason:
+            line_str += f" | reason={reason[:100]}"
+        parts.append(line_str)
+
+    return "\n".join(parts) + "\n"
+
+
 def create_phase2_provider_user_prompt(
     state: object,
     *,
@@ -52,6 +77,23 @@ def create_phase2_provider_user_prompt(
             lines.append(f"- level={lvl} decision={decision} reason={reason}")
         prior_block = "\n" + "\n".join(lines) + "\n"
 
+    service_lines_block = _render_service_lines_state(state)
+
+    # different instructions for turn 0 vs continuation
+    if turn == 0 or not service_lines_block:
+        task_instruction = (
+            "TASK\n"
+            "Construct an insurer_request with ALL service lines you wish to request.\n"
+            "Include all desired services upfront; do not plan to add more lines in later submissions.\n"
+        )
+    else:
+        task_instruction = (
+            "TASK\n"
+            "Resubmit the insurer_request with ALL existing lines (keep same line_numbers).\n"
+            "For pending_info lines: add clinical_evidence addressing the requested_documents.\n"
+            "Do NOT drop lines; include approved lines unchanged and pending lines with updated evidence.\n"
+        )
+
     return (
         f"PHASE 2 PROVIDER USER PROMPT\n"
         f"Turn: {turn}\n"
@@ -63,10 +105,9 @@ def create_phase2_provider_user_prompt(
         f"- chief_complaint: {pv['chief_complaint']}\n"
         f"- vitals: {json.dumps(vitals, ensure_ascii=False)}\n"
         f"- labs: {json.dumps(labs, ensure_ascii=False)}\n"
-        f"{prior_block}\n"
-        "TASK\n"
-        "Construct an insurer_request with ALL service lines you wish to request.\n"
-        "Include all desired services upfront; do not plan to add more lines in later submissions.\n"
+        f"{prior_block}"
+        f"{service_lines_block}\n"
+        f"{task_instruction}"
         "Return only valid JSON, no extra keys.\n"
         "{\n"
         '  "insurer_request": {\n'
