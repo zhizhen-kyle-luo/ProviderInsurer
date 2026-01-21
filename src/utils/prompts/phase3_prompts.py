@@ -6,8 +6,11 @@ from typing import Any, Dict, List, Optional
 from .workflow_prompts import WORKFLOW_ACTION_DEFINITIONS
 
 def _normalize_patient_visible_data(pv: object) -> Dict[str, Any]:
-    if not isinstance(pv, dict):
-        raise ValueError("state.patient_visible_data must be a dict")
+    if hasattr(pv, "model_dump"):
+        pv = pv.model_dump()
+    elif not isinstance(pv, dict):
+        raise ValueError("state.patient_visible_data must be PatientVisibleData model or dict")
+
     required = ["patient_id", "age", "sex"]
     for key in required:
         if key not in pv:

@@ -5,8 +5,11 @@ from .workflow_prompts import WORKFLOW_ACTION_DEFINITIONS
 from .prompt_renderers import render_line_summary
 
 def _normalize_patient_visible_data(pv: object) -> Dict[str, Any]:
-    if not isinstance(pv, dict):
-        raise ValueError("state.patient_visible_data must be a dict")
+    if hasattr(pv, "model_dump"):
+        pv = pv.model_dump()
+    elif not isinstance(pv, dict):
+        raise ValueError("state.patient_visible_data must be PatientVisibleData model or dict")
+
     required = [
         "patient_id", "age", "sex", "admission_source",
         "chief_complaint", "medical_history", "medications",

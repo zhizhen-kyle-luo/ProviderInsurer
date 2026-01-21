@@ -187,4 +187,7 @@ Constraints:
                 }
             )
 
+        from src.models.patient import PatientVisibleData
+        state.patient_visible_data = PatientVisibleData(**pv)
+
         return deltas
