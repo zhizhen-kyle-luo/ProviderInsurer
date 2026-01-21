@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 else:
     AuditLog = "AuditLog"
 
-
+#internal
 Phase = Literal[
     "phase_1_presentation",
     "phase_2_utilization_review",
@@ -54,8 +54,24 @@ class EncounterState(BaseModel):
     friction_metrics: FrictionMetrics = Field(default_factory=FrictionMetrics)
     audit_log: Optional["AuditLog"] = None
 
+    # cross-phase workflow flags/metadata (internal)
+    current_level: int = 0
+    denial_occurred: bool = False
+    independent_review_reached: bool = False
+    provider_treated_despite_denial: bool = False
+    care_abandoned: bool = False
+    claim_pended: bool = False
+    claim_rejected: bool = False
+    phase_2_evidence: Optional[Dict[str, Any]] = None
+    provider_policy_view: Optional[Dict[str, Any]] = None
+
+    # evaluation / truth-check bookkeeping (optional)
+    final_authorized_level: Optional[str] = None
+    ground_truth_outcome: Optional[str] = None
+    simulation_matches_reality: Optional[bool] = None
+
     #submission, resposne, updates
-    durable_artifacts: Dict[str, Any] = Field(default_factory=dict)
+    document_store : Dict[str, Any] = Field(default_factory=dict)
     phase2_submissions : List[Dict[str, Any]] = Field(default_factory=list)
     phase2_responses : List[Dict[str, Any]] = Field(default_factory=list)
     phase3_submissions : List[Dict[str, Any]] = Field(default_factory=list)
