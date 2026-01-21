@@ -33,7 +33,7 @@ class ServiceLineRequest(BaseModel):
 
     # X12 278/837 HI segment (diagnosis)
     diagnosis_codes: Optional[List[str]] = None  # phase 2: full ICD-10 list
-    diagnosis_pointers: Optional[List[int]] = Field(default_factory=list)  # phase 3: references claim-level HI
+    diagnosis_pointers: List[int] = Field(default_factory=list)  # phase 3: references claim-level HI
 
     # Phase 2 specific: clinical justification (X12 278 PWK/MSG segments)
     clinical_rationale: Optional[str] = None  # phase 2 PA + phase 3 appeals
@@ -41,6 +41,7 @@ class ServiceLineRequest(BaseModel):
     # Phase 2 specific: service type and details (X12 278 UM segment context)
     request_type: Optional[str] = None  # "treatment", "diagnostic_test", "level_of_care"
     service_name: Optional[str] = None  # drug name, procedure name, etc.
+    service_description: Optional[str] = None  # human-friendly display label (used in prompts/claims)
 
     # coding options (X12 278/837 SV1 qualifiers - type-specific)
     ndc_code: Optional[str] = None  # national drug code
@@ -76,3 +77,10 @@ class ServiceLineRequest(BaseModel):
     # workflow tracking (internal, not X12)
     current_review_level: int = 0  # 0=initial, 1=reconsideration, 2=IRE
     reviewer_type: Optional[str] = None  # "UM Triage", "Medical Director", "IRE"
+    superseded_by_line: Optional[int] = None  # if resubmitted, points to new line_number
+    treat_anyway: bool = False  # after abandon: whether provider treated despite non-approval
+    accepted_modification: bool = False  # whether provider accepted modified terms
+    request_revision : int = 0
+    delivered : bool = False  # for Phase 3 claims: whether service was delivered
+    pend_round : int = 0  # how many times this line has been pended
+    pend_total : int = 0  # total times this line has been pended across all rounds

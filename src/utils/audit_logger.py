@@ -1,200 +1,65 @@
-"""
-Audit Logger for LLM Interactions in Healthcare Simulation
+from __future__ import annotations
 
-Captures all prompts and responses between Provider and Payor agents
-for research transparency and reproducibility.
-"""
-
-from typing import Dict, Any, Optional
-from datetime import datetime
-import uuid
 import json
-from src.models import AuditLog, LLMInteraction, EnvironmentAction
-
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+from src.models.audit import AuditLog, AuditEvent
+from src.utils.audit_events import make_event, now_iso
 
 class AuditLogger:
-    """Logs all LLM interactions during simulation."""
-
-    def __init__(self, case_id: str):
+    def __init__(self, *, case_id: str, run_id: str, agent_configs: Optional[Dict[str, Any]] = None):
         self.audit_log = AuditLog(
             case_id=case_id,
-            simulation_start=datetime.now().isoformat(),
-            interactions=[]
+            run_id=run_id,
+            simulation_start=now_iso(),
+            agent_configs=agent_configs or {},
         )
 
-    def log_interaction(
+    def add(self, event: AuditEvent) -> None:
+        self.audit_log.events.append(event)
+
+    def log(
         self,
+        *,
         phase: str,
-        agent: str,
+        turn: int,
+        kind: str,
+        payload: Optional[Dict[str, Any]] = None,
+        actor: Optional[str] = None,
+    ) -> None:
+        self.add(make_event(phase=phase, turn=turn, kind=kind, payload=payload, actor=actor))
+
+    def log_llm_interaction(
+        self,
+        *,
+        phase: str,
+        turn: int,
+        actor: str,
         action: str,
         system_prompt: str,
         user_prompt: str,
         llm_response: str,
         parsed_output: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> str:
-        """
-        Log a single LLM interaction.
-
-        Args:
-            phase: Phase identifier (e.g., "phase_2_pa", "phase_3_claims")
-            agent: Agent name ("provider" or "payor")
-            action: Action being performed (e.g., "pa_request", "concurrent_review")
-            system_prompt: System prompt sent to LLM
-            user_prompt: User prompt sent to LLM
-            llm_response: Raw response from LLM
-            parsed_output: Parsed/structured output from response
-            metadata: Additional context (iteration number, etc.)
-
-        Returns:
-            Interaction ID for reference
-        """
-        interaction_id = f"{phase}_{agent}_{action}_{uuid.uuid4().hex[:8]}"
-
-        # calculate word count for response
-        word_count = len(llm_response.split()) if llm_response else 0
-        
-        # add word count to metadata
-        if metadata is None:
-            metadata = {}
-        metadata['word_count'] = word_count
-
-        interaction = LLMInteraction(
-            interaction_id=interaction_id,
-            timestamp=datetime.now().isoformat(),
-            phase=phase,
-            agent=agent,
-            action=action,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            llm_response=llm_response,
-            parsed_output=parsed_output or {},
-            metadata=metadata
-        )
-
-        self.audit_log.interactions.append(interaction)
-        return interaction_id
-
-    def log_environment_action(
-        self,
-        phase: str,
-        action_type: str,
-        description: str,
-        outcome: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> str:
-        """
-        log environment agent action (test result generation, noise injection, etc)
-
-        Args:
-            phase: Phase identifier (e.g., "phase_1_presentation", "phase_2_pa")
-            action_type: Type of action (e.g., "introduce_noise", "generate_test_result")
-            description: Human-readable description of action
-            outcome: Result of the action
-            metadata: Additional context
-
-        Returns:
-            Action ID for reference
-        """
-        action_id = f"env_{action_type}_{uuid.uuid4().hex[:8]}"
-
-        env_action = EnvironmentAction(
-            action_id=action_id,
-            timestamp=datetime.now().isoformat(),
-            phase=phase,
-            action_type=action_type,
-            description=description,
-            outcome=outcome or {},
-            metadata=metadata or {}
-        )
-
-        self.audit_log.environment_actions.append(env_action)
-        return action_id
-
-    def finalize(self, summary: Optional[Dict[str, Any]] = None):
-        """Finalize audit log with summary statistics."""
-        self.audit_log.simulation_end = datetime.now().isoformat()
-        self.audit_log.summary = summary or self._generate_summary()
-
-    def _generate_summary(self) -> Dict[str, Any]:
-        """Generate summary statistics from interactions."""
-        interactions_by_phase = {}
-        interactions_by_agent = {}
-        cache_hits = 0
-        cache_misses = 0
-
-        for interaction in self.audit_log.interactions:
-            # Count by phase
-            if interaction.phase not in interactions_by_phase:
-                interactions_by_phase[interaction.phase] = 0
-            interactions_by_phase[interaction.phase] += 1
-
-            # Count by agent
-            if interaction.agent not in interactions_by_agent:
-                interactions_by_agent[interaction.agent] = 0
-            interactions_by_agent[interaction.agent] += 1
-
-            # track cache hits/misses
-            if interaction.metadata.get('cache_hit'):
-                cache_hits += 1
-            else:
-                cache_misses += 1
-
-        total_interactions = len(self.audit_log.interactions)
-        cache_hit_rate = cache_hits / total_interactions if total_interactions > 0 else 0.0
-
-        return {
-            "total_interactions": total_interactions,
-            "interactions_by_phase": interactions_by_phase,
-            "interactions_by_agent": interactions_by_agent,
-            "cache_statistics": {
-                "cache_hits": cache_hits,
-                "cache_misses": cache_misses,
-                "cache_hit_rate": cache_hit_rate
-            }
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload = {
+            "action": action,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "llm_response": llm_response,
+            "parsed_output": parsed_output or {},
+            "meta": meta or {},
         }
+        self.log(phase=phase, turn=turn, kind="llm_interaction", payload=payload, actor=actor)
 
-    def get_audit_log(self) -> AuditLog:
-        """Get the complete audit log."""
-        return self.audit_log
+    def finalize(self, summary: Optional[Dict[str, Any]] = None) -> None:
+        self.audit_log.simulation_end = now_iso()
+        if summary is not None:
+            self.audit_log.summary = summary
 
-    def save_to_json(self, filepath: str):
-        """Save audit log to JSON file."""
-        with open(filepath, 'w') as f:
-            json.dump(self.audit_log.model_dump(), f, indent=2)
+    def to_dict(self) -> Dict[str, Any]:
+        return self.audit_log.model_dump()
 
-    def get_interaction_sequence(self) -> str:
-        """Get human-readable interaction sequence."""
-        lines = []
-        lines.append("=" * 80)
-        lines.append("LLM INTERACTION AUDIT LOG")
-        lines.append("=" * 80)
-        lines.append(f"Case ID: {self.audit_log.case_id}")
-        lines.append(f"Start: {self.audit_log.simulation_start}")
-        lines.append(f"End: {self.audit_log.simulation_end or 'In Progress'}")
-        lines.append("")
-
-        for i, interaction in enumerate(self.audit_log.interactions, 1):
-            lines.append(f"\n[{i}] {interaction.timestamp}")
-            lines.append(f"Phase: {interaction.phase}")
-            lines.append(f"Agent: {interaction.agent.upper()}")
-            lines.append(f"Action: {interaction.action}")
-            lines.append("")
-            lines.append("SYSTEM PROMPT:")
-            lines.append("-" * 80)
-            lines.append(interaction.system_prompt[:500] + "..." if len(interaction.system_prompt) > 500 else interaction.system_prompt)
-            lines.append("")
-            lines.append("USER PROMPT:")
-            lines.append("-" * 80)
-            lines.append(interaction.user_prompt[:500] + "..." if len(interaction.user_prompt) > 500 else interaction.user_prompt)
-            lines.append("")
-            lines.append("LLM RESPONSE:")
-            lines.append("-" * 80)
-            lines.append(interaction.llm_response[:500] + "..." if len(interaction.llm_response) > 500 else interaction.llm_response)
-            lines.append("")
-            lines.append("PARSED OUTPUT:")
-            lines.append(json.dumps(interaction.parsed_output, indent=2)[:300])
-            lines.append("")
-            lines.append("=" * 80)
-
-        return "\n".join(lines)
+    def save_json(self, filepath: str) -> None:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2)
