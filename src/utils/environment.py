@@ -29,7 +29,6 @@ class Environment:
             pass
 
     def perform_approved_diagnostics(self, *, state) -> List[Dict[str, Any]]:
-        from src.models.patient import PatientVisibleData
         import json
 
         pv_obj = getattr(state, "patient_visible_data", None)
@@ -92,7 +91,6 @@ class Environment:
             payload = results_by_code.get(proc) if proc else None
             fabricated = False
             raw_llm_output: Optional[str] = None
-            synthesized_payload: Optional[Dict[str, Any]] = None
 
             if payload is None and self.allow_synthesis:
                 if self.synthesis_llm is None:
@@ -126,7 +124,12 @@ Constraints:
 - ONLY new keys (do not overwrite existing labs)
 - existing_lab_result_keys={existing_labs_json}
 """
-                raw_llm_output = self.synthesis_llm.invoke(prompt).content
+                from langchain_core.messages import SystemMessage, HumanMessage
+                resp = self.synthesis_llm.invoke([
+                    SystemMessage(content="You are a medical lab result generator."),
+                    HumanMessage(content=prompt)
+                ])
+                raw_llm_output = resp.content
                 try:
                     obj = json.loads(raw_llm_output)
                 except Exception:
@@ -138,7 +141,6 @@ Constraints:
 
                 payload = obj["lab_results_delta"]
                 fabricated = True
-                synthesized_payload = payload
 
             if payload is None:
                 self._log(
@@ -152,15 +154,6 @@ Constraints:
 
             if not isinstance(payload, dict):
                 raise ValueError("diagnostic result payload must be dict")
-
-            # Persist the per-procedure result set (ground truth or synthesized) so subsequent runs
-            # can determine whether this diagnostic has already been fulfilled.
-            if fabricated:
-                existing = results_by_code.get(proc)
-                if not isinstance(existing, dict) or not existing:
-                    results_by_code[proc] = dict(synthesized_payload or payload)
-                    ht["diagnostic_results_by_code"] = results_by_code
-                    state.environment_hidden_data = ht
 
             # don't overwrite existing labs
             payload = {k: v for k, v in payload.items() if k not in pv["lab_results"]}
@@ -193,8 +186,5 @@ Constraints:
                     "after": dict(pv["lab_results"]),
                 }
             )
-
-        from src.models.patient import PatientVisibleData
-        state.patient_visible_data = PatientVisibleData(**pv)
 
         return deltas
