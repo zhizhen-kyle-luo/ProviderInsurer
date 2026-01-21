@@ -85,7 +85,60 @@ def summarize_draft_lines(draft_obj: Dict[str, Any]) -> Tuple[str, List[Dict[str
 
         return mode, summary, line_map
 
-    raise ValueError("draft_obj not recognized: expected insurer_request or line_adjudications")
+    # phase 3: claim_submission (provider) or claim_adjudication (payor)
+    if isinstance(draft_obj.get("claim_submission"), dict):
+        sub = draft_obj["claim_submission"]
+        lines = sub.get("claim_lines") if isinstance(sub.get("claim_lines"), list) else []
+        mode = "claim_submission"
+
+        line_map: Dict[int, Dict[str, Any]] = {}
+        summary: List[Dict[str, Any]] = []
+
+        for ln_obj in lines:
+            if not isinstance(ln_obj, dict):
+                continue
+            ln = ln_obj.get("line_number")
+            if isinstance(ln, str) and ln.isdigit():
+                ln = int(ln)
+            if not isinstance(ln, int):
+                continue
+            line_map[ln] = ln_obj
+            summary.append({
+                "line_number": ln,
+                "procedure_code": ln_obj.get("procedure_code"),
+                "billed_amount": ln_obj.get("billed_amount"),
+                "service_date": ln_obj.get("service_date"),
+            })
+
+        return mode, summary, line_map
+
+    if isinstance(draft_obj.get("claim_adjudication"), dict):
+        adj = draft_obj["claim_adjudication"]
+        lines = adj.get("line_adjudications") if isinstance(adj.get("line_adjudications"), list) else []
+        mode = "claim_adjudication"
+
+        line_map: Dict[int, Dict[str, Any]] = {}
+        summary: List[Dict[str, Any]] = []
+
+        for ln_obj in lines:
+            if not isinstance(ln_obj, dict):
+                continue
+            ln = ln_obj.get("line_number")
+            if isinstance(ln, str) and ln.isdigit():
+                ln = int(ln)
+            if not isinstance(ln, int):
+                continue
+            line_map[ln] = ln_obj
+            summary.append({
+                "line_number": ln,
+                "status": ln_obj.get("payment_status") or ln_obj.get("adjudication_status"),
+                "allowed_amount": ln_obj.get("allowed_amount"),
+                "paid_amount": ln_obj.get("paid_amount"),
+            })
+
+        return mode, summary, line_map
+
+    raise ValueError("draft_obj not recognized: expected insurer_request, line_adjudications, claim_submission, or claim_adjudication")
 
 
 def _invoke_messages(llm: Any, system_text: str, user_text: str) -> str:

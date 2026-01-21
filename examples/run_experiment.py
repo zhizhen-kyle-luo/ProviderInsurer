@@ -1,305 +1,159 @@
 """
-Variables: Insurer/provider - copilot strength (W/S), human effort (L/H)
-Run A: both weak copilot, high effort - “human” baseline
-B: insurer strong copilot low effort, provider weak copilot high effort - “insurer start using AI”
-C: both strong copilot high effort. C prime : both strong copilot, patient low effort, insurer high.  “provider counteract with AI”
-Hypothesis:
-B vs A ->  more denials, insurer workload less
-C vs B - > denial gone down now.
-C prime vs B -> “even though you invested in AI, still need high human effort to achieve the same outcome as before”
+experiment runner for MASH simulation
+
+experimental design:
+- primary factor: oversight intensity (low, medium, high)
+- measures: friction, denial rates, workload
+
+conditions:
+A: baseline (both medium)
+B: insurer high, provider medium
+C: both high
+D: both low
 
 usage:
-  python examples/run_experiment.py                # Run all runs
-  python examples/run_experiment.py A              # Run specific run
-  python examples/run_experiment.py A B C          # Run multiple runs
-  python examples/run_experiment.py infliximab     # Use infliximab case (default: infliximab_crohns_2015)
+  python examples/run_experiment.py --quick
+  python examples/run_experiment.py --case infliximab_crohns_2015
 """
 import sys
 import os
-import json
-import argparse
-from datetime import datetime
-from dotenv import load_dotenv
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-load_dotenv()
 
-from src.simulation.game_runner import UtilizationReviewSimulation
-from src.data.case_registry import get_case
-from src.data.case_converter import convert_case_to_models
+import json
+from pathlib import Path
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-HIGH_EFFORT_PARAMS = {
-    'oversight_intensity': 'high',
-}
+import os
+from langchain_openai import AzureChatOpenAI
+from dotenv import load_dotenv
+from src.sim.run_full_simulation import run_full_simulation
+from src.utils.audit_logger import AuditLogger
+from src.utils.environment import Environment
+from src.data.case_registry import get_case, list_cases
 
-LOW_EFFORT_PARAMS = {
-    'oversight_intensity': 'low',
-}
 
-EXPERIMENT_CONFIGS = {
-    'A': {
-        'name': 'Baseline (Human)',
-        'description': 'Both sides Weak AI + High Human Effort (The Status Quo)',
-        'provider_llm': 'azure', 'payor_llm': 'azure',
-        'provider_copilot_llm': 'azure',    # Weak
-        'payor_copilot_llm': 'azure',       # Weak
-        'provider_params': HIGH_EFFORT_PARAMS,
-        'payor_params': HIGH_EFFORT_PARAMS,
-        'hypothesis': 'H0: Baseline friction and approval rates.'
-    },
-    'B': {
-        'name': 'Insurer Disruption',
-        'description': 'Insurer adopts Strong AI + Low Effort (Cost Cutting). Provider stays Baseline.',
-        'provider_llm': 'azure', 'payor_llm': 'azure',
-        'provider_copilot_llm': 'azure',
-        'payor_copilot_llm': None,
-        'provider_params': HIGH_EFFORT_PARAMS,
-        'payor_params': LOW_EFFORT_PARAMS,
-        'hypothesis': 'H1: Insurer workload drops, denials increase.'
-    },
-    'C': {
-        'name': 'Arms Race (Counter)',
-        'description': 'Provider adopts Strong AI + High Effort to fight back.',
-        'provider_llm': 'azure', 'payor_llm': 'azure',
-        'provider_copilot_llm': None,
-        'payor_copilot_llm': None,
-        'provider_params': HIGH_EFFORT_PARAMS,
-        'payor_params': LOW_EFFORT_PARAMS,
-        'hypothesis': 'H2: Denials recover, but admin volume/costs explode.'
-    },
-    'C_prime': {
-        'name': 'The Laziness Trap',
-        'description': 'Provider tries to cut effort (Low) using Strong AI.',
-        'provider_llm': 'azure', 'payor_llm': 'azure',
-        'provider_copilot_llm': None,
-        'payor_copilot_llm': None,
-        'provider_params': LOW_EFFORT_PARAMS,
-        'payor_params': LOW_EFFORT_PARAMS,
-        'hypothesis': 'H3: Provider loses the gains from C because oversight is needed.'
-    }
+CONFIGS = {
+    'A': {'name': 'Baseline', 'provider': 'medium', 'payor': 'medium'},
+    'B': {'name': 'Insurer Scrutiny', 'provider': 'medium', 'payor': 'high'},
+    'C': {'name': 'Arms Race', 'provider': 'high', 'payor': 'high'},
+    'D': {'name': 'AI Dominance', 'provider': 'low', 'payor': 'low'},
 }
 
 
-def print_config_header(run_id, config):
-    """print configuration header"""
-    print("\n" + "=" * 80)
-    print(f"RUN {run_id}: {config['name'].upper()}")
-    print("=" * 80)
-    print(f"Description: {config['description']}")
-    print(f"Hypothesis: {config['hypothesis']}")
-    print(f"Provider Copilot: {'Strong (base)' if config['provider_copilot_llm'] is None else 'Weak (azure)'}")
-    print(f"Provider Effort: {config['provider_params']['oversight_intensity'].upper()}")
-    print(f"Payor Copilot: {'Strong (base)' if config['payor_copilot_llm'] is None else 'Weak (azure)'}")
-    print(f"Payor Effort: {config['payor_params']['oversight_intensity'].upper()}")
-    print()
+def run_single(case, case_id, condition, llms, output_dir):
+    run_id = f"{case_id}_{condition}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
+    config = CONFIGS[condition]
+    audit_logger = AuditLogger(case_id=case_id, run_id=run_id)
+    environment = Environment(synthesis_llm=llms["synthesis"], allow_synthesis=True)
 
-def print_results(result):
-    """print simulation results"""
-    print("\n" + "-" * 80)
-    print("RESULTS")
-    print("-" * 80)
+    provider_params = {"oversight_intensity": config["provider"]}
+    payor_params = {"oversight_intensity": config["payor"]}
 
-    # Phase 2: Utilization Review
-    print("\nPHASE 2: UTILIZATION REVIEW")
-    if result.service_lines:
-        line = result.service_lines[0]
-        status = line.authorization_status
-        print(f"  Authorization Status: {status.upper() if status else 'N/A'}")
-
-    # Metrics
-    print("\nMETRICS")
-    if result.friction_metrics:
-        fm = result.friction_metrics
-        print(f"  Provider Actions: {fm.provider_actions}")
-        print(f"  Payor Actions: {fm.VALID_PAYOR_ACTIONS}")
-        print(f"  Total Iterations: {fm.provider_actions + fm.VALID_PAYOR_ACTIONS}")
-        print(f"  Probing Tests: {fm.probing_tests_count}")
-        print(f"  Escalation Depth: {fm.escalation_depth}")
-
-    # Financial
-    print("\nFINANCIAL SETTLEMENT")
-    if result.financial_settlement:
-        fin = result.financial_settlement
-        print(f"  Total Billed: ${fin.total_billed_charges:,.2f}")
-        print(f"  Payer Payment: ${fin.payer_payment:,.2f}")
-        print(f"  Patient Responsibility: ${fin.patient_responsibility:,.2f}")
-
-
-def collect_metrics(result):
-    """collect key metrics from result"""
-    if not result.service_lines:
-        raise ValueError("result.service_lines is missing - cannot extract phase 2 status")
-
-    line = result.service_lines[0]
-    if not line.authorization_status:
-        raise ValueError("service_lines[0].authorization_status is missing or empty")
-
-    # extract test results from phase_2_evidence
-    test_results = {}
-    if result.phase_2_evidence:
-        test_results = result.phase_2_evidence.get('test_results', {})
-
-    return {
-        'case_id': result.admission.case_id if hasattr(result.admission, 'case_id') else 'unknown',
-        'phase_2_status': line.authorization_status,
-        'pa_level_reached': result.current_level,
-        'appeal_filed': result.appeal_filed,
-        'appeal_successful': result.appeal_successful,
-        'total_iterations': (result.friction_metrics.provider_actions + result.friction_metrics.VALID_PAYOR_ACTIONS) if result.friction_metrics else 0,
-        'provider_actions': result.friction_metrics.provider_actions if result.friction_metrics else 0,
-        'VALID_PAYOR_ACTIONS': result.friction_metrics.VALID_PAYOR_ACTIONS if result.friction_metrics else 0,
-        'probing_tests': result.friction_metrics.probing_tests_count if result.friction_metrics else 0,
-        'escalation_depth': result.friction_metrics.escalation_depth if result.friction_metrics else 0,
-        'total_billed': result.financial_settlement.total_billed_charges if result.financial_settlement else 0.0,
-        'payer_payment': result.financial_settlement.payer_payment if result.financial_settlement else 0.0,
-        'test_results': test_results
-    }
-
-def run_experiment_config(run_id, config, case_id, output_dir="experiment_results"):
-    """run a single experiment configuration"""
-    print_config_header(run_id, config)
+    print(f"  running: {run_id}")
 
     try:
-        # Load case
-        case = get_case(case_id)
-        case = convert_case_to_models(case)
-
-        # Create simulation with config parameters
-        sim = UtilizationReviewSimulation(
-            provider_llm=config['provider_llm'],
-            payor_llm=config['payor_llm'],
-            provider_copilot_llm=config['provider_copilot_llm'],
-            payor_copilot_llm=config['payor_copilot_llm'],
-            provider_params=config['provider_params'],
-            payor_params=config['payor_params'],
-            enable_cache=True,
-            master_seed=42  # deterministic for reproducibility
+        state = run_full_simulation(
+            case=case,
+            provider_copilot_llm=llms["copilot"],
+            payor_copilot_llm=llms["copilot"],
+            provider_base_llm=llms["base"],
+            payor_base_llm=llms["base"],
+            provider_params=provider_params,
+            payor_params=payor_params,
+            audit_logger=audit_logger,
+            environment=environment,
         )
 
-        # Run simulation
-        result = sim.run_case(case)
+        metrics = state.friction_metrics.model_dump()
 
-        # Print results
-        print_results(result)
+        audit_file = output_dir / f"{run_id}_audit.json"
+        audit_logger.save_json(str(audit_file))
 
-        # Save outputs
-        os.makedirs(output_dir, exist_ok=True)
+        metrics_file = output_dir / f"{run_id}_metrics.json"
+        with open(metrics_file, "w") as f:
+            json.dump(metrics, f, indent=2)
 
-        # Save audit log
-        if result.audit_log:
-            audit_json_path = f"{output_dir}/run_{run_id}_audit_log.json"
-            result.audit_log.save_to_json(audit_json_path)
-            print(f"\nAudit Log: {audit_json_path}")
+        print("  ✓ completed")
+        print(f"    phase2 turns: {metrics['phase2_turns']}")
+        print(f"    denial rate: {metrics['authorization_denial_rate']:.2%}")
 
-        # Collect metrics
-        metrics = collect_metrics(result)
-        metrics['run_id'] = run_id
-        metrics['config'] = {
-            'name': config['name'],
-            'provider_copilot': config['provider_copilot_llm'],
-            'provider_effort': config['provider_params']['oversight_intensity'],
-            'payor_copilot': config['payor_copilot_llm'],
-            'payor_effort': config['payor_params']['oversight_intensity']
+        return {
+            "run_id": run_id,
+            "condition": condition,
+            "success": True,
+            "metrics": metrics,
         }
-
-        return metrics
-
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"  ✗ failed: {str(e)}")
         import traceback
         traceback.print_exc()
-
-        # save partial audit log for debugging even on failure
-        os.makedirs(output_dir, exist_ok=True)
-        if sim and hasattr(sim, 'audit_logger') and sim.audit_logger:
-            debug_path = f"{output_dir}/run_{run_id}_FAILED_audit_log.json"
-            try:
-                sim.audit_logger.save_to_json(debug_path)
-                print(f"\nPartial audit log saved for debugging: {debug_path}")
-            except Exception as save_err:
-                print(f"  (could not save audit log: {save_err})")
-
-        return None
+        audit_file = output_dir / f"{run_id}_audit_FAILED.json"
+        audit_logger.save_json(str(audit_file))
+        return {"run_id": run_id, "condition": condition, "success": False, "error": str(e)}
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Run hypothesis testing experiment with 5 configurations',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python examples/run_experiment.py                # Run all runs (A, B, C, C', D)
-  python examples/run_experiment.py A B C          # Run specific runs
-  python examples/run_experiment.py A case_id      # Run A with specific case
-        """
+def run_batch(case_ids=None, conditions=None, output_dir="outputs/experiments"):
+    load_dotenv()
+
+    if case_ids is None:
+        case_ids = list_cases()
+    if conditions is None:
+        conditions = list(CONFIGS.keys())
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    llm = AzureChatOpenAI(
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+        azure_deployment=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
+        api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
     )
-    parser.add_argument('items', nargs='*', help='runs (A/B/C/C\'/D) or case ID')
-    parser.add_argument('--output-dir', default='experiment_results', help='output directory')
-    args = parser.parse_args()
+    llms = {"copilot": llm, "base": llm, "synthesis": llm}
 
-    # Parse arguments
-    runs_to_execute = []
-    case_id = 'infliximab_crohns_2015'  # default case
-
-    if args.items:
-        for item in args.items:
-            if item in EXPERIMENT_CONFIGS:
-                runs_to_execute.append(item)
-            else:
-                # Treat as case ID
-                case_id = item
-
-    # Default to all runs if none specified
-    if not runs_to_execute:
-        runs_to_execute = ['A', 'B', 'C', 'C_prime']
-
-    print("=" * 80)
-    print("HYPOTHESIS TESTING EXPERIMENT")
-    print("=" * 80)
-    print(f"\nExecution Plan:")
-    print(f"  Case: {case_id}")
-    print(f"  Runs: {', '.join(runs_to_execute)}")
-    print(f"  Output Dir: {args.output_dir}")
-
-    # Run experiment configurations
     results = []
-    for run_id in runs_to_execute:
-        if run_id not in EXPERIMENT_CONFIGS:
-            print(f"\nERROR: Unknown run '{run_id}'")
+
+    all_case_ids = set(list_cases())
+    for case_id in case_ids:
+        if case_id not in all_case_ids:
+            print(f"warning: {case_id} not found")
             continue
 
-        config = EXPERIMENT_CONFIGS[run_id]
-        metrics = run_experiment_config(run_id, config, case_id, args.output_dir)
-        if metrics:
-            results.append(metrics)
+        case = get_case(case_id)
+        print(f"\ncase: {case_id}")
 
-    # Summary
-    print("\n" + "=" * 80)
-    print("EXPERIMENT SUMMARY")
-    print("=" * 80)
+        for cond in conditions:
+            if cond not in CONFIGS:
+                continue
+            result = run_single(case, case_id, cond, llms, output_path)
+            results.append(result)
 
-    if results:
-        print(f"\nCompleted {len(results)}/{len(runs_to_execute)} runs\n")
-        print("RUN | CONFIG | P2_STATUS | ITERATIONS | TESTS | APPEAL")
-        print("-" * 66)
-        for r in results:
-            p2_status = r['phase_2_status'][:4].upper()
-            appeal = 'YES' if r['appeal_filed'] else 'NO'
-            print(f"{r['run_id']:3} | {r['config']['name']:20} | {p2_status:9} | {r['total_iterations']:3} | {r['probing_tests']:2} | {appeal:3}")
+    summary_file = output_path / f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    with open(summary_file, "w") as f:
+        json.dump(results, f, indent=2)
 
-        # Save summary
-        summary_path = f"{args.output_dir}/experiment_summary.json"
-        with open(summary_path, 'w') as f:
-            json.dump({
-                'timestamp': datetime.now().isoformat(),
-                'case_id': case_id,
-                'runs': results
-            }, f, indent=2)
-        print(f"\nSummary: {summary_path}")
-    else:
-        print("No results to summarize")
+    print(f"\n\nbatch complete: {len(results)} runs")
+    print(f"summary: {summary_file}")
+
+    return results
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--quick", action="store_true")
+    parser.add_argument("--case", type=str)
+    parser.add_argument("--conditions", nargs="+")
+    parser.add_argument("--output", default="outputs/experiments")
+
+    args = parser.parse_args()
+
+    if args.quick:
+        case_ids = [args.case] if args.case else [list_cases()[0]]
+        run_batch(case_ids=case_ids, conditions=["A"], output_dir="outputs/quick_test")
+    else:
+        case_ids = [args.case] if args.case else None
+        run_batch(case_ids=case_ids, conditions=args.conditions, output_dir=args.output)

@@ -9,10 +9,10 @@ handles common LLM output patterns:
 """
 import json
 import re
-from typing import Dict, Any, Optional
+from typing import Any, Optional
 
 
-def extract_json_from_text(text: str) -> Dict[str, Any]:
+def extract_json_from_text(text: str) -> Any:
     """
     extract JSON from LLM response that may contain conversational filler
 
@@ -54,15 +54,33 @@ def _try_generic_block(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _try_brace_extraction(text: str) -> Optional[Dict[str, Any]]:
-    """try to extract JSON by finding first { to last }"""
+def _try_brace_extraction(text: str) -> Optional[Any]:
+    """try to extract JSON by finding first {/[ to last }/]"""
+    # try object first
     first_brace = text.find('{')
     last_brace = text.rfind('}')
 
-    if first_brace == -1 or last_brace == -1 or last_brace <= first_brace:
+    # try array
+    first_bracket = text.find('[')
+    last_bracket = text.rfind(']')
+
+    # pick whichever comes first (object or array)
+    use_object = first_brace != -1 and last_brace > first_brace
+    use_array = first_bracket != -1 and last_bracket > first_bracket
+
+    if use_object and use_array:
+        # use whichever starts first
+        if first_brace < first_bracket:
+            extracted = text[first_brace:last_brace + 1]
+        else:
+            extracted = text[first_bracket:last_bracket + 1]
+    elif use_object:
+        extracted = text[first_brace:last_brace + 1]
+    elif use_array:
+        extracted = text[first_bracket:last_bracket + 1]
+    else:
         return None
 
-    extracted = text[first_brace:last_brace + 1]
     result = _parse_with_cleanup(extracted)
 
     if result is None:
@@ -72,7 +90,7 @@ def _try_brace_extraction(text: str) -> Optional[Dict[str, Any]]:
     return result
 
 
-def _parse_with_cleanup(text: str) -> Optional[Dict[str, Any]]:
+def _parse_with_cleanup(text: str) -> Optional[Any]:
     """try to parse JSON, with cleanup on failure"""
     try:
         return json.loads(text)

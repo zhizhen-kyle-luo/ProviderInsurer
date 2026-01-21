@@ -10,20 +10,11 @@ from typing import Any, Dict, Optional
 from src.models.patient import PatientVisibleData
 from src.models.state import EncounterState
 
-# Internal helpers
+# truly required (no pydantic default)
 _REQUIRED_PATIENT_KEYS = [
     "patient_id",
     "age",
     "sex",
-    "admission_source",
-    "chief_complaint",
-    "medical_history",
-    "medications",
-    "vital_signs",
-    "presenting_symptoms",
-    "physical_exam",
-    "clinical_notes",
-    "lab_results",
 ]
 def _assert_required_keys(obj: Dict[str, Any], required: set[str], label: str) -> None:
     missing = sorted([k for k in required if k not in obj])
