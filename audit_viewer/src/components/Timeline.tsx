@@ -1,100 +1,65 @@
-import { LLMInteraction } from '../types/audit';
-import { InteractionCard } from './InteractionCard';
-import { OversightGroup } from './OversightGroup';
-import { formatPhase } from '../utils/dataLoader';
+import { useState } from 'react';
+import { GroupedTurn } from '../types/audit';
+import { TurnCard } from './TurnCard';
+import { formatPhase, getPhaseColor } from '../utils/dataLoader';
 
 interface TimelineProps {
-  interactions: LLMInteraction[];
+  readonly turns: GroupedTurn[];
 }
 
-export function Timeline({ interactions }: TimelineProps) {
-  // group interactions by oversight workflow (copilot_draft -> oversight_edit -> final)
-  const groupedInteractions: Array<{ type: 'single' | 'group'; items: LLMInteraction[]; startIndex: number }> = [];
-  let i = 0;
-
-  while (i < interactions.length) {
-    const current = interactions[i];
-
-    // check if this starts an oversight sequence
-    if (
-      current.action === 'copilot_draft' &&
-      i + 2 < interactions.length &&
-      interactions[i + 1].action === 'oversight_edit' &&
-      interactions[i + 1].agent === current.agent
-    ) {
-      // find the final action (next action by same agent that's not oversight_edit)
-      let groupEnd = i + 2;
-      while (
-        groupEnd < interactions.length &&
-        interactions[groupEnd].agent === current.agent &&
-        interactions[groupEnd].action === 'oversight_edit'
-      ) {
-        groupEnd++;
-      }
-
-      if (groupEnd < interactions.length && interactions[groupEnd].agent === current.agent) {
-        groupedInteractions.push({
-          type: 'group',
-          items: interactions.slice(i, groupEnd + 1),
-          startIndex: i,
-        });
-        i = groupEnd + 1;
-        continue;
-      }
-    }
-
-    // single interaction
-    groupedInteractions.push({
-      type: 'single',
-      items: [current],
-      startIndex: i,
-    });
-    i++;
+export function Timeline({ turns }: TimelineProps) {
+  const [expandedTurns, setExpandedTurns] = useState<Set<string>>(new Set());
+  const phaseGroups = new Map<string, GroupedTurn[]>();
+  for (const turn of turns) {
+    if (!phaseGroups.has(turn.phase)) phaseGroups.set(turn.phase, []);
+    phaseGroups.get(turn.phase)!.push(turn);
   }
-
-  // group by phase for section headers
-  const phaseGroups: Map<string, typeof groupedInteractions> = new Map();
-  groupedInteractions.forEach(group => {
-    const phase = group.items[0].phase;
-    if (!phaseGroups.has(phase)) {
-      phaseGroups.set(phase, []);
-    }
-    phaseGroups.get(phase)!.push(group);
-  });
+  const toggleTurn = (key: string) => {
+    const next = new Set(expandedTurns);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setExpandedTurns(next);
+  };
+  const expandAll = () => {
+    const all = new Set(turns.map(t => `${t.phase}_${t.turn}`));
+    setExpandedTurns(all);
+  };
+  const collapseAll = () => setExpandedTurns(new Set());
 
   return (
-    <div className="max-w-5xl mx-auto py-8 px-4">
-      {Array.from(phaseGroups.entries()).map(([phase, groups]) => (
-        <div key={phase} className="mb-12">
-          {/* phase header */}
-          <div className="mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">{formatPhase(phase)}</h2>
-            <div className="h-1 w-24 bg-gradient-to-r from-blue-500 to-cyan-400 rounded mt-2"></div>
-          </div>
-
-          {/* timeline */}
-          <div className="relative pl-8">
-            {/* vertical line */}
-            <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-gray-300 to-gray-200"></div>
-
-            {/* interactions */}
-            <div className="space-y-6">
-              {groups.map((group, idx) => (
-                <div key={idx} className="relative">
-                  {/* timeline dot */}
-                  <div className="absolute -left-9 top-6 w-4 h-4 rounded-full bg-white border-4 border-blue-500"></div>
-
-                  {group.type === 'group' ? (
-                    <OversightGroup interactions={group.items} startIndex={group.startIndex} />
-                  ) : (
-                    <InteractionCard interaction={group.items[0]} index={group.startIndex} />
-                  )}
-                </div>
-              ))}
+    <div className="space-y-8">
+      <div className="flex gap-2">
+        <button onClick={expandAll} className="px-3 py-1 text-sm bg-slate-200 rounded hover:bg-slate-300">
+          Expand All
+        </button>
+        <button onClick={collapseAll} className="px-3 py-1 text-sm bg-slate-200 rounded hover:bg-slate-300">
+          Collapse All
+        </button>
+      </div>
+      {Array.from(phaseGroups.entries()).map(([phase, phaseTurns]) => {
+        const colors = getPhaseColor(phase);
+        return (
+          <div key={phase} className="space-y-4">
+            <div className={`px-4 py-2 rounded-lg ${colors.bg} border ${colors.border}`}>
+              <h2 className={`text-xl font-bold ${colors.text}`}>{formatPhase(phase)}</h2>
+              <p className="text-sm text-slate-600">{phaseTurns.length} turns</p>
+            </div>
+            <div className="space-y-3 pl-4 border-l-4 border-slate-200">
+              {phaseTurns.map((turn) => {
+                const key = `${turn.phase}_${turn.turn}`;
+                return (
+                  <TurnCard
+                    key={key}
+                    turn={turn}
+                    expanded={expandedTurns.has(key)}
+                    onToggle={() => toggleTurn(key)}
+                  />
+                );
+              })}
             </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

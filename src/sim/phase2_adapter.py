@@ -142,7 +142,7 @@ class Phase2Adapter:
     def is_terminal(self, state) -> bool:
         lines = getattr(state, "service_lines", []) or []
         if not lines:
-            return True
+            return False
         for l in lines:
             st = (l.authorization_status or "").lower()
             if st in {"approved"}:

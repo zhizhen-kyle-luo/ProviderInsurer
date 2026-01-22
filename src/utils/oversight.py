@@ -31,9 +31,9 @@ def _system_prompt(role: str, oversight_level: str) -> str:
         f"You are the {role} overseer.\n"
         f"Oversight level: {oversight_level}. {guide}\n"
         f"{constraints}\n"
-        "Return ONLY a JSON Patch array (RFC 6902).\n"
+        "Return ONLY a JSON Patch array (RFC 6902). Example: [{\"op\":\"replace\",\"path\":\"/x\",\"value\":1}]\n"
         'Allowed ops: "add", "remove", "replace".\n'
-        "No extra text.\n"
+        "Be concise. Keep string values short. No extra text.\n"
     )
 
 
@@ -42,9 +42,9 @@ def _user_prompt(view_packet_json: str, max_patch_ops: int, max_paths_touched: i
         "VIEW PACKET:\n"
         f"{view_packet_json}\n\n"
         "TASK:\n"
-        f"- Return JSON Patch array to fix the draft.\n"
-        f"- Budgets: max_patch_ops={max_patch_ops}, max_paths_touched={max_paths_touched}\n"
-        "- If no changes, return [].\n"
+        f"- Return JSON Patch array. Budgets: max_patch_ops={max_patch_ops}, max_paths_touched={max_paths_touched}\n"
+        "- If no changes needed, return []\n"
+        "- Keep values concise (max 100 chars per string value)\n"
     )
 
 
@@ -74,7 +74,6 @@ def apply_oversight_edit(
 
     expand_lines, selector_meta = choose_expand_lines_via_llm(
         llm=llm,
-        mode=mode,
         role=role,
         line_summary=line_summary,
         k=k,
@@ -84,8 +83,6 @@ def apply_oversight_edit(
         mode=mode,
         role=role,
         oversight_level=oversight_level,
-        draft_obj=draft_obj,
-        line_summary=line_summary,
         line_map=line_map,
         expand_lines=expand_lines,
         evidence_packet=evidence_packet,
@@ -99,7 +96,6 @@ def apply_oversight_edit(
     )
 
     raw_patch_text = _invoke_langchain(llm, sys_txt, user_txt)
-    patch_obj = extract_json_from_text(raw_patch_text)
 
     meta: Dict[str, Any] = {
         "role": role,
@@ -107,6 +103,18 @@ def apply_oversight_edit(
         "review": {"selector": selector_meta, "view": view_meta},
         "edit": {},
     }
+
+    try:
+        patch_obj = extract_json_from_text(raw_patch_text)
+    except Exception as e:
+        meta["edit"]["error"] = "patch_parse_failed"
+        meta["edit"]["raw_patch_text"] = str(raw_patch_text)[:2000]
+        meta["edit"]["exception"] = str(e)
+        return json.dumps(draft_obj, ensure_ascii=False), meta, "patch_parse_failed", str(e)
+
+    # handle single object instead of array
+    if isinstance(patch_obj, dict):
+        patch_obj = [patch_obj]
 
     if not isinstance(patch_obj, list):
         meta["edit"]["error"] = "patch_not_array"

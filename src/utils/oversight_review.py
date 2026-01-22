@@ -85,7 +85,60 @@ def summarize_draft_lines(draft_obj: Dict[str, Any]) -> Tuple[str, List[Dict[str
 
         return mode, summary, line_map
 
-    raise ValueError("draft_obj not recognized: expected insurer_request or line_adjudications")
+    # phase 3: claim_submission (provider) or claim_adjudication (payor)
+    if isinstance(draft_obj.get("claim_submission"), dict):
+        sub = draft_obj["claim_submission"]
+        lines = sub.get("billed_lines") if isinstance(sub.get("billed_lines"), list) else []
+        mode = "claim_submission"
+
+        line_map: Dict[int, Dict[str, Any]] = {}
+        summary: List[Dict[str, Any]] = []
+
+        for ln_obj in lines:
+            if not isinstance(ln_obj, dict):
+                continue
+            ln = ln_obj.get("line_number")
+            if isinstance(ln, str) and ln.isdigit():
+                ln = int(ln)
+            if not isinstance(ln, int):
+                continue
+            line_map[ln] = ln_obj
+            summary.append({
+                "line_number": ln,
+                "procedure_code": ln_obj.get("procedure_code"),
+                "billed_amount": ln_obj.get("billed_amount"),
+                "service_date": ln_obj.get("service_date"),
+            })
+
+        return mode, summary, line_map
+
+    if isinstance(draft_obj.get("claim_adjudication"), dict):
+        adj = draft_obj["claim_adjudication"]
+        lines = adj.get("line_adjudications") if isinstance(adj.get("line_adjudications"), list) else []
+        mode = "claim_adjudication"
+
+        line_map: Dict[int, Dict[str, Any]] = {}
+        summary: List[Dict[str, Any]] = []
+
+        for ln_obj in lines:
+            if not isinstance(ln_obj, dict):
+                continue
+            ln = ln_obj.get("line_number")
+            if isinstance(ln, str) and ln.isdigit():
+                ln = int(ln)
+            if not isinstance(ln, int):
+                continue
+            line_map[ln] = ln_obj
+            summary.append({
+                "line_number": ln,
+                "status": ln_obj.get("payment_status") or ln_obj.get("adjudication_status"),
+                "allowed_amount": ln_obj.get("allowed_amount"),
+                "paid_amount": ln_obj.get("paid_amount"),
+            })
+
+        return mode, summary, line_map
+
+    raise ValueError("draft_obj not recognized: expected insurer_request, line_adjudications, claim_submission, or claim_adjudication")
 
 
 def _invoke_messages(llm: Any, system_text: str, user_text: str) -> str:
@@ -167,7 +220,6 @@ def build_view_packet(
     mode: str,
     role: str,
     oversight_level: str,
-    line_summary: List[Dict[str, Any]],
     line_map: Dict[int, Dict[str, Any]],
     expand_lines: List[int],
     evidence_packet: Optional[Dict[str, Any]],
@@ -177,20 +229,38 @@ def build_view_packet(
     No truncation; budget is enforced by expand_lines length upstream.
     """
     expanded: List[Dict[str, Any]] = []
+    line_to_index: Dict[int, int] = {}
+    sorted_lines = sorted(line_map.keys())
+    for idx, ln in enumerate(sorted_lines):
+        line_to_index[ln] = idx
+
     for ln in expand_lines:
         full = line_map.get(ln)
         if not isinstance(full, dict):
             raise ValueError(f"expand_lines includes unknown line_number: {ln}")
-        expanded.append({"line_number": ln, "full": full})
+        idx = line_to_index.get(ln, -1)
+        expanded.append({"line_number": ln, "array_index": idx, "full": full})
+
+    # determine the correct path prefix for patches based on mode
+    if mode == "provider_submission":
+        path_hint = "/insurer_request/requested_services/<index>/<field>"
+    elif mode == "payor_response":
+        path_hint = "/line_adjudications/<index>/<field>"
+    elif mode == "claim_submission":
+        path_hint = "/claim_submission/billed_lines/<index>/<field>"
+    elif mode == "claim_adjudication":
+        path_hint = "/claim_adjudication/line_adjudications/<index>/<field>"
+    else:
+        path_hint = "/<array>/<index>/<field>"
 
     packet = {
         "role": role,
         "oversight_level": oversight_level,
         "draft_mode": mode,
-        "line_summary_all": line_summary,
-        "expanded_lines": expanded,
+        "lines": expanded,
         "evidence_packet": evidence_packet or {},
-        "instruction": "Return a JSON Patch array (RFC 6902) to correct the draft. If fine, return [].",
+        "patch_path_format": path_hint,
+        "instruction": f"Return JSON Patch array (RFC 6902). Use array_index to build paths like {path_hint}. If fine, return [].",
     }
 
     text = json.dumps(packet, ensure_ascii=False, indent=2)
