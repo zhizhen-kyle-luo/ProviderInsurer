@@ -65,6 +65,30 @@ def create_phase3_provider_user_prompt(
             plines.append(f"- level={lvl} decision={decision} reason={reason}")
         prior_block = "\n" + "\n".join(plines) + "\n"
 
+    # current claim state for turn 2+
+    current_state_block = ""
+    phase3_submissions = getattr(state, "phase3_submissions", []) or []
+    phase3_responses = getattr(state, "phase3_responses", []) or []
+    if phase3_submissions and phase3_responses:
+        last_sub = phase3_submissions[-1]
+        last_resp = phase3_responses[-1]
+        current_state_lines = ["CURRENT CLAIM STATE:"]
+        if isinstance(last_sub, dict) and last_sub.get("claim_submission"):
+            current_state_lines.append(f"Last submission: {json.dumps(last_sub['claim_submission'], ensure_ascii=False)}")
+        if isinstance(last_resp, dict) and last_resp.get("payor_response"):
+            pay_resp = last_resp["payor_response"]
+            current_state_lines.append(f"Last payor response: {json.dumps(pay_resp, ensure_ascii=False)}")
+        # per-line adjudication status
+        adj_summary = []
+        for l in delivered_lines:
+            adj_summary.append({
+                "line_number": l.line_number,
+                "adjudication_status": getattr(l, "adjudication_status", None),
+                "decision_reason": getattr(l, "decision_reason", None),
+            })
+        current_state_lines.append(f"Current line statuses: {json.dumps(adj_summary, ensure_ascii=False)}")
+        current_state_block = "\n" + "\n".join(current_state_lines) + "\n"
+
     return (
         f"PHASE 3 PROVIDER USER PROMPT\n"
         f"Turn: {turn}\n"
@@ -75,7 +99,8 @@ def create_phase3_provider_user_prompt(
         f"- sex: {pv['sex']}\n\n"
         "DELIVERED SERVICE LINES:\n"
         f"{json.dumps(lines_summary, ensure_ascii=False, indent=2)}\n"
-        f"{prior_block}\n"
+        f"{prior_block}"
+        f"{current_state_block}\n"
         "TASK\n"
         "Construct a claim_submission with delivered service lines.\n"
         "Return only valid JSON, no extra keys.\n"

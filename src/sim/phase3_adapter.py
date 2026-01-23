@@ -93,9 +93,14 @@ def _prior_round_summaries(state) -> List[Dict[str, Any]]:
         lvl = int(sub.get("level", resp.get("level", 0)) or 0)
         pay = resp.get("payor_response") if isinstance(resp.get("payor_response"), dict) else {}
         line_adjs = pay.get("line_adjudications") if isinstance(pay, dict) else None
-        payor_decision = ""
-        if isinstance(line_adjs, list) and line_adjs and isinstance(line_adjs[0], dict):
-            payor_decision = str(line_adjs[0].get("adjudication_status") or "")
+        # summarize all line statuses
+        line_status_counts: Dict[str, int] = {}
+        if isinstance(line_adjs, list):
+            for adj in line_adjs:
+                if isinstance(adj, dict):
+                    st = str(adj.get("adjudication_status") or "unknown")
+                    line_status_counts[st] = line_status_counts.get(st, 0) + 1
+        payor_decision = ", ".join(f"{k}:{v}" for k, v in line_status_counts.items()) if line_status_counts else ""
         summaries.append(
             {
                 "level": lvl,
@@ -172,6 +177,8 @@ class Phase3Adapter:
         if not isinstance(claim_submission, dict):
             raise ValueError("provider output missing claim_submission dict")
 
+        prompts = {"system_prompt": sys_txt, "user_prompt": user_txt}
+
         if params.get("oversight_intensity") and self.provider_base is not None:
             ov = str(params["oversight_intensity"])
             pv = _pvd_dict(state)
@@ -189,9 +196,9 @@ class Phase3Adapter:
                     claim_submission = parsed["claim_submission"]
             except Exception:
                 pass
-            submission = {"claim_submission": claim_submission, "raw": draft, "oversight": meta, "level": level}
+            submission = {"claim_submission": claim_submission, "raw": draft, "oversight": meta, "level": level, "prompts": prompts}
         else:
-            submission = {"claim_submission": claim_submission, "raw": draft, "oversight": None, "level": level}
+            submission = {"claim_submission": claim_submission, "raw": draft, "oversight": None, "level": level, "prompts": prompts}
 
         return submission
 
@@ -212,6 +219,8 @@ class Phase3Adapter:
         if not isinstance(parsed.get("line_adjudications"), list):
             raise ValueError("payor output missing line_adjudications list")
 
+        prompts = {"system_prompt": sys_txt, "user_prompt": user_txt}
+
         if params.get("oversight_intensity") and self.payor_base is not None:
             ov = str(params["oversight_intensity"])
             pv = _pvd_dict(state)
@@ -228,9 +237,9 @@ class Phase3Adapter:
                     parsed = parsed2
             except Exception:
                 pass
-            return {"payor_response": parsed, "raw": draft, "oversight": meta, "level": level}
+            return {"payor_response": parsed, "raw": draft, "oversight": meta, "level": level, "prompts": prompts}
 
-        return {"payor_response": parsed, "raw": draft, "oversight": None, "level": level}
+        return {"payor_response": parsed, "raw": draft, "oversight": None, "level": level, "prompts": prompts}
 
     def apply_response(self, state, response: Dict[str, Any]) -> List[Delta]:
         pay = response["payor_response"]

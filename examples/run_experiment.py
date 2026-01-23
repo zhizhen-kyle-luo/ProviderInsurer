@@ -1,15 +1,13 @@
 """
 experiment runner for MASH simulation
 
-experimental design:
-- primary factor: oversight intensity (low, medium, high)
-- measures: friction, denial rates, workload
+experimental design (no AI vs AI arms race):
+- A: both human (no oversight mechanism, copilot only)
+- B: human provider vs AI insurer (insurer has oversight, low intensity)
+- C: AI vs AI low effort (both have oversight, low intensity)
+- D: AI vs AI high provider effort (provider high oversight, insurer low)
 
-conditions:
-A: baseline (both medium)
-B: insurer high, provider medium
-C: both high
-D: both low
+point: C and D show even with AI tools, high human effort needed to match A outcomes.
 
 usage:
   python examples/run_experiment.py --quick
@@ -22,23 +20,28 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
-import os
 from langchain_openai import AzureChatOpenAI
 from dotenv import load_dotenv
 from src.sim.run_full_simulation import run_full_simulation
 from src.utils.audit_logger import AuditLogger
 from src.utils.environment import Environment
 from src.data.case_registry import get_case, list_cases
+from src.data.policies.infliximab_policies import InfliximabCrohnsPolicies
 
-
+# no AI vs AI experiment configs
+# oversight_intensity=None means skip oversight (human baseline)
 CONFIGS = {
-    'A': {'name': 'Baseline', 'provider': 'medium', 'payor': 'medium'},
-    'B': {'name': 'Insurer Scrutiny', 'provider': 'medium', 'payor': 'high'},
-    'C': {'name': 'Arms Race', 'provider': 'high', 'payor': 'high'},
-    'D': {'name': 'AI Dominance', 'provider': 'low', 'payor': 'low'},
+    'A': {'name': 'Both Human', 'provider_oversight': None, 'payor_oversight': None},
+    'B': {'name': 'Human vs AI', 'provider_oversight': None, 'payor_oversight': 'low'},
+    'C': {'name': 'AI vs AI Low', 'provider_oversight': 'low', 'payor_oversight': 'low'},
+    'D': {'name': 'AI vs AI High Provider', 'provider_oversight': 'high', 'payor_oversight': 'low'},
 }
+
+# infliximab case policies
+PROVIDER_POLICY = InfliximabCrohnsPolicies.PROVIDER_GUIDELINES["aga_2021"]
+PAYOR_POLICY = InfliximabCrohnsPolicies.PAYOR_POLICIES["uhc_commercial_2025"] # "uhc_commercial_2025" | "cigna_ip0660_2026"
 
 
 def run_single(case, case_id, condition, llms, output_dir):
@@ -48,10 +51,16 @@ def run_single(case, case_id, condition, llms, output_dir):
     audit_logger = AuditLogger(case_id=case_id, run_id=run_id)
     environment = Environment(synthesis_llm=llms["synthesis"], allow_synthesis=True)
 
-    provider_params = {"oversight_intensity": config["provider"]}
-    payor_params = {"oversight_intensity": config["payor"]}
+    provider_params: Dict[str, Any] = {"policy": PROVIDER_POLICY}
+    payor_params: Dict[str, Any] = {"policy": PAYOR_POLICY}
 
-    print(f"  running: {run_id}")
+    if config["provider_oversight"]:
+        provider_params["oversight_intensity"] = config["provider_oversight"]
+    if config["payor_oversight"]:
+        payor_params["oversight_intensity"] = config["payor_oversight"]
+
+    print(f"  running: {run_id} ({config['name']})")
+    print(f"    provider_oversight={config['provider_oversight']}, payor_oversight={config['payor_oversight']}")
 
     try:
         state = run_full_simulation(
@@ -75,18 +84,19 @@ def run_single(case, case_id, condition, llms, output_dir):
         with open(metrics_file, "w") as f:
             json.dump(metrics, f, indent=2)
 
-        print("  ✓ completed")
+        print("  completed")
         print(f"    phase2_turns={metrics['phase2_turns']} denial_rate={metrics['authorization_denial_rate']:.2%}")
         print(f"    audit: {audit_file}")
 
         return {
             "run_id": run_id,
             "condition": condition,
+            "config_name": config["name"],
             "success": True,
             "metrics": metrics,
         }
     except Exception as e:
-        print(f"  ✗ failed: {str(e)}")
+        print(f"  failed: {str(e)}")
         import traceback
         traceback.print_exc()
         audit_file = output_dir / f"{run_id}_audit_FAILED.json"
@@ -98,8 +108,9 @@ def run_single(case, case_id, condition, llms, output_dir):
 def run_batch(case_ids=None, conditions=None, output_dir="outputs/experiments"):
     load_dotenv()
 
+    # only infliximab case for now
     if case_ids is None:
-        case_ids = list_cases()
+        case_ids = ["infliximab_crohns_2015"]
     if conditions is None:
         conditions = list(CONFIGS.keys())
 
@@ -145,15 +156,13 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--quick", action="store_true")
-    parser.add_argument("--case", type=str)
+    parser.add_argument("--case", type=str, default="infliximab_crohns_2015")
     parser.add_argument("--conditions", nargs="+")
     parser.add_argument("--output", default="outputs/experiments")
 
     args = parser.parse_args()
 
     if args.quick:
-        case_ids = [args.case] if args.case else [list_cases()[0]]
-        run_batch(case_ids=case_ids, conditions=["A"], output_dir="outputs/quick_test")
+        run_batch(case_ids=[args.case], conditions=["A"], output_dir="outputs/quick_test")
     else:
-        case_ids = [args.case] if args.case else None
-        run_batch(case_ids=case_ids, conditions=args.conditions, output_dir=args.output)
+        run_batch(case_ids=[args.case], conditions=args.conditions, output_dir=args.output)

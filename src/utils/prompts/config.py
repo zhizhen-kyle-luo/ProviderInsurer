@@ -21,7 +21,7 @@ VALID_ABANDON_MODES: Set[str] = {"NO_TREAT", "TREAT_ANYWAY"}
 
 # simulation caps: code should raise if violated (no silent defaults)
 MAX_ITERATIONS: int = 3
-MAX_REQUEST_INFO_PER_LEVEL: int = 2
+MAX_REQUEST_INFO_PER_LEVEL: int = 5 #was set to 2 for realism, now 5 to observe behavior
 
 # optional experiment knob; you said you'd comment it out if not used
 NOISE_PROBABILITY: float = 0.0

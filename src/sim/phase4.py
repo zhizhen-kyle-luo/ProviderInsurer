@@ -40,6 +40,7 @@ def _calculate_financial_metrics(state: EncounterState) -> FrictionMetrics:
 
     metrics.total_lines_requested = len([l for l in lines if not l.superseded_by_line])
 
+    lines_claimed = 0
     for line in lines:
         if line.superseded_by_line:
             continue
@@ -50,75 +51,55 @@ def _calculate_financial_metrics(state: EncounterState) -> FrictionMetrics:
             metrics.lines_denied_phase2 += 1
         elif line.authorization_status == "modified":
             metrics.lines_modified_phase2 += 1
-        elif line.authorization_status == "pending_info":
-            metrics.lines_pending_final_phase2 += 1
 
         if line.delivered:
             metrics.lines_delivered += 1
 
         if line.adjudication_status:
-            metrics.lines_claimed += 1
+            lines_claimed += 1
             if line.adjudication_status == "approved":
                 metrics.lines_paid_phase3 += 1
             elif line.adjudication_status == "denied":
                 metrics.lines_denied_phase3 += 1
-            elif line.adjudication_status == "modified":
-                metrics.lines_modified_phase3 += 1
 
         if line.charge_amount:
             metrics.total_billed_amount += float(line.charge_amount)
 
-        if line.approved_quantity and line.authorization_status in {"approved", "modified"}:
-            metrics.total_authorized_amount += float(line.charge_amount or 0.0)
-
-        if line.allowed_amount:
-            metrics.total_allowed_amount += float(line.allowed_amount)
-
         if line.paid_amount:
             metrics.total_paid_amount += float(line.paid_amount)
 
-        if line.adjustment_amount:
-            metrics.total_adjustment_amount += float(line.adjustment_amount)
-
-        metrics.pend_rounds_total += int(line.pend_total)
         metrics.max_appeal_level_reached = max(metrics.max_appeal_level_reached, int(line.current_review_level))
 
     if metrics.total_lines_requested > 0:
         metrics.authorization_denial_rate = metrics.lines_denied_phase2 / metrics.total_lines_requested
 
-    if metrics.lines_claimed > 0:
-        metrics.claim_denial_rate = metrics.lines_denied_phase3 / metrics.lines_claimed
+    if lines_claimed > 0:
+        metrics.claim_denial_rate = metrics.lines_denied_phase3 / lines_claimed
 
     if metrics.total_billed_amount > 0:
         metrics.payment_ratio = metrics.total_paid_amount / metrics.total_billed_amount
 
     phase2_submissions = getattr(state, "phase2_submissions", []) or []
-    phase2_responses = getattr(state, "phase2_responses", []) or []
     metrics.phase2_turns = len(phase2_submissions)
-
-    for resp in phase2_responses:
-        if isinstance(resp, dict):
-            pay = resp.get("payor_response")
-            if isinstance(pay, dict):
-                line_adjs = pay.get("line_adjudications")
-                if isinstance(line_adjs, list):
-                    metrics.insurer_line_decisions_total += len(line_adjs)
-                    for adj in line_adjs:
-                        if isinstance(adj, dict):
-                            st = (adj.get("authorization_status") or "").lower()
-                            if st == "approved":
-                                metrics.insurer_approve += 1
-                            elif st == "denied":
-                                metrics.insurer_deny += 1
-                            elif st == "pending_info":
-                                metrics.insurer_pend += 1
-                            elif st == "modified":
-                                metrics.insurer_modify += 1
 
     phase3_submissions = getattr(state, "phase3_submissions", []) or []
     metrics.phase3_turns = len(phase3_submissions)
 
-    if state.care_abandoned:
-        metrics.provider_abandoned = True
+    # oversight effort from submissions/responses
+    for sub in phase2_submissions + phase3_submissions:
+        if isinstance(sub, dict) and sub.get("oversight"):
+            ov = sub["oversight"]
+            if ov.get("role") == "provider":
+                metrics.provider_review_tokens += int(ov.get("review", {}).get("view", {}).get("view_packet_tokens_proxy", 0))
+                metrics.provider_edit_ops += len(ov.get("edit", {}).get("patch_ops", []) or [])
+
+    phase2_responses = getattr(state, "phase2_responses", []) or []
+    phase3_responses = getattr(state, "phase3_responses", []) or []
+    for resp in phase2_responses + phase3_responses:
+        if isinstance(resp, dict) and resp.get("oversight"):
+            ov = resp["oversight"]
+            if ov.get("role") == "payor":
+                metrics.insurer_review_tokens += int(ov.get("review", {}).get("view", {}).get("view_packet_tokens_proxy", 0))
+                metrics.insurer_edit_ops += len(ov.get("edit", {}).get("patch_ops", []) or [])
 
     return metrics

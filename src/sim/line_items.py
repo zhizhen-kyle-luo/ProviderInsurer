@@ -48,7 +48,7 @@ def ensure_phase2_service_lines(state, insurer_request: Dict[str, Any]) -> None:
         if not isinstance(svc, dict):
             raise ValueError("requested_services entries must be dict")
 
-        for k in ("line_number", "request_type", "procedure_code", "code_type", "service_name"):
+        for k in ("line_number", "request_type", "procedure_code", "code_type", "service_name", "requested_quantity", "quantity_unit"):
             if k not in svc:
                 raise ValueError(f"requested_services missing {k}: {svc}")
 
@@ -75,9 +75,9 @@ def ensure_phase2_service_lines(state, insurer_request: Dict[str, Any]) -> None:
             procedure_code=code,
             code_type=ct,
             service_description=name,
-            requested_quantity=1,
-            quantity_unit=None,
-            charge_amount=None,
+            requested_quantity=int(svc["requested_quantity"]),
+            quantity_unit=str(svc["quantity_unit"]),
+            charge_amount=float(svc["charge_amount"]) if svc.get("charge_amount") else None,
             diagnosis_codes=icd10_codes or None,
             clinical_rationale=rationale or None,
             request_type=rt,

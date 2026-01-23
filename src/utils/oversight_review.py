@@ -211,6 +211,7 @@ def choose_expand_lines_via_llm(
         "requested_k": k,
         "picked_lines": picked,
         "raw_selector_output": raw[:2000],
+        "prompts": {"system_prompt": sys_txt, "user_prompt": user_txt},
     }
     return picked, meta
 

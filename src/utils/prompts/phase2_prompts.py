@@ -20,13 +20,45 @@ def _normalize_patient_visible_data(pv: object) -> Dict[str, Any]:
             raise ValueError(f"patient_visible_data missing required field: {key}")
     return pv
 
+
+def _render_policy_data(data: Dict[str, Any], indent: int = 0) -> str:
+    """render policy data dict as readable text"""
+    lines = []
+    prefix = "  " * indent
+    for k, v in data.items():
+        if isinstance(v, dict):
+            lines.append(f"{prefix}{k}:")
+            lines.append(_render_policy_data(v, indent + 1))
+        elif isinstance(v, list):
+            lines.append(f"{prefix}{k}:")
+            for item in v:
+                if isinstance(item, dict):
+                    lines.append(_render_policy_data(item, indent + 1))
+                else:
+                    lines.append(f"{prefix}  - {item}")
+        else:
+            lines.append(f"{prefix}{k}: {v}")
+    return "\n".join(lines)
+
+
 def create_phase2_provider_system_prompt(provider_params: Optional[Dict[str, Any]] = None) -> str:
-    _ = provider_params or {}
+    params = provider_params or {}
+    policy_block = ""
+    if params.get("policy"):
+        policy = params["policy"]
+        policy_block = (
+            "\nCLINICAL GUIDELINES:\n"
+            f"Source: {policy.get('issuer', 'Unknown')}\n"
+        )
+        data = policy.get("content", {}).get("data", {})
+        if data:
+            policy_block += _render_policy_data(data) + "\n"
     return (
         "PHASE 2 PROVIDER SYSTEM PROMPT\n"
         "You are preparing an insurer authorization request.\n"
         "Respond only with valid JSON that matches the schema described.\n"
         "Be precise and concise.\n"
+        f"{policy_block}"
         f"{WORKFLOW_ACTION_DEFINITIONS}"
     )
 
@@ -132,13 +164,25 @@ def create_phase2_provider_user_prompt(
         "Use tokens in workflow definitions exactly as defined."
     )
 
+
 def create_phase2_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = None) -> str:
-    _ = payor_params or {}
+    params = payor_params or {}
+    policy_block = ""
+    if params.get("policy"):
+        policy = params["policy"]
+        policy_block = (
+            "\nCOVERAGE POLICY:\n"
+            f"Source: {policy.get('issuer', 'Unknown')}\n"
+        )
+        data = policy.get("content", {}).get("data", {})
+        if data:
+            policy_block += _render_policy_data(data) + "\n"
     return (
         "PHASE 2 PAYOR SYSTEM PROMPT\n"
         "You are adjudicating an insurer_request.\n"
         "Return only valid JSON that matches the schema described.\n"
         "Be concise and criteria-driven.\n"
+        f"{policy_block}"
         f"{WORKFLOW_ACTION_DEFINITIONS}"
     )
 

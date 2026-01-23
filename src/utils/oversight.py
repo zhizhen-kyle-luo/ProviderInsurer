@@ -102,6 +102,7 @@ def apply_oversight_edit(
         "oversight_level": oversight_level,
         "review": {"selector": selector_meta, "view": view_meta},
         "edit": {},
+        "prompts": {"system_prompt": sys_txt, "user_prompt": user_txt},
     }
 
     try:
