@@ -16,6 +16,7 @@ export interface OversightMeta {
       requested_k: number;
       picked_lines: number[];
       raw_selector_output: string;
+      prompts?: { system_prompt?: string; user_prompt?: string };
     };
     view: {
       draft_mode: string;
@@ -37,6 +38,7 @@ export interface OversightMeta {
     raw_patch_text?: string;
     error?: string;
   };
+  prompts?: { system_prompt?: string; user_prompt?: string };
 }
 
 export interface AuditLog {

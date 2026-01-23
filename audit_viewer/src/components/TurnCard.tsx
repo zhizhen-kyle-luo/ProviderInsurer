@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, FileText, MessageSquare, Bot, Leaf } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileText, MessageSquare, Leaf, Cpu, Eye, Edit3, Zap } from 'lucide-react';
 import { GroupedTurn, OversightMeta } from '../types/audit';
 import { getStatusColor } from '../utils/dataLoader';
 
@@ -9,62 +9,61 @@ interface TurnCardProps {
   readonly onToggle: () => void;
 }
 
-function JsonBlock({ data, title }: { readonly data: unknown; readonly title: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="border border-slate-200 rounded mt-2">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full px-3 py-2 text-left text-sm font-medium bg-slate-50 hover:bg-slate-100 flex items-center gap-2"
-      >
-        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-        {title}
-      </button>
-      {open && (
-        <pre className="p-3 text-xs overflow-auto max-h-96 bg-white">
-          {JSON.stringify(data, null, 2)}
-        </pre>
-      )}
-    </div>
-  );
+interface LLMCallProps {
+  readonly label: string;
+  readonly icon: React.ReactNode;
+  readonly color: string;
+  readonly systemPrompt?: string;
+  readonly userPrompt?: string;
+  readonly output?: string;
+  readonly defaultOpen?: boolean;
 }
 
-function OversightPanel({ oversight }: { readonly oversight: OversightMeta }) {
-  const [open, setOpen] = useState(false);
-  const patchCount = oversight.edit?.patch_ops?.length || 0;
+function LLMCallBlock({ label, icon, color, systemPrompt, userPrompt, output, defaultOpen = false }: LLMCallProps) {
+  const [open, setOpen] = useState(defaultOpen);
+  if (!systemPrompt && !userPrompt && !output) return null;
+
   return (
-    <div className="mt-2 border border-purple-200 rounded bg-purple-50">
+    <div className={`border-l-4 ${color} pl-3 py-2`}>
       <button
         onClick={() => setOpen(!open)}
-        className="w-full px-3 py-2 text-left text-sm flex items-center gap-2 hover:bg-purple-100"
+        className="flex items-center gap-2 text-sm font-semibold hover:opacity-80 w-full text-left"
       >
-        <Bot className="w-4 h-4 text-purple-600" />
-        <span className="font-medium text-purple-800">
-          Copilot ({oversight.oversight_level}) - {patchCount} edits
-        </span>
-        {open ? <ChevronDown className="w-4 h-4 ml-auto" /> : <ChevronRight className="w-4 h-4 ml-auto" />}
+        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        {icon}
+        <span>{label}</span>
       </button>
       {open && (
-        <div className="px-3 pb-3 text-xs space-y-2">
-          <div className="flex gap-4 text-slate-600">
-            <span>Lines expanded: {oversight.review?.view?.expanded_line_numbers?.join(', ') || 'none'}</span>
-            <span>Tokens: ~{oversight.review?.view?.view_packet_tokens_proxy}</span>
-          </div>
-          {patchCount > 0 && (
-            <div>
-              <div className="font-medium text-purple-700 mb-1">Patches applied:</div>
-              {oversight.edit.patch_ops!.map((p, i) => (
-                <div key={i} className="bg-white rounded px-2 py-1 mb-1 font-mono text-xs">
-                  <span className="text-purple-600">{p.op}</span> {p.path}
-                  {p.value !== undefined && (
-                    <span className="text-slate-500"> = {JSON.stringify(p.value).slice(0, 80)}</span>
-                  )}
-                </div>
-              ))}
-            </div>
+        <div className="mt-2 space-y-2 text-xs">
+          {systemPrompt && (
+            <details className="bg-slate-50 rounded border">
+              <summary className="px-2 py-1 cursor-pointer font-medium text-slate-600 hover:bg-slate-100">
+                System Prompt ({systemPrompt.length} chars)
+              </summary>
+              <pre className="px-2 py-1 whitespace-pre-wrap max-h-48 overflow-auto bg-white border-t text-slate-700">
+                {systemPrompt}
+              </pre>
+            </details>
           )}
-          {oversight.edit?.error && (
-            <div className="text-red-600">Error: {oversight.edit.error}</div>
+          {userPrompt && (
+            <details className="bg-slate-50 rounded border">
+              <summary className="px-2 py-1 cursor-pointer font-medium text-slate-600 hover:bg-slate-100">
+                User Prompt ({userPrompt.length} chars)
+              </summary>
+              <pre className="px-2 py-1 whitespace-pre-wrap max-h-64 overflow-auto bg-white border-t text-slate-700">
+                {userPrompt}
+              </pre>
+            </details>
+          )}
+          {output && (
+            <details open className="bg-green-50 rounded border border-green-200">
+              <summary className="px-2 py-1 cursor-pointer font-medium text-green-700 hover:bg-green-100">
+                Output ({output.length} chars)
+              </summary>
+              <pre className="px-2 py-1 whitespace-pre-wrap max-h-64 overflow-auto bg-white border-t text-slate-700">
+                {output}
+              </pre>
+            </details>
           )}
         </div>
       )}
@@ -74,7 +73,7 @@ function OversightPanel({ oversight }: { readonly oversight: OversightMeta }) {
 
 function LineStatusBadges({ lines }: { readonly lines: Array<{ line_number: number; status: string }> }) {
   return (
-    <div className="flex flex-wrap gap-1 mt-1">
+    <div className="flex flex-wrap gap-1">
       {lines.map((l) => (
         <span key={l.line_number} className={`px-2 py-0.5 rounded text-xs font-medium ${getStatusColor(l.status)}`}>
           L{l.line_number}: {l.status}
@@ -84,16 +83,60 @@ function LineStatusBadges({ lines }: { readonly lines: Array<{ line_number: numb
   );
 }
 
+function OversightCallsBlock({ oversight, actorLabel }: { readonly oversight: OversightMeta; readonly actorLabel: string }) {
+  const selectorPrompts = oversight.review?.selector?.prompts;
+  const editorPrompts = oversight.prompts;
+  const patchCount = oversight.edit?.patch_ops?.length || 0;
+
+  return (
+    <div className="space-y-1">
+      {oversight.review?.selector?.selector_used && (
+        <LLMCallBlock
+          label={`${actorLabel} Selector (picked: ${oversight.review.selector.picked_lines?.join(', ') || 'none'})`}
+          icon={<Eye className="w-4 h-4 text-indigo-600" />}
+          color="border-indigo-400"
+          systemPrompt={selectorPrompts?.system_prompt}
+          userPrompt={selectorPrompts?.user_prompt}
+          output={oversight.review.selector.raw_selector_output}
+        />
+      )}
+      <LLMCallBlock
+        label={`${actorLabel} Editor (${patchCount} patches)`}
+        icon={<Edit3 className="w-4 h-4 text-purple-600" />}
+        color="border-purple-400"
+        systemPrompt={editorPrompts?.system_prompt}
+        userPrompt={editorPrompts?.user_prompt}
+        output={oversight.edit?.raw_patch_text || '[]'}
+      />
+      {patchCount > 0 && (
+        <div className="ml-4 mt-1 space-y-1">
+          {oversight.edit.patch_ops!.map((p, i) => (
+            <div key={i} className="bg-purple-50 rounded px-2 py-1 text-xs font-mono border border-purple-200">
+              <span className="text-purple-700 font-semibold">{p.op}</span>{' '}
+              <span className="text-slate-600">{p.path}</span>
+              {p.value !== undefined && (
+                <span className="text-slate-500"> = {JSON.stringify(p.value).slice(0, 100)}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TurnCard({ turn, expanded, onToggle }: TurnCardProps) {
   const sub = turn.submission?.payload?.submission;
   const resp = turn.response?.payload?.response;
   const subOversight = sub?.oversight as OversightMeta | undefined;
   const respOversight = resp?.oversight as OversightMeta | undefined;
+
   const getSubmissionLines = () => {
     if (sub?.insurer_request?.requested_services) return sub.insurer_request.requested_services;
     if (sub?.claim_submission?.billed_lines) return sub.claim_submission.billed_lines;
     return [];
   };
+
   const getResponseStatuses = () => {
     const adjs = resp?.payor_response?.line_adjudications || [];
     return adjs.map((a: Record<string, unknown>) => ({
@@ -101,78 +144,148 @@ export function TurnCard({ turn, expanded, onToggle }: TurnCardProps) {
       status: (a.authorization_status || a.adjudication_status || 'unknown') as string,
     }));
   };
+
   const submissionLines = getSubmissionLines();
   const responseStatuses = getResponseStatuses();
   const providerAction = turn.providerAction?.payload?.provider_action;
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 shadow-sm">
+    <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+      {/* header */}
       <button
         onClick={onToggle}
-        className="w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-50 text-left"
+        className="w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-50 text-left bg-gradient-to-r from-slate-50 to-white"
       >
-        {expanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
-        <span className="font-bold text-lg">Turn {turn.turn}</span>
-        <span className="text-sm text-slate-500">
-          {submissionLines.length} lines submitted
+        {expanded ? <ChevronDown className="w-5 h-5 text-slate-400" /> : <ChevronRight className="w-5 h-5 text-slate-400" />}
+        <span className="font-bold text-lg text-slate-800">Turn {turn.turn}</span>
+        <span className="text-sm text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+          {submissionLines.length} lines
         </span>
-        <div className="ml-auto flex gap-1">
-          {responseStatuses.map((s: { line_number: number; status: string }) => (
-            <span key={s.line_number} className={`px-1.5 py-0.5 rounded text-xs ${getStatusColor(s.status)}`}>
-              {s.status.slice(0, 3).toUpperCase()}
-            </span>
-          ))}
+        <div className="ml-auto">
+          <LineStatusBadges lines={responseStatuses} />
         </div>
       </button>
+
       {expanded && (
-        <div className="px-4 pb-4 space-y-4">
+        <div className="px-4 pb-4 space-y-4 border-t border-slate-100">
+          {/* step 1: provider copilot (or agent if no oversight) */}
           {turn.submission && (
-            <div className="border-l-4 border-blue-400 pl-3">
-              <div className="flex items-center gap-2 text-blue-700 font-semibold">
-                <FileText className="w-4 h-4" />
-                Provider Submission
+            <div className="pt-3">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-700">1</div>
+                <FileText className="w-4 h-4 text-blue-600" />
+                <span className="font-semibold text-blue-800">{subOversight ? 'Provider Copilot' : 'Provider Agent'}</span>
               </div>
-              {subOversight && <OversightPanel oversight={subOversight} />}
-              <JsonBlock data={sub?.insurer_request || sub?.claim_submission} title="Final Submission JSON" />
-              <JsonBlock data={sub?.raw} title="Raw LLM Output" />
+              <LLMCallBlock
+                label="Draft Submission"
+                icon={<Cpu className="w-4 h-4 text-blue-600" />}
+                color="border-blue-400"
+                systemPrompt={sub?.prompts?.system_prompt}
+                userPrompt={sub?.prompts?.user_prompt}
+                output={sub?.raw}
+                defaultOpen={false}
+              />
             </div>
           )}
+
+          {/* step 2: provider oversight (if present) */}
+          {subOversight && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-bold text-indigo-700">2</div>
+                <Eye className="w-4 h-4 text-indigo-600" />
+                <span className="font-semibold text-indigo-800">Provider Oversight ({subOversight.oversight_level})</span>
+              </div>
+              <OversightCallsBlock oversight={subOversight} actorLabel="Provider" />
+            </div>
+          )}
+
+          {/* step 3: payor copilot (or agent if no oversight) */}
           {turn.response && (
-            <div className="border-l-4 border-amber-400 pl-3">
-              <div className="flex items-center gap-2 text-amber-700 font-semibold">
-                <MessageSquare className="w-4 h-4" />
-                Payor Response
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-6 h-6 rounded-full bg-amber-100 flex items-center justify-center text-xs font-bold text-amber-700">{subOversight ? 3 : 2}</div>
+                <MessageSquare className="w-4 h-4 text-amber-600" />
+                <span className="font-semibold text-amber-800">{respOversight ? 'Payor Copilot' : 'Payor Agent'}</span>
               </div>
-              <LineStatusBadges lines={responseStatuses} />
-              {respOversight && <OversightPanel oversight={respOversight} />}
-              <JsonBlock data={resp?.payor_response} title="Final Response JSON" />
-              <JsonBlock data={resp?.raw} title="Raw LLM Output" />
+              <LLMCallBlock
+                label="Draft Response"
+                icon={<Cpu className="w-4 h-4 text-amber-600" />}
+                color="border-amber-400"
+                systemPrompt={resp?.prompts?.system_prompt}
+                userPrompt={resp?.prompts?.user_prompt}
+                output={resp?.raw}
+                defaultOpen={false}
+              />
             </div>
           )}
+
+          {/* step 4: payor oversight (if present) */}
+          {respOversight && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-6 h-6 rounded-full bg-purple-100 flex items-center justify-center text-xs font-bold text-purple-700">{subOversight ? 4 : 3}</div>
+                <Eye className="w-4 h-4 text-purple-600" />
+                <span className="font-semibold text-purple-800">Payor Oversight ({respOversight.oversight_level})</span>
+              </div>
+              <OversightCallsBlock oversight={respOversight} actorLabel="Payor" />
+            </div>
+          )}
+
+          {/* step 5: environment updates */}
           {turn.envUpdates.length > 0 && (
-            <div className="border-l-4 border-green-400 pl-3">
-              <div className="flex items-center gap-2 text-green-700 font-semibold">
-                <Leaf className="w-4 h-4" />
-                Environment Updates ({turn.envUpdates.length})
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center text-xs font-bold text-green-700">
+                  {(subOversight ? 2 : 1) + (respOversight ? 2 : 1) + 1}
+                </div>
+                <Leaf className="w-4 h-4 text-green-600" />
+                <span className="font-semibold text-green-800">Environment ({turn.envUpdates.length} updates)</span>
               </div>
-              {turn.envUpdates.map((e, i) => (
-                <JsonBlock key={i} data={e.payload} title={`${e.kind} (line ${e.payload?.line_number || '?'})`} />
-              ))}
+              <div className="space-y-1 ml-8">
+                {turn.envUpdates.map((e, i) => (
+                  <details key={i} className="bg-green-50 rounded border border-green-200">
+                    <summary className="px-2 py-1 cursor-pointer text-xs font-medium text-green-700 hover:bg-green-100">
+                      {e.kind} {e.payload?.line_number ? `(line ${e.payload.line_number})` : ''}
+                    </summary>
+                    <pre className="px-2 py-1 text-xs whitespace-pre-wrap max-h-32 overflow-auto bg-white border-t">
+                      {JSON.stringify(e.payload, null, 2)}
+                    </pre>
+                  </details>
+                ))}
+              </div>
             </div>
           )}
+
+          {/* provider action summary */}
           {providerAction && (
-            <div className="border-l-4 border-slate-400 pl-3">
-              <div className="text-slate-700 font-semibold">Provider Action</div>
-              <div className="text-sm mt-1">
-                <span className="font-medium">{providerAction.action}</span>
-                {providerAction.lines?.length > 0 && (
-                  <span className="text-slate-500 ml-2">
-                    ({providerAction.lines.length} lines: {providerAction.lines.map((l: Record<string, unknown>) => l.intent || `→L${l.to_level}`).join(', ')})
-                  </span>
-                )}
+            <div className="bg-slate-50 rounded-lg p-3 border">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-slate-600" />
+                <span className="font-semibold text-slate-700">Provider Action:</span>
+                <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                  providerAction.action === 'CONTINUE' ? 'bg-green-100 text-green-800' :
+                  providerAction.action === 'APPEAL' ? 'bg-amber-100 text-amber-800' :
+                  'bg-red-100 text-red-800'
+                }`}>
+                  {providerAction.action}
+                </span>
               </div>
+              {providerAction.lines?.length > 0 && (
+                <div className="mt-1 text-xs text-slate-600">
+                  Lines: {providerAction.lines.map((l: Record<string, unknown>) =>
+                    `L${l.line_number}${l.intent ? ` (${l.intent})` : l.to_level ? ` → level ${l.to_level}` : ''}`
+                  ).join(', ')}
+                </div>
+              )}
             </div>
           )}
+
+          {/* final results summary */}
+          <div className="bg-gradient-to-r from-slate-50 to-slate-100 rounded-lg p-3 border">
+            <div className="text-xs font-semibold text-slate-600 mb-2">Final Line Statuses:</div>
+            <LineStatusBadges lines={responseStatuses} />
+          </div>
         </div>
       )}
     </div>

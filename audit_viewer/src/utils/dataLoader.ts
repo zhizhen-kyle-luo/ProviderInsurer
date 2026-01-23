@@ -61,3 +61,4 @@ export function getStatusColor(status: string): string {
   if (s === 'modified') return 'bg-purple-100 text-purple-800';
   return 'bg-slate-100 text-slate-800';
 }
+
