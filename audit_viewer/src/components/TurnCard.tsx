@@ -243,16 +243,32 @@ export function TurnCard({ turn, expanded, onToggle }: TurnCardProps) {
                 <span className="font-semibold text-green-800">Environment ({turn.envUpdates.length} updates)</span>
               </div>
               <div className="space-y-1 ml-8">
-                {turn.envUpdates.map((e, i) => (
-                  <details key={i} className="bg-green-50 rounded border border-green-200">
-                    <summary className="px-2 py-1 cursor-pointer text-xs font-medium text-green-700 hover:bg-green-100">
-                      {e.kind} {e.payload?.line_number ? `(line ${e.payload.line_number})` : ''}
-                    </summary>
-                    <pre className="px-2 py-1 text-xs whitespace-pre-wrap max-h-32 overflow-auto bg-white border-t">
-                      {JSON.stringify(e.payload, null, 2)}
-                    </pre>
-                  </details>
-                ))}
+                {turn.envUpdates.map((e, i) => {
+                  const isSynthesized = e.payload?.fabricated === true || e.payload?.source === 'llm_synthesized';
+                  const isGroundTruth = e.payload?.fabricated === false || e.payload?.source === 'ground_truth';
+                  return (
+                    <details key={i} className="bg-green-50 rounded border border-green-200">
+                      <summary className="px-2 py-1 cursor-pointer text-xs font-medium text-green-700 hover:bg-green-100 flex items-center gap-2">
+                        <span>
+                          {e.kind} {e.payload?.line_number ? `(line ${e.payload.line_number})` : ''}
+                        </span>
+                        {isSynthesized && (
+                          <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-semibold">
+                            LLM Synthesized
+                          </span>
+                        )}
+                        {isGroundTruth && (
+                          <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-semibold">
+                            Ground Truth
+                          </span>
+                        )}
+                      </summary>
+                      <pre className="px-2 py-1 text-xs whitespace-pre-wrap max-h-32 overflow-auto bg-white border-t">
+                        {JSON.stringify(e.payload, null, 2)}
+                      </pre>
+                    </details>
+                  );
+                })}
               </div>
             </div>
           )}

@@ -110,7 +110,6 @@ def create_phase3_provider_user_prompt(
         "      {\n"
         '        "line_number": <number>,\n'
         '        "procedure_code": "<code>",\n'
-        '        "charge_amount": <float>,\n'
         '        "authorization_number": "<auth_num>",\n'
         '        "clinical_documentation": "<text>"\n'
         "      }\n"
@@ -172,10 +171,6 @@ def create_phase3_payor_user_prompt(
         '      "line_number": <number>,\n'
         '      "adjudication_status": "<approved|modified|denied|pending_info>",\n'
         '      "decision_reason": "<text>",\n'
-        '      "allowed_amount": <float>,\n'
-        '      "paid_amount": <float>,\n'
-        '      "adjustment_group_code": "<CO|PR|OA>",\n'
-        '      "adjustment_amount": <float>,\n'
         '      "requested_documents": ["<docs>"]\n'
         "    }\n"
         "  ],\n"

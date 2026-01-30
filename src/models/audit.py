@@ -30,3 +30,10 @@ class AuditLog(BaseModel):
     events: List[AuditEvent] = Field(default_factory=list)
     agent_configs: Dict[str, Any] = Field(default_factory=dict)
     summary: Dict[str, Any] = Field(default_factory=dict)
+
+    # policy information
+    provider_policy: Optional[Dict[str, Any]] = None
+    payor_policy: Optional[Dict[str, Any]] = None
+
+    # environment configuration
+    environment_config: Optional[Dict[str, Any]] = None

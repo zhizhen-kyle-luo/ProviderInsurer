@@ -57,7 +57,7 @@ def create_phase2_provider_system_prompt(provider_params: Optional[Dict[str, Any
         "PHASE 2 PROVIDER SYSTEM PROMPT\n"
         "You are preparing an insurer authorization request.\n"
         "Respond only with valid JSON that matches the schema described.\n"
-        "Be precise and concise.\n"
+        "Be precise. For clinical_evidence: include patient demographics, symptoms, objective findings (labs/imaging), guideline citations, and step-therapy rationale. Do not abbreviate clinical justification.\n"
         f"{policy_block}"
         f"{WORKFLOW_ACTION_DEFINITIONS}"
     )
@@ -121,9 +121,10 @@ def create_phase2_provider_user_prompt(
     else:
         task_instruction = (
             "TASK\n"
-            "Resubmit the insurer_request with ALL existing lines (keep same line_numbers).\n"
-            "For pending_info lines: add clinical_evidence addressing the requested_documents.\n"
-            "Do NOT drop lines; include approved lines unchanged and pending lines with updated evidence.\n"
+            "Resubmit the insurer_request with lines that require action.\n"
+            "- For pending_info lines: include with clinical_evidence addressing requested_documents\n"
+            "- For denied lines: include only if appealing with new evidence\n"
+            "- Do NOT include approved lines (already authorized, no resubmission needed)\n"
         )
 
     return (

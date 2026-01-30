@@ -41,14 +41,39 @@ CONFIGS = {
 
 # infliximab case policies
 PROVIDER_POLICY = InfliximabCrohnsPolicies.PROVIDER_GUIDELINES["aga_2021"]
-PAYOR_POLICY = InfliximabCrohnsPolicies.PAYOR_POLICIES["uhc_commercial_2025"] # "uhc_commercial_2025" | "cigna_ip0660_2026"
+PAYOR_POLICY = InfliximabCrohnsPolicies.PAYOR_POLICIES["cigna_ip0660_2026"] # "uhc_commercial_2025" | "cigna_ip0660_2026"
 
 
 def run_single(case, case_id, condition, llms, output_dir):
     run_id = f"{case_id}_{condition}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     config = CONFIGS[condition]
-    audit_logger = AuditLogger(case_id=case_id, run_id=run_id)
+
+    # prepare policy metadata
+    provider_policy_meta = {
+        "policy_id": PROVIDER_POLICY.get("policy_id"),
+        "issuer": PROVIDER_POLICY.get("issuer"),
+        "source": PROVIDER_POLICY.get("source"),
+    }
+    payor_policy_meta = {
+        "policy_id": PAYOR_POLICY.get("policy_id"),
+        "issuer": PAYOR_POLICY.get("issuer"),
+        "source": PAYOR_POLICY.get("source"),
+    }
+
+    # prepare environment config metadata
+    environment_config = {
+        "allow_synthesis": True,
+        "synthesis_model": "gpt-4o" if llms.get("synthesis") else None,
+    }
+
+    audit_logger = AuditLogger(
+        case_id=case_id,
+        run_id=run_id,
+        provider_policy=provider_policy_meta,
+        payor_policy=payor_policy_meta,
+        environment_config=environment_config,
+    )
     environment = Environment(synthesis_llm=llms["synthesis"], allow_synthesis=True)
 
     provider_params: Dict[str, Any] = {"policy": PROVIDER_POLICY}
@@ -77,15 +102,26 @@ def run_single(case, case_id, condition, llms, output_dir):
 
         metrics = state.friction_metrics.model_dump()
 
+        # add policy and environment info to metrics
+        metrics_with_context = {
+            **metrics,
+            "provider_policy": provider_policy_meta,
+            "payor_policy": payor_policy_meta,
+            "environment_config": environment_config,
+        }
+
         audit_file = output_dir / f"{run_id}_audit.json"
         audit_logger.save_json(str(audit_file))
 
         metrics_file = output_dir / f"{run_id}_metrics.json"
         with open(metrics_file, "w") as f:
-            json.dump(metrics, f, indent=2)
+            json.dump(metrics_with_context, f, indent=2)
 
         print("  completed")
-        print(f"    phase2_turns={metrics['phase2_turns']} denial_rate={metrics['authorization_denial_rate']:.2%}")
+        print(f"    phase2_turns={metrics['phase2_turns']} lines={metrics['total_lines_requested']} "
+              f"approved={metrics['lines_approved_phase2']} denied={metrics['lines_denied_phase2']}")
+        print(f"    provider_tokens={metrics['provider_review_tokens']} provider_edits={metrics['provider_edit_ops']} "
+              f"insurer_tokens={metrics['insurer_review_tokens']} insurer_edits={metrics['insurer_edit_ops']}")
         print(f"    audit: {audit_file}")
 
         return {
@@ -94,6 +130,9 @@ def run_single(case, case_id, condition, llms, output_dir):
             "config_name": config["name"],
             "success": True,
             "metrics": metrics,
+            "provider_policy": provider_policy_meta,
+            "payor_policy": payor_policy_meta,
+            "environment_config": environment_config,
         }
     except Exception as e:
         print(f"  failed: {str(e)}")

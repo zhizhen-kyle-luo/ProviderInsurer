@@ -33,7 +33,7 @@ def _system_prompt(role: str, oversight_level: str) -> str:
         f"{constraints}\n"
         "Return ONLY a JSON Patch array (RFC 6902). Example: [{\"op\":\"replace\",\"path\":\"/x\",\"value\":1}]\n"
         'Allowed ops: "add", "remove", "replace".\n'
-        "Be concise. Keep string values short. No extra text.\n"
+        "Keep JSON structure minimal. EXCEPTION: clinical_evidence and clinical_rationale fields must remain detailed.\n"
     )
 
 
@@ -44,7 +44,8 @@ def _user_prompt(view_packet_json: str, max_patch_ops: int, max_paths_touched: i
         "TASK:\n"
         f"- Return JSON Patch array. Budgets: max_patch_ops={max_patch_ops}, max_paths_touched={max_paths_touched}\n"
         "- If no changes needed, return []\n"
-        "- Keep values concise (max 100 chars per string value)\n"
+        "- PRESERVE all clinical documentation fields (clinical_rationale, diagnosis, treatment_history). Do NOT truncate.\n"
+        "- Do NOT add clinical information not present in the evidence packet.\n"
     )
 
 

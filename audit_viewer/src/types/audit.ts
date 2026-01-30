@@ -41,6 +41,17 @@ export interface OversightMeta {
   prompts?: { system_prompt?: string; user_prompt?: string };
 }
 
+export interface PolicyMeta {
+  policy_id?: string;
+  issuer?: string;
+  source?: string;
+}
+
+export interface EnvironmentConfig {
+  allow_synthesis?: boolean;
+  synthesis_model?: string | null;
+}
+
 export interface AuditLog {
   case_id: string;
   run_id: string;
@@ -49,6 +60,9 @@ export interface AuditLog {
   events: AuditEvent[];
   agent_configs: Record<string, any>;
   summary: Record<string, any>;
+  provider_policy?: PolicyMeta | null;
+  payor_policy?: PolicyMeta | null;
+  environment_config?: EnvironmentConfig | null;
 }
 
 export interface GroupedTurn {
