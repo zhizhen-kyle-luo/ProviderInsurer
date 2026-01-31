@@ -3,7 +3,7 @@ import json
 from typing import Any, Dict, List, Optional
 from .workflow_prompts import WORKFLOW_ACTION_DEFINITIONS
 from .prompt_renderers import render_line_summary
-from .config import OVERSIGHT_GUIDANCE
+from .config import PROVIDER_STRATEGY_GUIDANCE, PAYOR_STRATEGY_GUIDANCE
 
 def _normalize_patient_visible_data(pv: object) -> Dict[str, Any]:
     if hasattr(pv, "model_dump"):
@@ -55,17 +55,16 @@ def create_phase2_provider_system_prompt(provider_params: Optional[Dict[str, Any
         if data:
             policy_block += _render_policy_data(data) + "\n"
 
-    oversight_block = ""
-    if params.get("oversight_intensity"):
-        level = params["oversight_intensity"]
-        guidance = OVERSIGHT_GUIDANCE.get(level, {}).get("instruction", "")
-        oversight_block = f"\nOVERSIGHT LEVEL: {level} ({guidance})\n"
+    strategy_block = ""
+    strategy = params.get("strategy")
+    if strategy and strategy in PROVIDER_STRATEGY_GUIDANCE:
+        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PROVIDER_STRATEGY_GUIDANCE[strategy]}\n"
 
     return (
         "PHASE 2 PROVIDER SYSTEM PROMPT\n"
         "You are a hospital provider team preparing an authorization request for the insurer.\n"
         "Your goal: get medically necessary services approved by documenting clinical justification.\n"
-        f"{oversight_block}"
+        f"{strategy_block}"
         "Respond only with valid JSON matching the schema.\n"
         "For clinical_evidence: include patient demographics, symptoms, objective findings "
         "(labs/imaging), guideline citations, and step-therapy rationale.\n"
@@ -189,11 +188,18 @@ def create_phase2_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = N
         data = policy.get("content", {}).get("data", {})
         if data:
             policy_block += _render_policy_data(data) + "\n"
+
+    strategy_block = ""
+    strategy = params.get("strategy")
+    if strategy and strategy in PAYOR_STRATEGY_GUIDANCE:
+        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PAYOR_STRATEGY_GUIDANCE[strategy]}\n"
+
     return (
         "PHASE 2 PAYOR SYSTEM PROMPT\n"
         "You are adjudicating an insurer_request.\n"
         "Return only valid JSON that matches the schema described.\n"
         "Be concise and criteria-driven.\n"
+        f"{strategy_block}"
         f"{policy_block}"
         f"{WORKFLOW_ACTION_DEFINITIONS}"
     )
