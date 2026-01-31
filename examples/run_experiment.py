@@ -1,17 +1,20 @@
 """
 experiment runner for MASH simulation
 
-experimental design (no AI vs AI arms race):
-- A: both human (no oversight mechanism, copilot only)
-- B: human provider vs AI insurer (insurer has oversight, low intensity)
-- C: AI vs AI low effort (both have oversight, low intensity)
-- D: AI vs AI high provider effort (provider high oversight, insurer low)
+2x2 game-theoretic experimental design:
+- CP_CI: provider cooperate, insurer cooperate
+- CP_DI: provider cooperate, insurer defect
+- DP_CI: provider defect, insurer cooperate
+- DP_DI: provider defect, insurer defect
 
-point: C and D show even with AI tools, high human effort needed to match A outcomes.
+strategy definitions:
+- cooperate: good-faith, access-preserving; minimum clinically defensible
+- defect: strict/aggressive; maximum plausibly defensible
 
 usage:
   python examples/run_experiment.py --quick
   python examples/run_experiment.py --case infliximab_crohns_2015
+  python examples/run_experiment.py --conditions CP_CI DP_DI
 """
 import sys
 import os
@@ -30,13 +33,12 @@ from src.utils.environment import Environment
 from src.data.case_registry import get_case, list_cases
 from src.data.policies.infliximab_policies import InfliximabCrohnsPolicies
 
-# no AI vs AI experiment configs
-# oversight_intensity=None means skip oversight (human baseline)
+# 2x2 game-theoretic experiment configs
 CONFIGS = {
-    'A': {'name': 'Both Human', 'provider_oversight': None, 'payor_oversight': None},
-    'B': {'name': 'Human vs AI', 'provider_oversight': None, 'payor_oversight': 'low'},
-    'C': {'name': 'AI vs AI Low', 'provider_oversight': 'low', 'payor_oversight': 'low'},
-    'D': {'name': 'AI vs AI High Provider', 'provider_oversight': 'high', 'payor_oversight': 'low'},
+    'CP_CI': {'name': 'Cooperate-Cooperate', 'provider_strategy': 'cooperate', 'payor_strategy': 'cooperate'},
+    'CP_DI': {'name': 'Cooperate-Defect', 'provider_strategy': 'cooperate', 'payor_strategy': 'defect'},
+    'DP_CI': {'name': 'Defect-Cooperate', 'provider_strategy': 'defect', 'payor_strategy': 'cooperate'},
+    'DP_DI': {'name': 'Defect-Defect', 'provider_strategy': 'defect', 'payor_strategy': 'defect'},
 }
 
 # infliximab case policies
@@ -76,24 +78,23 @@ def run_single(case, case_id, condition, llms, output_dir):
     )
     environment = Environment(synthesis_llm=llms["synthesis"], allow_synthesis=True)
 
-    provider_params: Dict[str, Any] = {"policy": PROVIDER_POLICY}
-    payor_params: Dict[str, Any] = {"policy": PAYOR_POLICY}
-
-    if config["provider_oversight"]:
-        provider_params["oversight_intensity"] = config["provider_oversight"]
-    if config["payor_oversight"]:
-        payor_params["oversight_intensity"] = config["payor_oversight"]
+    provider_params: Dict[str, Any] = {
+        "policy": PROVIDER_POLICY,
+        "strategy": config["provider_strategy"],
+    }
+    payor_params: Dict[str, Any] = {
+        "policy": PAYOR_POLICY,
+        "strategy": config["payor_strategy"],
+    }
 
     print(f"  running: {run_id} ({config['name']})")
-    print(f"    provider_oversight={config['provider_oversight']}, payor_oversight={config['payor_oversight']}")
+    print(f"    provider_strategy={config['provider_strategy']}, payor_strategy={config['payor_strategy']}")
 
     try:
         state = run_full_simulation(
             case=case,
-            provider_copilot_llm=llms["copilot"],
-            payor_copilot_llm=llms["copilot"],
-            provider_base_llm=llms["base"],
-            payor_base_llm=llms["base"],
+            provider_llm=llms["main"],
+            payor_llm=llms["main"],
             provider_params=provider_params,
             payor_params=payor_params,
             audit_logger=audit_logger,
@@ -162,7 +163,7 @@ def run_batch(case_ids=None, conditions=None, output_dir="outputs/experiments"):
         api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
         api_key=os.getenv("AZURE_OPENAI_API_KEY"),
     )
-    llms = {"copilot": llm, "base": llm, "synthesis": llm}
+    llms = {"main": llm, "synthesis": llm}
 
     results = []
 
@@ -202,6 +203,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.quick:
-        run_batch(case_ids=[args.case], conditions=["A"], output_dir="outputs/quick_test")
+        run_batch(case_ids=[args.case], conditions=["CP_CI"], output_dir="outputs/quick_test")
     else:
         run_batch(case_ids=[args.case], conditions=args.conditions, output_dir=args.output)
