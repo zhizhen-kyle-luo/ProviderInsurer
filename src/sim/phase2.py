@@ -9,10 +9,8 @@ from src.utils.environment import Environment
 def run_phase2(
     *,
     state: EncounterState,
-    provider_copilot_llm,
-    payor_copilot_llm,
-    provider_base_llm=None,
-    payor_base_llm=None,
+    provider_llm,
+    payor_llm,
     provider_params: Optional[Dict[str, Any]] = None,
     payor_params: Optional[Dict[str, Any]] = None,
     max_turns: int = 3,
@@ -25,26 +23,21 @@ def run_phase2(
     if payor_params is not None:
         state.payor_params = payor_params
 
-    # env: default to enabled synthesis using provider_copilot_llm (simplest wiring)
     if environment is None:
         environment = Environment(
-            synthesis_llm=provider_copilot_llm,
+            synthesis_llm=provider_llm,
             allow_synthesis=True,
             audit_logger=audit_logger,
         )
     else:
-        # ensure env logs into the same audit stream
         if getattr(environment, "audit_logger", None) is None:
             environment.audit_logger = audit_logger
-        # ensure env can synthesize if desired
         if getattr(environment, "allow_synthesis", False) and getattr(environment, "synthesis_llm", None) is None:
-            environment.synthesis_llm = provider_copilot_llm
+            environment.synthesis_llm = provider_llm
 
     adapter = Phase2Adapter(
-        provider_copilot_llm=provider_copilot_llm,
-        payor_copilot_llm=payor_copilot_llm,
-        provider_base_llm=provider_base_llm,
-        payor_base_llm=payor_base_llm,
+        provider_llm=provider_llm,
+        payor_llm=payor_llm,
         provider_params=provider_params,
         payor_params=payor_params,
         environment=environment,

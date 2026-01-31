@@ -9,10 +9,8 @@ from src.utils.audit_logger import AuditLogger
 def run_phase3(
     *,
     state: EncounterState,
-    provider_copilot_llm,
-    payor_copilot_llm,
-    provider_base_llm=None,
-    payor_base_llm=None,
+    provider_llm,
+    payor_llm,
     provider_params: Optional[Dict[str, Any]] = None,
     payor_params: Optional[Dict[str, Any]] = None,
     max_turns: int = 3,
@@ -26,18 +24,17 @@ def run_phase3(
 
     lines = getattr(state, "service_lines", []) or []
     for line in lines:
-        if line.authorization_status in {"approved"}:
-            line.delivered = True
-        elif line.authorization_status == "modified" and line.accepted_modification:
-            line.delivered = True
-        elif line.treat_anyway:
+        should_deliver = (
+            line.authorization_status == "approved"
+            or (line.authorization_status == "modified" and line.accepted_modification)
+            or line.treat_anyway
+        )
+        if should_deliver:
             line.delivered = True
 
     adapter = Phase3Adapter(
-        provider_copilot_llm=provider_copilot_llm,
-        payor_copilot_llm=payor_copilot_llm,
-        provider_base_llm=provider_base_llm,
-        payor_base_llm=payor_base_llm,
+        provider_llm=provider_llm,
+        payor_llm=payor_llm,
         provider_params=provider_params,
         payor_params=payor_params,
         audit_logger=audit_logger,

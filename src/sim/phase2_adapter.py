@@ -14,7 +14,6 @@ from src.utils.prompts.phase2_prompts import (
 from src.sim.line_items import ensure_phase2_service_lines
 from src.sim.transitions import apply_phase2_insurer_line_adjudications, apply_phase2_provider_bundle_action
 from src.utils.json_parsing import extract_json_from_text
-from src.utils.oversight import apply_oversight_edit
 
 Delta = Dict[str, Any]
 
@@ -118,19 +117,15 @@ class Phase2Adapter:
     def __init__(
         self,
         *,
-        provider_copilot_llm,
-        payor_copilot_llm,
-        provider_base_llm=None,
-        payor_base_llm=None,
+        provider_llm,
+        payor_llm,
         provider_params: Optional[Dict[str, Any]] = None,
         payor_params: Optional[Dict[str, Any]] = None,
         environment=None,
         audit_logger=None,
     ):
-        self.provider_copilot = provider_copilot_llm
-        self.payor_copilot = payor_copilot_llm
-        self.provider_base = provider_base_llm or provider_copilot_llm
-        self.payor_base = payor_base_llm or payor_copilot_llm
+        self.provider_llm = provider_llm
+        self.payor_llm = payor_llm
         self.provider_params = provider_params
         self.payor_params = payor_params
         self.environment = environment
@@ -177,7 +172,7 @@ class Phase2Adapter:
             state, turn=state.turn + 1, level=level, prior_rounds=prior_rounds
         )
 
-        draft = _invoke(self.provider_copilot, sys_txt, user_txt)
+        draft = _invoke(self.provider_llm, sys_txt, user_txt)
         parsed = _parse_obj(draft)
 
         insurer_req = parsed.get("insurer_request")
@@ -187,29 +182,28 @@ class Phase2Adapter:
         ensure_phase2_service_lines(state, insurer_req)
 
         prompts = {"system_prompt": sys_txt, "user_prompt": user_txt}
+        pv = _pvd_dict(state)
+        context = {
+            "patient_visible_data": pv,
+            "service_lines_state": [
+                {
+                    "line_number": l.line_number,
+                    "procedure_code": l.procedure_code,
+                    "authorization_status": l.authorization_status,
+                    "current_review_level": l.current_review_level,
+                    "requested_documents": list(l.requested_documents) if l.requested_documents else [],
+                }
+                for l in (getattr(state, "service_lines", []) or [])
+            ],
+        }
 
-        if params.get("oversight_intensity") and self.provider_base is not None:
-            ov = str(params["oversight_intensity"])
-            pv = _pvd_dict(state)
-            revised, meta, _, _ = apply_oversight_edit(
-                role="provider",
-                oversight_level=ov,
-                draft_text=draft,
-                evidence_packet={"vitals": pv.get("vital_signs", {}), "labs": pv.get("lab_results", {})},
-                llm=self.provider_base,
-            )
-            try:
-                parsed2 = _parse_obj(revised)
-                if isinstance(parsed2.get("insurer_request"), dict):
-                    parsed = parsed2
-                    insurer_req = parsed["insurer_request"]
-            except Exception:
-                pass
-            submission = {"insurer_request": insurer_req, "raw": draft, "oversight": meta, "level": level, "prompts": prompts}
-        else:
-            submission = {"insurer_request": insurer_req, "raw": draft, "oversight": None, "level": level, "prompts": prompts}
-
-        return submission
+        return {
+            "insurer_request": insurer_req,
+            "raw": draft,
+            "level": level,
+            "prompts": prompts,
+            "context": context,
+        }
 
     def build_response(self, state, submission: Dict[str, Any]) -> Dict[str, Any]:
         insurer_req = submission["insurer_request"]
@@ -222,33 +216,30 @@ class Phase2Adapter:
             state, insurer_req, turn=state.turn + 1, level=level, pend_count_at_level=pend_count
         )
 
-        draft = _invoke(self.payor_copilot, sys_txt, user_txt)
+        draft = _invoke(self.payor_llm, sys_txt, user_txt)
         parsed = _parse_obj(draft)
 
         if not isinstance(parsed.get("line_adjudications"), list):
             raise ValueError("payor output missing line_adjudications list")
 
         prompts = {"system_prompt": sys_txt, "user_prompt": user_txt}
+        pv = _pvd_dict(state)
+        context = {
+            "patient_summary": {
+                "age": pv.get("age"),
+                "sex": pv.get("sex"),
+                "chief_complaint": pv.get("chief_complaint"),
+            },
+            "submission_received": insurer_req,
+        }
 
-        if params.get("oversight_intensity") and self.payor_base is not None:
-            ov = str(params["oversight_intensity"])
-            pv = _pvd_dict(state)
-            revised, meta, _, _ = apply_oversight_edit(
-                role="payor",
-                oversight_level=ov,
-                draft_text=draft,
-                evidence_packet={"vitals": pv.get("vital_signs", {}), "labs": pv.get("lab_results", {})},
-                llm=self.payor_base,
-            )
-            try:
-                parsed2 = _parse_obj(revised)
-                if isinstance(parsed2.get("line_adjudications"), list):
-                    parsed = parsed2
-            except Exception:
-                pass
-            return {"payor_response": parsed, "raw": draft, "oversight": meta, "level": level, "prompts": prompts}
-
-        return {"payor_response": parsed, "raw": draft, "oversight": None, "level": level, "prompts": prompts}
+        return {
+            "payor_response": parsed,
+            "raw": draft,
+            "level": level,
+            "prompts": prompts,
+            "context": context,
+        }
 
     def apply_response(self, state, response: Dict[str, Any]) -> List[Delta]:
         pay = response["payor_response"]

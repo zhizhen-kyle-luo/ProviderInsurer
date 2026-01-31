@@ -12,10 +12,8 @@ from src.utils.environment import Environment
 def run_full_simulation(
     *,
     case: Dict[str, Any],
-    provider_copilot_llm,
-    payor_copilot_llm,
-    provider_base_llm=None,
-    payor_base_llm=None,
+    provider_llm,
+    payor_llm,
     provider_params: Optional[Dict[str, Any]] = None,
     payor_params: Optional[Dict[str, Any]] = None,
     audit_logger: Optional[AuditLogger] = None,
@@ -39,10 +37,8 @@ def run_full_simulation(
 
     state = run_phase2(
         state=state,
-        provider_copilot_llm=provider_copilot_llm,
-        payor_copilot_llm=payor_copilot_llm,
-        provider_base_llm=provider_base_llm,
-        payor_base_llm=payor_base_llm,
+        provider_llm=provider_llm,
+        payor_llm=payor_llm,
         provider_params=provider_params,
         payor_params=payor_params,
         max_turns=max_turns_phase2,
@@ -57,10 +53,8 @@ def run_full_simulation(
 
     state = run_phase3(
         state=state,
-        provider_copilot_llm=provider_copilot_llm,
-        payor_copilot_llm=payor_copilot_llm,
-        provider_base_llm=provider_base_llm,
-        payor_base_llm=payor_base_llm,
+        provider_llm=provider_llm,
+        payor_llm=payor_llm,
         provider_params=provider_params,
         payor_params=payor_params,
         max_turns=max_turns_phase3,
