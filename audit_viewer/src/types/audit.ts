@@ -16,6 +16,7 @@ export interface OversightMeta {
       requested_k: number;
       picked_lines: number[];
       raw_selector_output: string;
+      prompts?: { system_prompt?: string; user_prompt?: string };
     };
     view: {
       draft_mode: string;
@@ -37,6 +38,18 @@ export interface OversightMeta {
     raw_patch_text?: string;
     error?: string;
   };
+  prompts?: { system_prompt?: string; user_prompt?: string };
+}
+
+export interface PolicyMeta {
+  policy_id?: string;
+  issuer?: string;
+  source?: string;
+}
+
+export interface EnvironmentConfig {
+  allow_synthesis?: boolean;
+  synthesis_model?: string | null;
 }
 
 export interface AuditLog {
@@ -47,6 +60,9 @@ export interface AuditLog {
   events: AuditEvent[];
   agent_configs: Record<string, any>;
   summary: Record<string, any>;
+  provider_policy?: PolicyMeta | null;
+  payor_policy?: PolicyMeta | null;
+  environment_config?: EnvironmentConfig | null;
 }
 
 export interface GroupedTurn {

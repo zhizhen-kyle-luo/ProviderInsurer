@@ -7,12 +7,24 @@ from src.models.audit import AuditLog, AuditEvent
 from src.utils.audit_events import make_event, now_iso
 
 class AuditLogger:
-    def __init__(self, *, case_id: str, run_id: str, agent_configs: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        *,
+        case_id: str,
+        run_id: str,
+        agent_configs: Optional[Dict[str, Any]] = None,
+        provider_policy: Optional[Dict[str, Any]] = None,
+        payor_policy: Optional[Dict[str, Any]] = None,
+        environment_config: Optional[Dict[str, Any]] = None,
+    ):
         self.audit_log = AuditLog(
             case_id=case_id,
             run_id=run_id,
             simulation_start=now_iso(),
             agent_configs=agent_configs or {},
+            provider_policy=provider_policy,
+            payor_policy=payor_policy,
+            environment_config=environment_config,
         )
 
     def add(self, event: AuditEvent) -> None:

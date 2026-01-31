@@ -87,6 +87,41 @@ function App() {
                   <div className="font-medium text-slate-900">{turns.length}</div>
                 </div>
               </div>
+
+              {/* Policy and Environment Info */}
+              {(auditLog.provider_policy || auditLog.payor_policy || auditLog.environment_config) && (
+                <div className="mt-6 pt-4 border-t border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                  {auditLog.provider_policy && (
+                    <div className="bg-blue-50 p-3 rounded-lg">
+                      <div className="text-slate-600 mb-1 font-medium">Provider Policy</div>
+                      <div className="text-slate-900 font-semibold">{auditLog.provider_policy.issuer}</div>
+                      {auditLog.provider_policy.policy_id && (
+                        <div className="text-xs text-slate-600 mt-1">{auditLog.provider_policy.policy_id}</div>
+                      )}
+                    </div>
+                  )}
+                  {auditLog.payor_policy && (
+                    <div className="bg-green-50 p-3 rounded-lg">
+                      <div className="text-slate-600 mb-1 font-medium">Payor Policy</div>
+                      <div className="text-slate-900 font-semibold">{auditLog.payor_policy.issuer}</div>
+                      {auditLog.payor_policy.policy_id && (
+                        <div className="text-xs text-slate-600 mt-1">{auditLog.payor_policy.policy_id}</div>
+                      )}
+                    </div>
+                  )}
+                  {auditLog.environment_config && (
+                    <div className="bg-purple-50 p-3 rounded-lg">
+                      <div className="text-slate-600 mb-1 font-medium">Environment</div>
+                      <div className="text-slate-900 font-semibold">
+                        {auditLog.environment_config.allow_synthesis ? 'Data Synthesis Enabled' : 'Ground Truth Only'}
+                      </div>
+                      {auditLog.environment_config.synthesis_model && (
+                        <div className="text-xs text-slate-600 mt-1">Model: {auditLog.environment_config.synthesis_model}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="mt-6 pt-4 border-t border-slate-200">
                 <label className="inline-flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-medium hover:bg-slate-200 transition-colors cursor-pointer text-sm">
                   <Upload className="w-4 h-4" />

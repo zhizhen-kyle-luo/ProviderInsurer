@@ -4,7 +4,7 @@ professional React-based viewer for debugging multi-agent healthcare simulation 
 
 ## Usage
 
-run run_experiment.py to gain audit log json. Expect 10+ minutes runtime.
+run run_experiment.py to gain audit log json. Expect 10+ minutes runtime for longer runs.
 
 ```bash
 cd audit_viewer
