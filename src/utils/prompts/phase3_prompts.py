@@ -4,6 +4,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from .workflow_prompts import WORKFLOW_ACTION_DEFINITIONS
+from .config import PROVIDER_STRATEGY_GUIDANCE, PAYOR_STRATEGY_GUIDANCE
 
 def _normalize_patient_visible_data(pv: object) -> Dict[str, Any]:
     if hasattr(pv, "model_dump"):
@@ -19,11 +20,17 @@ def _normalize_patient_visible_data(pv: object) -> Dict[str, Any]:
 
 
 def create_phase3_provider_system_prompt(provider_params: Optional[Dict[str, Any]] = None) -> str:
-    _ = provider_params or {}
+    params = provider_params or {}
+    strategy_block = ""
+    strategy = params.get("strategy")
+    if strategy and strategy in PROVIDER_STRATEGY_GUIDANCE:
+        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PROVIDER_STRATEGY_GUIDANCE[strategy]}\n"
+
     return (
         "PHASE 3 PROVIDER SYSTEM PROMPT\n"
         "You are preparing a claim submission for services delivered.\n"
         "Include only delivered service lines with authorization numbers when available.\n"
+        f"{strategy_block}"
         "Respond only with valid JSON that matches the schema described.\n"
         "Be precise and concise.\n"
         f"{WORKFLOW_ACTION_DEFINITIONS}"
@@ -122,11 +129,17 @@ def create_phase3_provider_user_prompt(
 
 
 def create_phase3_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = None) -> str:
-    _ = payor_params or {}
+    params = payor_params or {}
+    strategy_block = ""
+    strategy = params.get("strategy")
+    if strategy and strategy in PAYOR_STRATEGY_GUIDANCE:
+        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PAYOR_STRATEGY_GUIDANCE[strategy]}\n"
+
     return (
         "PHASE 3 PAYOR SYSTEM PROMPT\n"
         "You are adjudicating a clinical claim.\n"
         "Focus on match between billed services and documentation.\n"
+        f"{strategy_block}"
         "Return only valid JSON matching the schema for claim response.\n"
         "Be concise and criteria-based.\n"
         f"{WORKFLOW_ACTION_DEFINITIONS}"

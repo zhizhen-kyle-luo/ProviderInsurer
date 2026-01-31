@@ -21,12 +21,15 @@ WORKFLOW_PAYOR_LINE_DECISIONS = ["approved", "modified", "denied", "pending_info
 # Request types
 WORKFLOW_REQUEST_TYPES = ["diagnostic_test", "treatment", "level_of_care"]
 
-# review level definitions
+# review level definitions (maps to Medicare appeal levels 1-3)
 REVIEW_LEVEL_DEFINITIONS = (
     "Review levels:\n"
-    "- Level 0 (Initial Review): UM nurse/triage reviews against policy checklist.\n"
-    "- Level 1 (Reconsideration): Medical Director peer-to-peer review.\n"
-    "- Level 2 (Independent Review): External IRE; final binding decision, no pend allowed.\n"
+    "- Level 0 (Initial Review): UM nurse/triage reviews against policy checklist. "
+    "(Medicare: Redetermination by MAC)\n"
+    "- Level 1 (Reconsideration): Medical Director peer-to-peer review. "
+    "(Medicare: QIC reconsideration)\n"
+    "- Level 2 (Independent Review): External IRE; final binding decision, no pending_info allowed. "
+    "(Medicare: ALJ hearing)\n"
 )
 
 # Shared instructions used in phase prompts
