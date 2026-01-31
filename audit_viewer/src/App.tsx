@@ -69,7 +69,7 @@ function App() {
           <div>
             <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-6 mb-8">
               <h2 className="text-lg font-semibold text-slate-900 mb-4">Simulation Summary</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div className="grid grid-cols-3 gap-4 text-sm">
                 <div>
                   <div className="text-slate-600 mb-1">Case</div>
                   <div className="font-medium text-slate-900">{auditLog.case_id}</div>
@@ -77,10 +77,6 @@ function App() {
                 <div>
                   <div className="text-slate-600 mb-1">Start</div>
                   <div className="font-medium text-slate-900">{new Date(auditLog.simulation_start).toLocaleString()}</div>
-                </div>
-                <div>
-                  <div className="text-slate-600 mb-1">Events</div>
-                  <div className="font-medium text-slate-900">{auditLog.events.length}</div>
                 </div>
                 <div>
                   <div className="text-slate-600 mb-1">Turns</div>

@@ -2,7 +2,7 @@
 aggregate population-level metrics from simulation results for macro-validation
 """
 from typing import List, Dict, Any
-from src.models import EncounterState, CaseType
+from src.models import EncounterState
 
 
 class MetricsAggregator:

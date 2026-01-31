@@ -21,18 +21,30 @@ WORKFLOW_PAYOR_LINE_DECISIONS = ["approved", "modified", "denied", "pending_info
 # Request types
 WORKFLOW_REQUEST_TYPES = ["diagnostic_test", "treatment", "level_of_care"]
 
+# review level definitions
+REVIEW_LEVEL_DEFINITIONS = (
+    "Review levels:\n"
+    "- Level 0 (Initial Review): UM nurse/triage reviews against policy checklist.\n"
+    "- Level 1 (Reconsideration): Medical Director peer-to-peer review.\n"
+    "- Level 2 (Independent Review): External IRE; final binding decision, no pend allowed.\n"
+)
+
 # Shared instructions used in phase prompts
 WORKFLOW_ACTION_DEFINITIONS = (
+    f"{REVIEW_LEVEL_DEFINITIONS}\n"
     "Provider bundle actions:\n"
-    "- CONTINUE: proceed without escalation, which may include supplying requested docs, "
-    "accepting modified terms, or submitting amended details.\n"
-    "- APPEAL: escalate adverse decisions (denied/modified) to the next review level.\n"
-    "- ABANDON: stop the authorization pursuit for this case.\n\n"
-    "Provider line intents (only under CONTINUE): "
-    f"{WORKFLOW_PROVIDER_LINE_INTENTS}\n\n"
-    "Payor line decisions (per line): "
-    f"{WORKFLOW_PAYOR_LINE_DECISIONS}\n\n"
-    "Valid request types for services: "
-    f"{WORKFLOW_REQUEST_TYPES}.\n"
-    "Use these exact tokens (case-insensitive) for enums in JSON responses."
+    "- CONTINUE: proceed without escalating review level.\n"
+    "  - PROVIDE_REQUESTED_DOCS: respond to pending_info by supplying requested documentation.\n"
+    "  - ACCEPT_MODIFY: accept insurer's modified approval (e.g., reduced quantity).\n"
+    "  - RESUBMIT_AMENDED: fix billing/coding errors and resubmit (corrected claim).\n"
+    "- APPEAL: escalate denied/modified lines to the next review level (disputes coverage decision).\n"
+    "- ABANDON: stop pursuit; either NO_TREAT (patient does not receive service) or "
+    "TREAT_ANYWAY (provider absorbs cost).\n\n"
+    "Payor line decisions:\n"
+    "- approved: meets criteria; issue authorization number.\n"
+    "- modified: approve with changes (e.g., quantity_reduction, site_change); set modification_type.\n"
+    "- denied: does not meet criteria; explain which criteria failed.\n"
+    "- pending_info: missing documentation; list requested_documents (not allowed at level 2).\n\n"
+    f"Valid request types: {WORKFLOW_REQUEST_TYPES}.\n"
+    "Use these exact tokens (case-insensitive) in JSON responses."
 )
