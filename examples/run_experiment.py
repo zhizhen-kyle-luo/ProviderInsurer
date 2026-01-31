@@ -64,7 +64,7 @@ def run_single(case, case_id, condition, llms, output_dir):
     # prepare environment config metadata
     environment_config = {
         "allow_synthesis": True,
-        "synthesis_model": "gpt-4o" if llms.get("synthesis") else None,
+        "synthesis_model": os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME") if llms.get("synthesis") else None,
     }
 
     audit_logger = AuditLogger(
