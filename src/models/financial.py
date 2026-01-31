@@ -32,8 +32,7 @@ class ServiceLineRequest(BaseModel):
     charge_amount: Optional[float] = None  # optional in 278, required in 837
 
     # X12 278/837 HI segment (diagnosis)
-    diagnosis_codes: Optional[List[str]] = None  # phase 2: full ICD-10 list
-    diagnosis_pointers: List[int] = Field(default_factory=list)  # phase 3: references claim-level HI
+    diagnosis_codes: Optional[List[str]] = None  # ICD-10 codes for this line
 
     # Phase 2 specific: clinical justification (X12 278 PWK/MSG segments)
     clinical_rationale: Optional[str] = None  # phase 2 PA + phase 3 appeals
@@ -75,7 +74,7 @@ class ServiceLineRequest(BaseModel):
     adjustment_amount: Optional[float] = None  # $ amount adjusted
 
     # workflow tracking (internal, not X12)
-    current_review_level: int = 0  # 0=initial, 1=reconsideration, 2=IRE
+    current_review_level: int = 0  # initial=0, reconsideration=1, IRE=2
     reviewer_type: Optional[str] = None  # "UM Triage", "Medical Director", "IRE"
     superseded_by_line: Optional[int] = None  # if resubmitted, points to new line_number
     treat_anyway: bool = False  # after abandon: whether provider treated despite non-approval
