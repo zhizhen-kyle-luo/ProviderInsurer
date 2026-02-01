@@ -175,9 +175,14 @@ def apply_phase2_provider_bundle_action(
         return deltas, True, f"ABANDON_{mode}"
 
     if action == "CONTINUE":
+        # CONTINUE requires explicit per-line intents:
+        # - PROVIDE_DOCS for pending_info lines
+        # - ACCEPT_MODIFY for modified lines
         for ins in lines:
-            if "line_number" not in ins or "intent" not in ins:
-                raise ValueError(f"CONTINUE needs line_number + intent: {ins}")
+            if "line_number" not in ins:
+                raise ValueError(f"CONTINUE line entry needs line_number: {ins}")
+            if "intent" not in ins:
+                raise ValueError(f"CONTINUE line entry needs intent (PROVIDE_DOCS or ACCEPT_MODIFY): {ins}")
 
             ln = int(ins["line_number"])
             intent = str(ins["intent"]).upper()
@@ -185,56 +190,51 @@ def apply_phase2_provider_bundle_action(
 
             if intent == "ACCEPT_MODIFY":
                 if (line.authorization_status or "").lower() != "modified":
-                    raise ValueError("ACCEPT_MODIFY requires current status == modified")
+                    raise ValueError(f"ACCEPT_MODIFY requires status=modified, got {line.authorization_status} for line {ln}")
                 line.accepted_modification = True
                 deltas.append({"kind": "phase2_accept_modify", "line_number": ln})
-                continue
 
-            if intent == "RESUBMIT_AMENDED":
-                amended_fields = ins.get("amended_fields")
-                if not isinstance(amended_fields, dict):
-                    raise ValueError("RESUBMIT_AMENDED needs amended_fields dict")
+            elif intent == "PROVIDE_DOCS":
+                if (line.authorization_status or "").lower() != "pending_info":
+                    raise ValueError(f"PROVIDE_DOCS requires status=pending_info, got {line.authorization_status} for line {ln}")
+                deltas.append({"kind": "phase2_provide_docs", "line_number": ln})
 
-                from src.models.financial import ServiceLineRequest
-                model_fields = set(ServiceLineRequest.model_fields.keys())
-                immutable_fields = {"line_number", "superseded_by_line", "request_revision"}
-
-                for k in amended_fields.keys():
-                    if k not in model_fields:
-                        raise ValueError(f"amended_fields key not on ServiceLineRequest: {k}")
-                    if k in immutable_fields:
-                        raise ValueError(f"cannot amend immutable field: {k}")
-
-                new_line = deepcopy(line)
-                new_line.line_number = _next_line_number(state)
-
-                new_line.request_revision = int(line.request_revision) + 1
-                new_line.current_review_level = 0
-                new_line.reviewer_type = None
-                new_line.pend_round = 0
-                new_line.pend_total = 0
-
-                _clear_phase2_decision_outputs(new_line)
-
-                for k, v in amended_fields.items():
-                    setattr(new_line, k, v)
-
-                line.superseded_by_line = new_line.line_number
-                state.service_lines.append(new_line)
-
-                deltas.append(
-                    {
-                        "kind": "phase2_resubmit_amended",
-                        "from_line": ln,
-                        "to_line": new_line.line_number,
-                        "amended_fields": deepcopy(amended_fields),
-                    }
-                )
-                continue
-
-            deltas.append({"kind": "phase2_provider_continue", "line_number": ln, "intent": intent})
+            else:
+                raise ValueError(f"Unknown intent={intent} for line {ln}. Must be PROVIDE_DOCS or ACCEPT_MODIFY.")
 
         return deltas, False, None
+
+    if action == "RESUBMIT":
+        # Bundle-level action: withdraw current PA entirely, will submit fresh request on next turn
+        # History is preserved in phase2_submissions/phase2_responses (no need for separate EHR field)
+        resubmit_reason = provider_action.get("resubmit_reason", "")
+
+        # Record withdrawn lines for the delta log (audit trail)
+        withdrawn_lines = [
+            {
+                "line_number": l.line_number,
+                "procedure_code": l.procedure_code,
+                "service_name": l.service_name,
+                "authorization_status": l.authorization_status,
+                "decision_reason": l.decision_reason,
+            }
+            for l in state.service_lines
+        ]
+
+        # Clear current service lines - next build_submission will create new ones from LLM
+        state.service_lines = []
+
+        # Reset review level back to 0
+        state.current_level = 0
+
+        deltas.append({
+            "kind": "phase2_provider_resubmit",
+            "resubmit_reason": resubmit_reason,
+            "withdrawn_lines": withdrawn_lines,
+        })
+
+        # Return False for terminated - simulation continues but with fresh submission
+        return deltas, False, "RESUBMIT"
 
     if action == "APPEAL":
         for ins in lines:
@@ -297,7 +297,7 @@ def apply_phase3_insurer_line_adjudications(
             "decision_reason": line.decision_reason,
             "requested_documents": list(line.requested_documents),
             "reviewer_type": line.reviewer_type,
-            "current_review_level": line.current_review_level,
+            "claims_review_level": line.claims_review_level,
             "pend_round": line.pend_round,
             "pend_total": line.pend_total,
         }
@@ -318,7 +318,7 @@ def apply_phase3_insurer_line_adjudications(
 
             if line.pend_round >= MAX_REQUEST_INFO_PER_LEVEL:
                 raise ValueError(
-                    f"line {ln} already pended {line.pend_round} times at level {line.current_review_level}; "
+                    f"line {ln} already pended {line.pend_round} times at level {line.claims_review_level}; "
                     f"max={MAX_REQUEST_INFO_PER_LEVEL}"
                 )
 
@@ -358,7 +358,7 @@ def apply_phase3_insurer_line_adjudications(
             "decision_reason": line.decision_reason,
             "requested_documents": list(line.requested_documents),
             "reviewer_type": line.reviewer_type,
-            "current_review_level": line.current_review_level,
+            "claims_review_level": line.claims_review_level,
             "pend_round": line.pend_round,
             "pend_total": line.pend_total,
         }
@@ -427,11 +427,11 @@ def apply_phase3_provider_bundle_action(
                     f"line {ln} has adjudication_status={status}; only denied/modified can be appealed"
                 )
 
-            cur = int(line.current_review_level)
+            cur = int(line.claims_review_level)
             if to_level != cur + 1:
                 raise ValueError(f"appeal must advance by +1: line={ln} cur={cur} to={to_level}")
 
-            line.current_review_level = to_level
+            line.claims_review_level = to_level
             line.pend_round = 0
             deltas.append({"kind": "phase3_appeal_advanced", "line_number": ln, "from_level": cur, "to_level": to_level})
 

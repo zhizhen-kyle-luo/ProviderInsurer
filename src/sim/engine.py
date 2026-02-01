@@ -57,6 +57,9 @@ def run(
 
         provider_action = adapter.choose_provider_action(state, submission, response)
 
+        # Store provider_action in the response for history tracking
+        response["provider_action"] = provider_action
+
         if audit_logger is not None:
             audit_logger.log(phase=state.phase, turn=state.turn, kind="provider_action_chosen", payload={"provider_action": provider_action})
 

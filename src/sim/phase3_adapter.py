@@ -10,6 +10,7 @@ from src.utils.prompts.phase3_prompts import (
     create_phase3_payor_user_prompt,
     create_phase3_provider_system_prompt,
     create_phase3_provider_user_prompt,
+    create_phase3_provider_action_prompt,
 )
 from src.sim.transitions import apply_phase3_insurer_line_adjudications, apply_phase3_provider_bundle_action
 from src.utils.json_parsing import extract_json_from_text
@@ -59,7 +60,7 @@ def _current_level(state) -> int:
     lines = getattr(state, "service_lines", []) or []
     if not lines:
         return 0
-    return max(int(getattr(l, "current_review_level", 0)) for l in lines)
+    return max(int(getattr(l, "claims_review_level", 0)) for l in lines)
 
 
 def _pend_count_at_level(state, level: int) -> int:
@@ -145,7 +146,7 @@ class Phase3Adapter:
             st = (l.adjudication_status or "").lower()
             if st in {"approved"}:
                 continue
-            if st in {"denied", "modified"} and int(l.current_review_level) >= 2:
+            if st in {"denied", "modified"} and int(l.claims_review_level) >= 2:
                 continue
             return False
         return True
@@ -280,40 +281,35 @@ class Phase3Adapter:
 
         return deltas
 
-    def choose_provider_action(self, state, submission: Dict[str, Any], response: Dict[str, Any]) -> Dict[str, Any]:
-        lines = getattr(state, "service_lines", []) or []
-        appeal = []
-        pending = []
-        terminal_bad = []
+    def choose_provider_action(self, state, submission: Dict[str, Any], response: Dict[str, Any]) -> Dict[str, Any]:  # noqa: ARG002
+        """
+        Provider LLM decides action AFTER seeing payor's response.
+        This is where the strategic choice happens (cooperate vs defect).
+        """
+        payor_response = response.get("payor_response", {})
 
-        for l in lines:
-            if not getattr(l, "delivered", False):
-                continue
+        # Build prompt for action decision
+        params = _provider_params(state, self.provider_params)
+        sys_txt, user_txt = create_phase3_provider_action_prompt(
+            state,
+            payor_response,
+            provider_params=params,
+        )
 
-            st = (l.adjudication_status or "").lower()
-            if st == "pending_info":
-                pending.append(l)
-            if st in {"denied", "modified"} and int(l.current_review_level) < 2:
-                appeal.append(l)
-            if st in {"denied", "modified"} and int(l.current_review_level) >= 2:
-                terminal_bad.append(l)
+        # Call provider LLM
+        draft = _invoke(self.provider_llm, sys_txt, user_txt)
+        parsed = _parse_obj(draft)
 
-        if appeal:
-            return {
-                "action": "APPEAL",
-                "lines": [{"line_number": l.line_number, "to_level": l.current_review_level + 1} for l in appeal],
-            }
+        # Extract action
+        action = parsed.get("action", "CONTINUE")
+        lines = parsed.get("lines", [])
+        abandon_mode = parsed.get("abandon_mode")
 
-        if pending:
-            return {
-                "action": "CONTINUE",
-                "lines": [{"line_number": l.line_number, "intent": "PROVIDE_REQUESTED_DOCS"} for l in pending],
-            }
+        provider_action = {"action": str(action).upper(), "lines": lines}
+        if abandon_mode:
+            provider_action["abandon_mode"] = str(abandon_mode).upper()
 
-        if terminal_bad:
-            return {"action": "ABANDON", "abandon_mode": "WRITE_OFF", "lines": []}
-
-        return {"action": "CONTINUE", "lines": []}
+        return provider_action
 
     def apply_provider_action(self, state, provider_action: Dict[str, Any]) -> Tuple[List[Delta], bool, Optional[str]]:
         return apply_phase3_provider_bundle_action(state=state, provider_action=provider_action)

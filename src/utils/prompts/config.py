@@ -6,16 +6,16 @@ from typing import Any, Dict, Literal, Set
 RequestType = Literal["diagnostic_test", "treatment", "level_of_care"]
 PayorLineStatus = Literal["approved", "modified", "denied", "pending_info"]
 
-ProviderBundleAction = Literal["CONTINUE", "APPEAL", "ABANDON"]
-ProviderContinueIntent = Literal["PROVIDE_REQUESTED_DOCS", "ACCEPT_MODIFY", "RESUBMIT_AMENDED"]
+ProviderBundleAction = Literal["CONTINUE", "APPEAL", "RESUBMIT", "ABANDON"]
+ProviderContinueIntent = Literal["PROVIDE_DOCS", "ACCEPT_MODIFY"]
 AbandonMode = Literal["NO_TREAT", "TREAT_ANYWAY"]
 
 
 VALID_REQUEST_TYPES: Set[str] = {"diagnostic_test", "treatment", "level_of_care"}
 VALID_PAYOR_LINE_STATUSES: Set[str] = {"approved", "modified", "denied", "pending_info"}
 
-VALID_PROVIDER_BUNDLE_ACTIONS: Set[str] = {"CONTINUE", "APPEAL", "ABANDON"}
-VALID_PROVIDER_CONTINUE_INTENTS: Set[str] = {"PROVIDE_REQUESTED_DOCS", "ACCEPT_MODIFY", "RESUBMIT_AMENDED"}
+VALID_PROVIDER_BUNDLE_ACTIONS: Set[str] = {"CONTINUE", "APPEAL", "RESUBMIT", "ABANDON"}
+VALID_PROVIDER_CONTINUE_INTENTS: Set[str] = {"PROVIDE_DOCS", "ACCEPT_MODIFY"}
 VALID_ABANDON_MODES: Set[str] = {"NO_TREAT", "TREAT_ANYWAY"}
 
 
@@ -37,47 +37,38 @@ WORKFLOW_LEVELS: Dict[int, Dict[str, Any]] = {
 LEVEL_NAME_MAP: Dict[int, str] = {k: str(v["name"]) for k, v in WORKFLOW_LEVELS.items()}
 
 
-# short guides used inside prompts (not long essays)
-PAYOR_ACTIONS_GUIDE: str = (
-    "Line statuses: approved | modified | denied | pending_info.\n"
-    "- pending_info: missing info; list requested_documents\n"
-    "- modified: approve with changes; set modification_type\n"
-    "- denied: adverse; explain decision_reason\n"
-)
+# strategy modes for game-theoretic experiment
+StrategyMode = Literal["cooperate", "defect"]
+VALID_STRATEGY_MODES: Set[str] = {"cooperate", "defect"}
 
-PROVIDER_ACTIONS_GUIDE: str = (
-    "Bundle actions: CONTINUE | APPEAL | ABANDON.\n"
-    "- CONTINUE: proceed (e.g., provide docs, accept modify, resubmit amended)\n"
-    "- APPEAL: escalate adverse lines to next level (max 2)\n"
-    "- ABANDON: stop Phase 2 (NO_TREAT or TREAT_ANYWAY)\n"
-)
-
-
-# oversight config: budgets only; code enforces, prompts don't waste tokens saying so
-OVERSIGHT_BUDGETS: Dict[str, Dict[str, Dict[str, int]]] = {
-    "provider": {
-        "low": {"review_expand_lines": 1, "max_patch_ops": 3, "max_paths_touched": 3},
-        "medium": {"review_expand_lines": 2, "max_patch_ops": 8, "max_paths_touched": 6},
-        "high": {"review_expand_lines": 999, "max_patch_ops": 50, "max_paths_touched": 30},
-    },
-    "payor": {
-        "low": {"review_expand_lines": 1, "max_patch_ops": 3, "max_paths_touched": 3},
-        "medium": {"review_expand_lines": 2, "max_patch_ops": 8, "max_paths_touched": 6},
-        "high": {"review_expand_lines": 999, "max_patch_ops": 50, "max_paths_touched": 30},
-    },
+PROVIDER_STRATEGY_GUIDANCE: Dict[str, str] = {
+    "cooperate": (
+        "In ambiguous/gray-zone situations, choose the minimum clinically defensible "
+        "set of requested services and the lowest reasonable intensity/level-of-care "
+        "that still supports timely, appropriate treatment. Avoid adding extra line items "
+        "or upgrading level-of-care unless clearly required by the case facts and policy."
+    ),
+    "defect": (
+        "In ambiguous/gray-zone situations, choose the maximum plausibly defensible "
+        "set of requested services and the highest plausible intensity/level-of-care "
+        "supported by the case facts/policy, to maximize approval/payment odds and reduce "
+        "risk of denial. You may include additional supportive line items if they are "
+        "remotely justifiable from provided facts; do not fabricate facts."
+    ),
 }
 
-DEFAULT_PROVIDER_PARAMS: Dict[str, Any] = {"oversight_intensity": "medium"}
-DEFAULT_PAYOR_PARAMS: Dict[str, Any] = {"oversight_intensity": "medium"}
-
-
-OVERSIGHT_GUIDANCE: Dict[str, Dict[str, str]] = {
-    "low": {"instruction": "minimal review; approve unless obvious error"},
-    "medium": {"instruction": "standard review; check key fields for consistency"},
-    "high": {"instruction": "thorough review; verify all clinical claims against evidence"},
-}
-
-OVERSIGHT_CONSTRAINTS: Dict[str, str] = {
-    "provider": "focus on clinical accuracy and completeness",
-    "payor": "focus on policy compliance and medical necessity criteria",
+PAYOR_STRATEGY_GUIDANCE: Dict[str, str] = {
+    "cooperate": (
+        "In ambiguous/gray-zone situations, apply policy in a good-faith, access-preserving way. "
+        "If the request plausibly satisfies the policy, approve. If it is close but missing a small, "
+        "specific piece of information, request narrowly targeted additional information (when permitted) "
+        "and then reach a terminal decision. Prefer approve over deny when policy interpretation is "
+        "genuinely ambiguous."
+    ),
+    "defect": (
+        "In ambiguous/gray-zone situations, apply policy in a strict, cost-containment way. "
+        "If the request is not clearly supported by explicit policy criteria and documentation, "
+        "choose deny or modify/downgrade. When permitted, demand stricter documentation and interpret "
+        "ambiguity against approval. Prefer modify/downgrade or deny over approve when evidence is borderline."
+    ),
 }
