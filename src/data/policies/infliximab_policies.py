@@ -104,28 +104,78 @@ class InfliximabCrohnsPolicies:
             "content": {
                 "format": "structured",
                 "data": {
-                    "policy_name": "Cigna Drug Coverage Policy IP0660 (effective 2026-01-01) — stricter step therapy",
+                    "policy_name": "Cigna Drug Coverage Policy IP0660 (effective 2026-01-01)",
                     "crohns_disease_initial_criteria": {
                         "approve_if_all": [
-                            "Age ≥ 6 years.",
-                            "Meets at least ONE of: (a) tried/currently taking corticosteroids OR corticosteroids contraindicated; (b) tried one other conventional systemic therapy (e.g., azathioprine, 6-MP, methotrexate); (c) has enterocutaneous/rectovaginal fistulas; OR (d) had ileocolonic resection (post-op recurrence prevention).",
-                            "Prescribed by or in consultation with a gastroenterologist."
+                            "Patient is ≥ 6 years of age.",
+                            "Patient meets ONE of the following (a, b, c, or d).",
+                            "The medication is prescribed by or in consultation with a gastroenterologist."
                         ],
-                        "explicit_notes": [
-                            "A trial of mesalamine does NOT count as a systemic therapy for Crohn's disease."
-                        ],
-                        "objective_measures_examples": [
-                            "Examples of objective measures include fecal markers (e.g., fecal calprotectin), serum markers (e.g., CRP), imaging (MRE/CTE), and endoscopic assessment (used especially for continuation review)."
-                        ],
-                        "authorization_duration": "Initial therapy approval 6 months (per policy).",
+                        "step_therapy_options": {
+                            "a": "Patient has tried or is currently taking corticosteroids, or corticosteroids are contraindicated. (Examples: prednisone, methylprednisolone.)",
+                            "b": "Patient has tried one other conventional systemic therapy for Crohn's disease. (Examples: azathioprine, 6-mercaptopurine, methotrexate.)",
+                            "c": "Patient has enterocutaneous (perianal or abdominal) or rectovaginal fistulas.",
+                            "d": "Patient had ileocolonic resection (to reduce the chance of Crohn's disease recurrence).",
+                        },
+                        "step_therapy_exception": (
+                            "An exception to the requirement for a trial of or contraindication to steroids "
+                            "or a trial of one other conventional systemic agent can be made if the patient "
+                            "has already tried at least one biologic other than the requested medication. "
+                            "A biosimilar of the requested biologic does not count."
+                        ),
+                        "explicit_exclusion": "A trial of mesalamine does NOT count as a systemic therapy for Crohn's disease.",
+                        "authorization_duration": "6 months",
                     },
+                    "crohns_disease_continuation_criteria": {
+                        "approve_if_all": [
+                            "Patient has been established on therapy for at least 6 months.",
+                            "Patient meets at least ONE of the following (a or b)."
+                        ],
+                        "response_options": {
+                            "a": "When assessed by at least one objective measure, patient experienced a beneficial clinical response from baseline (prior to initiating an infliximab product).",
+                            "b": "Compared with baseline (prior to initiating an infliximab product), patient experienced an improvement in at least one symptom.",
+                        },
+                        "objective_measure_examples": [
+                            "fecal markers (e.g., fecal lactoferrin, fecal calprotectin)",
+                            "serum markers (e.g., C-reactive protein)",
+                            "imaging studies (magnetic resonance enterography [MRE], computed tomography enterography [CTE])",
+                            "endoscopic assessment",
+                            "reduced dose of corticosteroids"
+                        ],
+                        "symptom_improvement_examples": [
+                            "decreased pain",
+                            "decreased fatigue",
+                            "decreased stool frequency",
+                            "decreased blood in stool"
+                        ],
+                        "authorization_duration": "1 year",
+                    },
+                    "crohns_disease_dosing": {
+                        "initial_therapy": "Up to 5 mg/kg as an intravenous infusion followed by additional similar doses at 2 and 6 weeks after the first infusion, and then no more frequently than once every 8 weeks thereafter.",
+                        "currently_receiving": "Up to a maximum dose of 10 mg/kg administered intravenously no more frequently than once every 4 weeks.",
+                    },
+                    "preferred_product_note": (
+                        "This product also requires the use of preferred products before approval of a "
+                        "requested non-preferred infliximab intravenous product. Refer to the respective "
+                        "Inflammatory Conditions – Infliximab Intravenous Products Preferred Specialty "
+                        "Management Policy (PSM005) for additional preferred product criteria requirements and exceptions."
+                    ),
                     "decision_logic": (
-                        "Approve only if Crohn's initial-therapy step criteria are satisfied; otherwise pend/deny for missing step-therapy "
-                        "documentation, even if mesalamine trial is documented."
+                        "Cigna IP0660: Approve Crohn's initial therapy if age ≥6 AND meets one step-therapy option "
+                        "(corticosteroids tried/contraindicated OR conventional systemic therapy tried OR fistulas OR ileocolonic resection) "
+                        "AND prescribed by/in consultation with gastroenterologist. Note: mesalamine does NOT count as systemic therapy. "
+                        "Exception: prior biologic trial (non-biosimilar) can waive steroid/systemic-therapy requirement. "
+                        "For continuation: requires ≥6 months on therapy plus objective response OR symptomatic improvement."
                     ),
                 },
                 "text": ""
             },
-            "notes_free_text": "Cigna IP0660 requires stricter step therapy documentation. Mesalamine does not satisfy step therapy requirement. Authorization for 6 months.",
+            "notes_free_text": (
+                "Cigna IP0660 (effective 01/01/2026): Crohn's disease coverage requires step therapy. "
+                "Mesalamine does not count as conventional systemic therapy. Prior biologic exception exists "
+                "(biosimilar does not count). Initial approval 6 months; continuation 1 year with documented response. "
+                "Dosing: initial up to 5 mg/kg (weeks 0, 2, 6, then q8wk); continuation up to 10 mg/kg q4wk max. "
+                "Preferred products per PSM005 policy."
+            ),
         }
     }

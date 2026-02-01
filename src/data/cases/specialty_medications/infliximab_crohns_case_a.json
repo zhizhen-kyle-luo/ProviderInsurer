@@ -18,7 +18,9 @@
     "medications": [
       "Mesalazine 3 g/day (partial response; symptoms improved to ~2-3 diarrheal stools/day)"
     ],
-    "vital_signs": {},
+    "vital_signs": {
+      "ecg": "Normalized rhythm"
+    },
     "lab_results": {
       "fecal_calprotectin": {
         "value": 827.162,
