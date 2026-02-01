@@ -10,6 +10,7 @@ from src.utils.prompts.phase2_prompts import (
     create_phase2_payor_user_prompt,
     create_phase2_provider_system_prompt,
     create_phase2_provider_user_prompt,
+    create_phase2_provider_action_prompt,
 )
 from src.sim.line_items import ensure_phase2_service_lines
 from src.sim.transitions import apply_phase2_insurer_line_adjudications, apply_phase2_provider_bundle_action
@@ -102,11 +103,21 @@ def _prior_round_summaries(state) -> List[Dict[str, Any]]:
                     st = str(adj.get("authorization_status") or adj.get("adjudication_status") or "unknown")
                     line_status_counts[st] = line_status_counts.get(st, 0) + 1
         payor_decision = ", ".join(f"{k}:{v}" for k, v in line_status_counts.items()) if line_status_counts else ""
+
+        # Include provider action info (RESUBMIT, APPEAL, etc.)
+        provider_action = resp.get("provider_action", {})
+        action = str(provider_action.get("action", "")).upper() if isinstance(provider_action, dict) else ""
+        resubmit_reason = ""
+        if action == "RESUBMIT" and isinstance(provider_action, dict):
+            resubmit_reason = str(provider_action.get("resubmit_reason", ""))
+
         summaries.append(
             {
                 "level": lvl,
                 "payor_decision": payor_decision,
                 "payor_decision_reason": str(pay.get("decision_reason") or ""),
+                "provider_action": action,
+                "resubmit_reason": resubmit_reason,
             }
         )
     return summaries
@@ -307,50 +318,35 @@ class Phase2Adapter:
 
         return deltas
 
-    def choose_provider_action(self, state, submission: Dict[str, Any], response: Dict[str, Any]) -> Dict[str, Any]:
-        lines = getattr(state, "service_lines", []) or []
-        appeal = []
-        accept_modify = []
-        pending = []
-        terminal_bad = []
+    def choose_provider_action(self, state, submission: Dict[str, Any], response: Dict[str, Any]) -> Dict[str, Any]:  # noqa: ARG002
+        """
+        Provider LLM decides action AFTER seeing payor's response.
+        This is where the strategic choice happens (cooperate vs defect).
+        """
+        payor_response = response.get("payor_response", {})
 
-        for l in lines:
-            st = (l.authorization_status or "").lower()
-            if st == "pending_info":
-                pending.append(l)
-            elif st == "modified" and int(l.current_review_level) < 2:
-                mod_type = (l.modification_type or "").lower()
-                if mod_type == "quantity_reduction" and l.approved_quantity and l.approved_quantity >= (l.requested_quantity or 0) * 0.5:
-                    accept_modify.append(l)
-                else:
-                    appeal.append(l)
-            elif st == "denied" and int(l.current_review_level) < 2:
-                appeal.append(l)
-            elif st in {"denied", "modified"} and int(l.current_review_level) >= 2:
-                terminal_bad.append(l)
+        # Build prompt for action decision
+        params = _provider_params(state, self.provider_params)
+        sys_txt, user_txt = create_phase2_provider_action_prompt(
+            state,
+            payor_response,
+            provider_params=params,
+        )
 
-        if appeal:
-            return {
-                "action": "APPEAL",
-                "lines": [{"line_number": l.line_number, "to_level": l.current_review_level + 1} for l in appeal],
-            }
+        # Call provider LLM
+        draft = _invoke(self.provider_llm, sys_txt, user_txt)
+        parsed = _parse_obj(draft)
 
-        if accept_modify:
-            return {
-                "action": "CONTINUE",
-                "lines": [{"line_number": l.line_number, "intent": "ACCEPT_MODIFY"} for l in accept_modify],
-            }
+        # Extract action
+        action = parsed.get("action", "CONTINUE")
+        lines = parsed.get("lines", [])
+        abandon_mode = parsed.get("abandon_mode")
 
-        if pending:
-            return {
-                "action": "CONTINUE",
-                "lines": [{"line_number": l.line_number, "intent": "PROVIDE_REQUESTED_DOCS"} for l in pending],
-            }
+        provider_action = {"action": str(action).upper(), "lines": lines}
+        if abandon_mode:
+            provider_action["abandon_mode"] = str(abandon_mode).upper()
 
-        if terminal_bad:
-            return {"action": "ABANDON", "abandon_mode": "NO_TREAT", "treat_anyway_lines": [], "lines": []}
-
-        return {"action": "CONTINUE", "lines": []}
+        return provider_action
 
     def apply_provider_action(self, state, provider_action: Dict[str, Any]) -> Tuple[List[Delta], bool, Optional[str]]:
         return apply_phase2_provider_bundle_action(state=state, provider_action=provider_action)
