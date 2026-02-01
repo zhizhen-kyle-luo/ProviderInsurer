@@ -10,5 +10,4 @@ def render_line_summary(line: Dict[str, Any]) -> str:
     name = line.get("service_name")
     rtype = line.get("request_type")
     qty = line.get("requested_quantity")
-    site = line.get("site_of_service")
-    return f"line={ln} type={rtype} code={code}/{ctype} name={name} qty={qty} site={site}"
+    return f"line={ln} type={rtype} code={code}/{ctype} name={name} qty={qty}"

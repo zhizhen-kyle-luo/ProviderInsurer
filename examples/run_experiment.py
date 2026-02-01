@@ -118,10 +118,10 @@ def run_single(case, case_id, condition, llms, output_dir):
             json.dump(metrics_with_context, f, indent=2)
 
         print("  completed")
-        print(f"    phase2_turns={metrics['phase2_turns']} lines={metrics['total_lines_requested']} "
-              f"approved={metrics['lines_approved_phase2']} denied={metrics['lines_denied_phase2']}")
-        print(f"    provider_tokens={metrics['provider_review_tokens']} provider_edits={metrics['provider_edit_ops']} "
-              f"insurer_tokens={metrics['insurer_review_tokens']} insurer_edits={metrics['insurer_edit_ops']}")
+        print(f"    phase2: turns={metrics['phase2_turns']} appeals={metrics['phase2_appeals']} pends={metrics['phase2_pends']}")
+        print(f"    lines: requested={metrics['total_lines_requested']} approved={metrics['lines_approved_phase2']} "
+              f"denied={metrics['lines_denied_phase2']} modified={metrics['lines_modified_phase2']}")
+        print(f"    phase3: turns={metrics['phase3_turns']} appeals={metrics['phase3_appeals']} pends={metrics['phase3_pends']} paid={metrics['lines_paid_phase3']}")
         print(f"    audit: {audit_file}")
 
         return {
