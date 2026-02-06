@@ -1,11 +1,12 @@
 """
-one phase interaction loop” (provider↔insurer)
+one phase interaction loop (provider↔insurer)
 """
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from src.sim.adapter_base import SimAdapter, Delta
 from src.utils.audit_events import make_event
 from src.utils.audit_logger import AuditLogger
+from src.utils.prompts.config import MAX_TURNS_SAFETY_LIMIT
 
 
 def _delta_to_event(state, delta: Delta):
@@ -18,20 +19,16 @@ def run(
     *,
     state,
     adapter: SimAdapter,
-    max_turns: int,
     audit_logger: Optional[AuditLogger] = None,
-    seed: Optional[int] = None,
 ) -> Any:
-    if seed is not None:
-        pass
-
     state.phase = adapter.phase_name
     state.turn = 0
 
     if audit_logger is not None:
-        audit_logger.log(phase=state.phase, turn=state.turn, kind="phase_start", payload={"max_turns": max_turns})
+        audit_logger.log(phase=state.phase, turn=state.turn, kind="phase_start", payload={})
 
-    for t in range(max_turns):
+    t = 0
+    while t < MAX_TURNS_SAFETY_LIMIT:
         state.turn = t
 
         if adapter.is_terminal(state):
@@ -55,6 +52,12 @@ def run(
             for d in deltas1:
                 audit_logger.add(_delta_to_event(state, d))
 
+        # Check if terminal after applying response - skip provider action if nothing left to do
+        if adapter.is_terminal(state):
+            if audit_logger is not None:
+                audit_logger.log(phase=state.phase, turn=state.turn, kind="phase_terminated", payload={"reason": "all_lines_terminal_after_response"})
+            break
+
         provider_action = adapter.choose_provider_action(state, submission, response)
 
         if audit_logger is not None:
@@ -70,6 +73,8 @@ def run(
             if audit_logger is not None:
                 audit_logger.log(phase=state.phase, turn=state.turn, kind="phase_terminated", payload={"reason": term_reason})
             break
+
+        t += 1
 
     if audit_logger is not None:
         audit_logger.log(phase=state.phase, turn=state.turn, kind="phase_end", payload={})

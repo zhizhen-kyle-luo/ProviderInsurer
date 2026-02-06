@@ -13,9 +13,7 @@ def run_phase3(
     payor_llm,
     provider_params: Optional[Dict[str, Any]] = None,
     payor_params: Optional[Dict[str, Any]] = None,
-    max_turns: int = 3,
     audit_logger: Optional[AuditLogger] = None,
-    seed: Optional[int] = None,
 ) -> EncounterState:
     if provider_params is not None:
         state.provider_params = provider_params
@@ -43,7 +41,5 @@ def run_phase3(
     return run_engine(
         state=state,
         adapter=adapter,
-        max_turns=max_turns,
         audit_logger=audit_logger,
-        seed=seed,
     )
