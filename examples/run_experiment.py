@@ -121,8 +121,8 @@ def run_single(case, case_id, condition, llms, output_dir):
         print("  completed")
         print(f"    phase2_turns={metrics['phase2_turns']} lines={metrics['total_lines_requested']} "
               f"approved={metrics['lines_approved_phase2']} denied={metrics['lines_denied_phase2']}")
-        print(f"    provider_tokens={metrics['provider_review_tokens']} provider_edits={metrics['provider_edit_ops']} "
-              f"insurer_tokens={metrics['insurer_review_tokens']} insurer_edits={metrics['insurer_edit_ops']}")
+        print(f"    phase3_turns={metrics['phase3_turns']} delivered={metrics['lines_delivered']} "
+              f"paid={metrics['lines_paid_phase3']} denied_phase3={metrics['lines_denied_phase3']}")
         print(f"    audit: {audit_file}")
 
         return {
@@ -181,10 +181,6 @@ def run_batch(case_ids=None, conditions=None, output_dir="outputs/experiments"):
                 continue
             result = run_single(case, case_id, cond, llms, output_path)
             results.append(result)
-
-    summary_file = output_path / f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(summary_file, "w") as f:
-        json.dump(results, f, indent=2)
 
     print(f"\nbatch complete: {len(results)} runs")
 

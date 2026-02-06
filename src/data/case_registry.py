@@ -7,12 +7,6 @@ from pathlib import Path
 CASES_DIR = Path(__file__).parent / "cases"
 CASE_PATHS = {
     "infliximab_crohns_2015": CASES_DIR / "specialty_medications" / "infliximab_crohns_case_a.json",
-    "infliximab_crohns_case_b": CASES_DIR / "specialty_medications" / "infliximab_crohns_case_b.json",
-    "chest_pain_stress_test_001": CASES_DIR / "cardiac" / "chest_pain_stress_test_001.json",
-    "copd_respiratory_failure_grey_001": CASES_DIR / "grey_zones" / "copd_respiratory_failure.json",
-    "snf_copd_02": CASES_DIR / "post-acute" / "snf_copd_02.json",
-    "snf_dialysis_03": CASES_DIR / "post-acute" / "snf_dialysis_03.json",
-    "snf_pulmonary_01": CASES_DIR / "post-acute" / "snf_pulmonary_01.json",
 }
 
 def get_case(case_id: str):
