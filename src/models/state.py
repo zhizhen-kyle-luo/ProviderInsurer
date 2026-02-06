@@ -70,7 +70,7 @@ class EncounterState(BaseModel):
     ground_truth_outcome: Optional[str] = None
     simulation_matches_reality: Optional[bool] = None
 
-    #submission, resposne, updates
+    #submission, response, updates
     document_store : Dict[str, Any] = Field(default_factory=dict)
     phase2_submissions : List[Dict[str, Any]] = Field(default_factory=list)
     phase2_responses : List[Dict[str, Any]] = Field(default_factory=list)
