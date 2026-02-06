@@ -10,6 +10,18 @@ Aligned with X12 278/837/835 transaction sets and ServiceLineRequest model.
 
 PHASE2_PROVIDER_REQUEST_SCHEMA = """
 SCHEMA (X12 278 Request):
+
+REQUEST TYPES:
+- diagnostic_test: Lab tests, imaging, pathology to establish/confirm diagnosis
+- treatment: Therapeutic interventions (medications, procedures, surgeries)
+- level_of_care: Intensity of care setting (inpatient, observation, SNF, home health)
+
+DIAGNOSIS CODES (ICD-10):
+Per X12 278, diagnosis codes are situational - include when known. For diagnostic_test requests
+where final diagnosis is uncertain, use working diagnoses or symptom codes (ICD-10 R-codes).
+For treatment and level_of_care, include the diagnosis justifying medical necessity.
+
+FIELD DEFINITIONS:
 - line_number: int, sequential identifier (1, 2, 3...)
 - request_type: diagnostic_test | treatment | level_of_care
 - procedure_code: CPT (5 digits), HCPCS (letter+4), J-code (J+4), or NDC (11 digits)
@@ -18,7 +30,6 @@ SCHEMA (X12 278 Request):
 - service_description: detailed description of service
 - requested_quantity: int, number of units (infusions, days, visits)
 - quantity_unit: days | visits | units | infusions
-- charge_amount: float, billed amount in USD
 - clinical_evidence: text justification with demographics, symptoms, labs, guideline citations
 """
 
@@ -35,7 +46,6 @@ PHASE2_PROVIDER_REQUEST_JSON = """{
         "service_description": "<description>",
         "requested_quantity": <number>,
         "quantity_unit": "<days|visits|units|infusions>",
-        "charge_amount": <number>,
         "clinical_evidence": "<text>"
       }
     ],
@@ -69,9 +79,7 @@ PHASE2_PAYOR_RESPONSE_JSON = """{
       "modification_type": "<quantity_reduction|site_change|code_downgrade>",
       "requested_documents": ["<doc1>", "<doc2>"]
     }
-  ],
-  "reviewer_type": "<UM Triage|Medical Director|IRE>",
-  "level": <0|1|2>
+  ]
 }"""
 
 # =============================================================================
@@ -80,43 +88,84 @@ PHASE2_PAYOR_RESPONSE_JSON = """{
 
 PROVIDER_ACTION_SCHEMA = """
 SCHEMA (Provider Action):
-- action: CONTINUE | APPEAL | RESUBMIT | ABANDON
-  - CONTINUE: proceed without escalating review level
-  - APPEAL: escalate denied/modified lines to next review level (disputes coverage decision)
-  - RESUBMIT: withdraw current PA entirely, submit new/corrected request on next turn (resets to level 0)
-  - ABANDON: stop pursuit entirely
-- lines: array of per-line actions (required for CONTINUE and APPEAL)
-  - line_number: int, which line this action applies to
-  - intent: ONLY one of these two values:
-      * PROVIDE_DOCS - for pending_info lines, you will provide requested documentation
-      * ACCEPT_MODIFY - for modified lines, you accept the insurer's modification
-  - to_level: int, target appeal level (required for APPEAL action only, omit for CONTINUE)
-- abandon_mode: NO_TREAT (patient doesn't get service) | TREAT_ANYWAY (provider absorbs cost) | WRITE_OFF (Phase 3 only)
-- resubmit_reason: text, explanation of why resubmitting (required for RESUBMIT action)
-- reasoning: text, brief explanation of decision
+Provider decides action AFTER seeing payor's response. This is the strategic choice point.
+Each non-approved line requires a decision. Approved lines are already terminal (no action needed).
 
-CONTINUE rules:
-- For each pending_info line: include {line_number, intent: "PROVIDE_DOCS"}
-- For each modified line you accept: include {line_number, intent: "ACCEPT_MODIFY"}
-- Approved lines need no entry (already terminal)
-- Denied lines cannot use CONTINUE (use APPEAL or RESUBMIT instead)
+TWO ACTION MODES:
 
-RESUBMIT vs APPEAL:
-- RESUBMIT: Provider-side errors (wrong codes, missing diagnoses) or want different services.
-  NOT a formal appeal - withdraws current PA and starts fresh at level 0.
-- APPEAL: Disagree with payor's coverage decision, want higher-level review.
-  Same request, disputing the denial/modification.
+1. RESUBMIT (bundle-level) - Withdraw entire PA, start fresh at level 0
+   Use when YOUR submission had errors that caused denials:
+   - Wrong procedure codes, missing diagnoses, insufficient documentation
+   - Want to request DIFFERENT services than originally submitted
+   Required: resubmit_reason
+   NOT a formal appeal - payor treats it as a new request
+   Strategic: Avoids burning appeal levels on fixable errors
+
+2. LINE_ACTIONS (per-line) - Specify action for each non-approved line
+   Each line gets its own action based on its status:
+
+   For MODIFIED lines (payor approved with changes):
+   - ACCEPT_MODIFY: Accept the modification, line becomes terminal, service will be delivered
+   - APPEAL: Dispute the modification, escalate to next level (requires to_level)
+   - ABANDON: Give up on this line (requires mode: NO_TREAT or TREAT_ANYWAY)
+
+   For PENDING_INFO lines (payor needs more documentation):
+   - PROVIDE_DOCS: Will provide requested documents in next submission's clinical_evidence
+   - ABANDON: Give up on this line (requires mode: NO_TREAT or TREAT_ANYWAY)
+
+   For DENIED lines (payor rejected):
+   - APPEAL: Dispute the denial, escalate to next level (requires to_level, max 2)
+   - ABANDON: Accept the denial (requires mode: NO_TREAT or TREAT_ANYWAY)
+
+ABANDON modes (Phase 2):
+- NO_TREAT: Patient does not receive service
+- TREAT_ANYWAY: Deliver service anyway, provider absorbs cost
+
+APPEAL levels:
+- to_level must be current_level + 1
+- Level 1 = Medical Director peer-to-peer review
+- Level 2 = IRE (Independent Review Entity) - final, binding decision
+- ~83% of appeals succeed, but takes 15-45 days
+
+RESUBMIT only when denial was due to YOUR CORRECTABLE ERROR:
+    - Wrong codes, typos, missing documentation YOU ACTUALLY HAVE
+    - Resets to level 0, treated as new request
+    - Futile if you cannot provide what was missing
+
+APPEAL when:
+    - Patient does not meet policy criteria that CANNOT change (e.g., step-therapy not tried)
+    - Payor misapplied policy or ignored clinical evidence
+    - Prior resubmission failed for the same reason
+    - Escalates to higher review level
+
+If facts cannot change, RESUBMIT will fail again. Use APPEAL to argue exception or ABANDON.
 """
 
 PROVIDER_ACTION_JSON = """{
-  "action": "<CONTINUE|APPEAL|RESUBMIT|ABANDON>",
-  "lines": [
-    {"line_number": <int>, "intent": "<PROVIDE_DOCS|ACCEPT_MODIFY>", "to_level": <int or omit>}
-  ],
-  "abandon_mode": "<NO_TREAT|TREAT_ANYWAY|WRITE_OFF or omit>",
-  "resubmit_reason": "<explanation if RESUBMIT>",
+  "action": "RESUBMIT",
+  "resubmit_reason": "<explanation of what you're correcting>",
   "reasoning": "<brief explanation>"
-}"""
+}
+
+OR
+
+{
+  "action": "LINE_ACTIONS",
+  "line_actions": [
+    {"line_number": <int>, "action": "ACCEPT_MODIFY"},
+    {"line_number": <int>, "action": "PROVIDE_DOCS"},
+    {"line_number": <int>, "action": "APPEAL", "to_level": <1 or 2>},
+    {"line_number": <int>, "action": "ABANDON", "mode": "<NO_TREAT|TREAT_ANYWAY>"}
+  ],
+  "reasoning": "<brief explanation>"
+}
+
+RULES:
+- Approved lines: omit from line_actions (already terminal)
+- Modified lines: ACCEPT_MODIFY | APPEAL (with to_level) | ABANDON (with mode)
+- Pending_info lines: PROVIDE_DOCS | ABANDON (with mode)
+- Denied lines: APPEAL (with to_level) | ABANDON (with mode)
+- Every non-approved line MUST have an action in line_actions"""
 
 # =============================================================================
 # PHASE 3: Provider Claim Submission Schema (X12 837)
@@ -153,10 +202,7 @@ SCHEMA (X12 835 Remittance):
 - line_number: int, must match line from claim_submission
 - adjudication_status: approved | modified | denied | pending_info
 - decision_reason: text explanation of payment decision
-- allowed_amount: float, contractual allowed amount in USD
-- paid_amount: float, actual payment amount in USD
 - adjustment_group_code: CO (Contractual) | PR (Patient Responsibility) | OA (Other Adjustment)
-- adjustment_amount: float, amount adjusted
 - requested_documents: list of strings (if pending_info)
 """
 
@@ -166,13 +212,8 @@ PHASE3_PAYOR_RESPONSE_JSON = """{
       "line_number": <number>,
       "adjudication_status": "<approved|modified|denied|pending_info>",
       "decision_reason": "<text>",
-      "allowed_amount": <number>,
-      "paid_amount": <number>,
       "adjustment_group_code": "<CO|PR|OA>",
-      "adjustment_amount": <number>,
       "requested_documents": ["<doc1>", "<doc2>"]
     }
-  ],
-  "reviewer_type": "<MAC|QIC|ALJ>",
-  "level": <0|1|2>
+  ]
 }"""
