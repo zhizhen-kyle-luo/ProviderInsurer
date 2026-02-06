@@ -273,6 +273,28 @@ export function TurnCard({ turn, expanded, onToggle }: TurnCardProps) {
             </div>
           )}
 
+          {/* provider action LLM call */}
+          {turn.providerActionLLMCall && (
+            <div className="pt-3">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-700">
+                  {(subOversight ? 2 : 1) + (respOversight ? 2 : 1) + (turn.envUpdates.length > 0 ? 1 : 0) + 1}
+                </div>
+                <Zap className="w-4 h-4 text-slate-600" />
+                <span className="font-semibold text-slate-800">Provider Action Decision</span>
+              </div>
+              <LLMCallBlock
+                label="Choose Next Action"
+                icon={<Cpu className="w-4 h-4 text-slate-600" />}
+                color="border-slate-400"
+                systemPrompt={turn.providerActionLLMCall.payload?.prompts?.system_prompt}
+                userPrompt={turn.providerActionLLMCall.payload?.prompts?.user_prompt}
+                output={turn.providerActionLLMCall.payload?.raw_response}
+                defaultOpen={false}
+              />
+            </div>
+          )}
+
           {/* provider action summary */}
           {providerAction && (
             <div className="bg-slate-50 rounded-lg p-3 border">
@@ -280,6 +302,8 @@ export function TurnCard({ turn, expanded, onToggle }: TurnCardProps) {
                 <Zap className="w-4 h-4 text-slate-600" />
                 <span className="font-semibold text-slate-700">Provider Action:</span>
                 <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                  providerAction.action === 'LINE_ACTIONS' ? 'bg-blue-100 text-blue-800' :
+                  providerAction.action === 'RESUBMIT' ? 'bg-amber-100 text-amber-800' :
                   providerAction.action === 'CONTINUE' ? 'bg-green-100 text-green-800' :
                   providerAction.action === 'APPEAL' ? 'bg-amber-100 text-amber-800' :
                   'bg-red-100 text-red-800'
@@ -287,11 +311,29 @@ export function TurnCard({ turn, expanded, onToggle }: TurnCardProps) {
                   {providerAction.action}
                 </span>
               </div>
-              {providerAction.lines?.length > 0 && (
-                <div className="mt-1 text-xs text-slate-600">
-                  Lines: {providerAction.lines.map((l: Record<string, unknown>) =>
-                    `L${l.line_number}${l.intent ? ` (${l.intent})` : l.to_level ? ` → level ${l.to_level}` : ''}`
-                  ).join(', ')}
+              {providerAction.line_actions?.length > 0 && (
+                <div className="mt-2 space-y-1 text-xs">
+                  {providerAction.line_actions.map((la: Record<string, unknown>) => (
+                    <div key={la.line_number as number} className="flex items-center gap-2">
+                      <span className="font-mono text-slate-500">L{la.line_number}</span>
+                      <span className={`px-1.5 py-0.5 rounded font-medium ${
+                        la.action === 'ACCEPT_MODIFY' ? 'bg-green-100 text-green-700' :
+                        la.action === 'PROVIDE_DOCS' ? 'bg-blue-100 text-blue-700' :
+                        la.action === 'APPEAL' ? 'bg-amber-100 text-amber-700' :
+                        la.action === 'ABANDON' ? 'bg-red-100 text-red-700' :
+                        'bg-slate-100 text-slate-700'
+                      }`}>
+                        {la.action as string}
+                      </span>
+                      {la.to_level && <span className="text-slate-500">→ level {la.to_level as number}</span>}
+                      {la.mode && <span className="text-slate-500">({la.mode as string})</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {providerAction.reasoning && (
+                <div className="mt-2 text-xs text-slate-600 italic">
+                  {providerAction.reasoning as string}
                 </div>
               )}
             </div>
