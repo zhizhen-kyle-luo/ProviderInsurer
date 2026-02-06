@@ -18,9 +18,6 @@ def run_full_simulation(
     payor_params: Optional[Dict[str, Any]] = None,
     audit_logger: Optional[AuditLogger] = None,
     environment: Optional[Environment] = None,
-    seed: Optional[int] = None,
-    max_turns_phase2: int = 3,
-    max_turns_phase3: int = 3,
 ) -> EncounterState:
     """
     run all 4 phases in sequence:
@@ -41,11 +38,25 @@ def run_full_simulation(
         payor_llm=payor_llm,
         provider_params=provider_params,
         payor_params=payor_params,
-        max_turns=max_turns_phase2,
         audit_logger=audit_logger,
-        seed=seed,
         environment=environment,
     )
+
+    # Check if any lines should be delivered to Phase 3
+    # Lines are deliverable if: approved, modified+accepted, or treat_anyway
+    def _should_deliver(line):
+        if getattr(line, "treat_anyway", False):
+            return True
+        status = getattr(line, "authorization_status", None)
+        if status == "approved":
+            return True
+        if status == "modified" and getattr(line, "accepted_modification", False):
+            return True
+        return False
+
+    deliverable_lines = [l for l in state.service_lines if _should_deliver(l)]
+    if not deliverable_lines:
+        state.care_abandoned = True
 
     if state.care_abandoned:
         state = run_phase4(state=state, audit_logger=audit_logger)
@@ -57,9 +68,7 @@ def run_full_simulation(
         payor_llm=payor_llm,
         provider_params=provider_params,
         payor_params=payor_params,
-        max_turns=max_turns_phase3,
         audit_logger=audit_logger,
-        seed=seed,
     )
 
     state = run_phase4(state=state, audit_logger=audit_logger)

@@ -26,8 +26,57 @@ def _normalize_code_type(code_type: str) -> str:
     return ct
 
 
+def _update_service_lines_from_request(state, requested: List[Dict[str, Any]]) -> None:
+    """
+    Update existing service lines with new values from provider resubmission.
+    This fixes the bug where requested_quantity and other mutable fields
+    weren't updated when provider resubmitted with new values.
+    """
+    # Build lookup by line_number
+    line_map = {l.line_number: l for l in state.service_lines}
+
+    for svc in requested:
+        if not isinstance(svc, dict):
+            continue
+        ln = svc.get("line_number")
+        if ln is None:
+            continue
+        ln = int(ln)
+        line = line_map.get(ln)
+        if line is None:
+            continue
+
+        # Update requested_quantity if provided
+        if "requested_quantity" in svc:
+            line.requested_quantity = int(svc["requested_quantity"])
+
+        # Update clinical_rationale if provided
+        rt = svc.get("request_type")
+        if rt == "diagnostic_test":
+            rationale = str(svc.get("test_justification") or "")
+            exp = str(svc.get("expected_findings") or "")
+            if exp:
+                rationale = (rationale + " " + exp).strip()
+            if rationale:
+                line.clinical_rationale = rationale
+        elif rt == "treatment":
+            rationale = str(svc.get("clinical_evidence") or "")
+            if rationale:
+                line.clinical_rationale = rationale
+        elif rt == "level_of_care":
+            rationale = str(svc.get("severity_indicators") or "")
+            if rationale:
+                line.clinical_rationale = rationale
+
+
 def ensure_phase2_service_lines(state, insurer_request: Dict[str, Any]) -> None:
+    requested = insurer_request.get("requested_services")
+    if not isinstance(requested, list) or not requested:
+        raise ValueError("insurer_request.requested_services must be non-empty list")
+
+    # If service lines already exist, update mutable fields from new request
     if getattr(state, "service_lines", None):
+        _update_service_lines_from_request(state, requested)
         return
 
     requested = insurer_request.get("requested_services")
@@ -77,7 +126,7 @@ def ensure_phase2_service_lines(state, insurer_request: Dict[str, Any]) -> None:
             service_description=name,
             requested_quantity=int(svc["requested_quantity"]),
             quantity_unit=str(svc["quantity_unit"]),
-            charge_amount=float(svc["charge_amount"]) if svc.get("charge_amount") else None,
+            # charge_amount=float(svc["charge_amount"]) if svc.get("charge_amount") else None,
             diagnosis_codes=icd10_codes or None,
             clinical_rationale=rationale or None,
             request_type=rt,
