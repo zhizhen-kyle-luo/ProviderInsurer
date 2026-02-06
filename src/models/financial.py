@@ -29,7 +29,7 @@ class ServiceLineRequest(BaseModel):
     quantity_unit: Optional[str] = None  # HSD: "days", "visits", "units", "infusions"
 
     # X12 278 SV1-02 / 837 SV1-02 (charge amount)
-    charge_amount: Optional[float] = None  # optional in 278, required in 837
+    # charge_amount: Optional[float] = None  # optional in 278, required in 837
 
     # X12 278/837 HI segment (diagnosis)
     diagnosis_codes: Optional[List[str]] = None  # ICD-10 codes for this line
@@ -66,12 +66,12 @@ class ServiceLineRequest(BaseModel):
 
     # Phase 3 decision fields (X12 835 SVC/CLP response)
     adjudication_status: Optional[str] = None  # "approved" | "modified" | "denied" | "pending_info"
-    allowed_amount: Optional[float] = None  # 835 SVC-02: contractual rate
-    paid_amount: Optional[float] = None  # 835 SVC-03: actual payment
+    # allowed_amount: Optional[float] = None  # 835 SVC-02: contractual rate
+    # paid_amount: Optional[float] = None  # 835 SVC-03: actual payment
 
     # X12 835 CAS segment (adjustment tracking - phase 3 only)
     adjustment_group_code: Optional[str] = None  # "CO" | "PR" | "OA" (who pays)
-    adjustment_amount: Optional[float] = None  # $ amount adjusted
+    # adjustment_amount: Optional[float] = None  # $ amount adjusted
 
     # workflow tracking (internal, not X12)
     current_review_level: int = 0  # initial=0, reconsideration=1, IRE=2
@@ -79,7 +79,9 @@ class ServiceLineRequest(BaseModel):
     superseded_by_line: Optional[int] = None  # if resubmitted, points to new line_number
     treat_anyway: bool = False  # after abandon: whether provider treated despite non-approval
     accepted_modification: bool = False  # whether provider accepted modified terms
+    abandoned: bool = False  # provider abandoned pursuit of this line (accepts denial/doesn't fight)
     request_revision : int = 0
     delivered : bool = False  # for Phase 3 claims: whether service was delivered
     pend_round : int = 0  # how many times this line has been pended
     pend_total : int = 0  # total times this line has been pended across all rounds
+    awaiting_response_at_level: Optional[int] = None  # set when appeal filed, cleared when insurer responds
