@@ -82,6 +82,7 @@ def apply_phase2_insurer_line_adjudications(
 
         line.authorization_status = status
         line.decision_reason = adj.get("decision_reason")
+        line.awaiting_response_at_level = None  # insurer has responded
 
         if status == "pending_info":
             from src.utils.prompts.config import MAX_REQUEST_INFO_PER_LEVEL
@@ -137,6 +138,50 @@ def apply_phase2_insurer_line_adjudications(
     return deltas
 
 
+def _is_line_terminal_phase2(line) -> bool:
+    """Check if a line has reached terminal state in Phase 2."""
+    # if awaiting insurer response at a level (appeal filed but not yet adjudicated), not terminal
+    if getattr(line, "awaiting_response_at_level", None) is not None:
+        return False
+
+    auth_status = getattr(line, "authorization_status", None)
+    if auth_status is None:
+        # Not yet reviewed by payor - need to get response first
+        return False
+    status = str(auth_status).lower()
+
+    if status == "approved":
+        return True
+
+    if status == "modified":
+        if getattr(line, "accepted_modification", False):
+            return True  # accepted the modification
+        if getattr(line, "abandoned", False):
+            return True  # gave up fighting
+        # provider must still choose to accept modification or abandon (even at level 2)
+        return False
+
+    if status == "denied":
+        if getattr(line, "abandoned", False):
+            return True  # gave up
+        # provider must still choose abandon mode (NO_TREAT or TREAT_ANYWAY), even at level 2
+        return False
+
+    # pending_info or no status yet
+    return False
+
+
+def _all_lines_terminal_phase2(state) -> bool:
+    """Check if all lines have reached terminal state."""
+    lines = state.service_lines
+    if lines is None:
+        raise ValueError("state.service_lines is None")
+    if not lines:
+        # No lines yet means we haven't submitted - not terminal, need to build first submission
+        return False
+    return all(_is_line_terminal_phase2(l) for l in lines)
+
+
 def apply_phase2_provider_bundle_action(
     *,
     state,
@@ -148,123 +193,119 @@ def apply_phase2_provider_bundle_action(
         raise ValueError("provider_action missing action")
 
     action = str(provider_action["action"]).upper()
-    lines = provider_action.get("lines") or []
-    if not isinstance(lines, list):
-        raise ValueError("provider_action.lines must be a list")
 
-    if action == "ABANDON":
-        mode = str(provider_action.get("abandon_mode", "NO_TREAT")).upper()
-        treat_anyway = provider_action.get("treat_anyway_lines") or []
-        if not isinstance(treat_anyway, list):
-            raise ValueError("treat_anyway_lines must be a list")
+    # =========================================================================
+    # RESUBMIT: Bundle-level action - withdraw entire PA, start fresh
+    # =========================================================================
+    if action == "RESUBMIT":
+        resubmit_reason = provider_action.get("resubmit_reason", "")
 
-        treat_anyway = [int(x) for x in treat_anyway]
+        # Record withdrawn lines for audit trail
+        withdrawn_lines = [
+            {
+                "line_number": l.line_number,
+                "procedure_code": l.procedure_code,
+                "service_name": l.service_name,
+                "authorization_status": l.authorization_status,
+                "decision_reason": l.decision_reason,
+            }
+            for l in state.service_lines
+        ]
 
-        for line in state.service_lines:
-            line.treat_anyway = False
-            if mode == "NO_TREAT":
-                line.delivered = False
+        # Clear service lines - next build_submission creates new ones
+        state.service_lines = []
+        state.current_level = 0
 
-        if mode == "TREAT_ANYWAY":
-            for ln in treat_anyway:
-                line = _find_line(state, ln)
-                line.treat_anyway = True
-                line.delivered = True
+        deltas.append({
+            "kind": "phase2_provider_resubmit",
+            "resubmit_reason": resubmit_reason,
+            "withdrawn_lines": withdrawn_lines,
+        })
 
-        deltas.append({"kind": "phase2_provider_abandon", "mode": mode, "treat_anyway_lines": treat_anyway})
-        return deltas, True, f"ABANDON_{mode}"
+        # Not terminated - simulation continues with fresh submission
+        return deltas, False, "RESUBMIT"
 
-    if action == "CONTINUE":
-        for ins in lines:
-            if "line_number" not in ins or "intent" not in ins:
-                raise ValueError(f"CONTINUE needs line_number + intent: {ins}")
+    # =========================================================================
+    # LINE_ACTIONS: Per-line actions
+    # =========================================================================
+    if action == "LINE_ACTIONS":
+        if "line_actions" not in provider_action:
+            raise ValueError("LINE_ACTIONS requires line_actions field")
+        line_actions = provider_action["line_actions"]
+        if not isinstance(line_actions, list):
+            raise ValueError("LINE_ACTIONS requires line_actions array")
+        if not line_actions:
+            raise ValueError("LINE_ACTIONS requires at least one line action")
 
-            ln = int(ins["line_number"])
-            intent = str(ins["intent"]).upper()
+        for la in line_actions:
+            if not isinstance(la, dict):
+                raise ValueError(f"line_action must be dict: {la}")
+            if "line_number" not in la or "action" not in la:
+                raise ValueError(f"line_action needs line_number and action: {la}")
+
+            ln = int(la["line_number"])
+            line_action = str(la["action"]).upper()
             line = _find_line(state, ln)
+            if line.authorization_status is None:
+                raise ValueError(f"line {ln} has no authorization_status - cannot process action")
+            status = str(line.authorization_status).lower()
 
-            if intent == "ACCEPT_MODIFY":
-                if (line.authorization_status or "").lower() != "modified":
-                    raise ValueError("ACCEPT_MODIFY requires current status == modified")
+            # Validate action is appropriate for line status
+            if status == "approved":
+                raise ValueError(f"Line {ln} is approved - no action needed, omit from line_actions")
+
+            if line_action == "ACCEPT_MODIFY":
+                if status != "modified":
+                    raise ValueError(f"ACCEPT_MODIFY only valid for modified lines, line {ln} is {status}")
                 line.accepted_modification = True
                 deltas.append({"kind": "phase2_accept_modify", "line_number": ln})
-                continue
 
-            if intent == "RESUBMIT_AMENDED":
-                amended_fields = ins.get("amended_fields")
-                if not isinstance(amended_fields, dict):
-                    raise ValueError("RESUBMIT_AMENDED needs amended_fields dict")
+            elif line_action == "PROVIDE_DOCS":
+                if status != "pending_info":
+                    raise ValueError(f"PROVIDE_DOCS only valid for pending_info lines, line {ln} is {status}")
+                deltas.append({"kind": "phase2_provide_docs", "line_number": ln})
 
-                from src.models.financial import ServiceLineRequest
-                model_fields = set(ServiceLineRequest.model_fields.keys())
-                immutable_fields = {"line_number", "superseded_by_line", "request_revision"}
+            elif line_action == "APPEAL":
+                if status not in {"denied", "modified"}:
+                    raise ValueError(f"APPEAL only valid for denied/modified lines, line {ln} is {status}")
+                if "to_level" not in la:
+                    raise ValueError(f"APPEAL requires to_level for line {ln}")
+                to_level = int(la["to_level"])
+                if to_level not in (1, 2):
+                    raise ValueError(f"to_level must be 1 or 2, got {to_level}")
+                cur = int(line.current_review_level)
+                if to_level != cur + 1:
+                    raise ValueError(f"appeal must advance by +1: line={ln} cur={cur} to={to_level}")
+                line.current_review_level = to_level
+                line.pend_round = 0
+                line.awaiting_response_at_level = to_level  # mark waiting for insurer response
+                deltas.append({"kind": "phase2_appeal_advanced", "line_number": ln, "from_level": cur, "to_level": to_level})
 
-                for k in amended_fields.keys():
-                    if k not in model_fields:
-                        raise ValueError(f"amended_fields key not on ServiceLineRequest: {k}")
-                    if k in immutable_fields:
-                        raise ValueError(f"cannot amend immutable field: {k}")
+            elif line_action == "ABANDON":
+                if status not in {"denied", "modified", "pending_info"}:
+                    raise ValueError(f"ABANDON only valid for denied/modified/pending_info lines, line {ln} is {status}")
+                if "mode" not in la:
+                    raise ValueError(f"ABANDON requires mode (NO_TREAT or TREAT_ANYWAY) for line {ln}")
+                mode = str(la["mode"]).upper()
+                if mode not in {"NO_TREAT", "TREAT_ANYWAY"}:
+                    raise ValueError(f"ABANDON mode must be NO_TREAT or TREAT_ANYWAY, got {mode}")
+                line.abandoned = True
+                if mode == "TREAT_ANYWAY":
+                    line.treat_anyway = True
+                    line.delivered = True
+                    deltas.append({"kind": "phase2_abandon_treat_anyway", "line_number": ln})
+                else:
+                    line.delivered = False
+                    deltas.append({"kind": "phase2_abandon_no_treat", "line_number": ln})
 
-                new_line = deepcopy(line)
-                new_line.line_number = _next_line_number(state)
+            else:
+                raise ValueError(f"Unknown line action: {line_action}")
 
-                new_line.request_revision = int(line.request_revision) + 1
-                new_line.current_review_level = 0
-                new_line.reviewer_type = None
-                new_line.pend_round = 0
-                new_line.pend_total = 0
+        # Check if all lines are now terminal
+        all_terminal = _all_lines_terminal_phase2(state)
+        return deltas, all_terminal, "ALL_TERMINAL" if all_terminal else None
 
-                _clear_phase2_decision_outputs(new_line)
-
-                for k, v in amended_fields.items():
-                    setattr(new_line, k, v)
-
-                line.superseded_by_line = new_line.line_number
-                state.service_lines.append(new_line)
-
-                deltas.append(
-                    {
-                        "kind": "phase2_resubmit_amended",
-                        "from_line": ln,
-                        "to_line": new_line.line_number,
-                        "amended_fields": deepcopy(amended_fields),
-                    }
-                )
-                continue
-
-            deltas.append({"kind": "phase2_provider_continue", "line_number": ln, "intent": intent})
-
-        return deltas, False, None
-
-    if action == "APPEAL":
-        for ins in lines:
-            if "line_number" not in ins or "to_level" not in ins:
-                raise ValueError(f"APPEAL needs line_number + to_level: {ins}")
-
-            ln = int(ins["line_number"])
-            to_level = int(ins["to_level"])
-            if to_level not in (1, 2):
-                raise ValueError(f"to_level must be 1 or 2, got {to_level}")
-
-            line = _find_line(state, ln)
-            status = (line.authorization_status or "").lower()
-
-            if status not in {"denied", "modified"}:
-                raise ValueError(
-                    f"line {ln} has status={status}; only denied/modified can be appealed"
-                )
-
-            cur = int(line.current_review_level)
-            if to_level != cur + 1:
-                raise ValueError(f"appeal must advance by +1: line={ln} cur={cur} to={to_level}")
-
-            line.current_review_level = to_level
-            line.pend_round = 0
-            deltas.append({"kind": "phase2_appeal_advanced", "line_number": ln, "from_level": cur, "to_level": to_level})
-
-        return deltas, False, None
-
-    raise ValueError(f"unknown provider bundle action: {action}")
+    raise ValueError(f"unknown provider action: {action}. Must be RESUBMIT or LINE_ACTIONS")
 
 
 def apply_phase3_insurer_line_adjudications(
@@ -290,10 +331,10 @@ def apply_phase3_insurer_line_adjudications(
 
         old = {
             "adjudication_status": line.adjudication_status,
-            "allowed_amount": line.allowed_amount,
-            "paid_amount": line.paid_amount,
+            # "allowed_amount": line.allowed_amount,
+            # "paid_amount": line.paid_amount,
             "adjustment_group_code": line.adjustment_group_code,
-            "adjustment_amount": line.adjustment_amount,
+            # "adjustment_amount": line.adjustment_amount,
             "decision_reason": line.decision_reason,
             "requested_documents": list(line.requested_documents),
             "reviewer_type": line.reviewer_type,
@@ -303,10 +344,10 @@ def apply_phase3_insurer_line_adjudications(
         }
 
         line.adjudication_status = None
-        line.allowed_amount = None
-        line.paid_amount = None
+        # line.allowed_amount = None
+        # line.paid_amount = None
         line.adjustment_group_code = None
-        line.adjustment_amount = None
+        # line.adjustment_amount = None
         line.decision_reason = None
         line.requested_documents = []
 
@@ -334,27 +375,27 @@ def apply_phase3_insurer_line_adjudications(
         else:
             line.pend_round = 0
 
-        if status in {"approved", "modified"}:
-            if adj.get("allowed_amount") is not None:
-                line.allowed_amount = float(adj["allowed_amount"])
-            if adj.get("paid_amount") is not None:
-                line.paid_amount = float(adj["paid_amount"])
+        # if status in {"approved", "modified"}:
+        #     if adj.get("allowed_amount") is not None:
+        #         line.allowed_amount = float(adj["allowed_amount"])
+        #     if adj.get("paid_amount") is not None:
+        #         line.paid_amount = float(adj["paid_amount"])
 
         if status == "modified":
             if adj.get("adjustment_group_code") is not None:
                 line.adjustment_group_code = str(adj["adjustment_group_code"])
-            if adj.get("adjustment_amount") is not None:
-                line.adjustment_amount = float(adj["adjustment_amount"])
+            # if adj.get("adjustment_amount") is not None:
+            #     line.adjustment_amount = float(adj["adjustment_amount"])
 
         if reviewer_type is not None:
             line.reviewer_type = reviewer_type
 
         new = {
             "adjudication_status": line.adjudication_status,
-            "allowed_amount": line.allowed_amount,
-            "paid_amount": line.paid_amount,
+            # "allowed_amount": line.allowed_amount,
+            # "paid_amount": line.paid_amount,
             "adjustment_group_code": line.adjustment_group_code,
-            "adjustment_amount": line.adjustment_amount,
+            # "adjustment_amount": line.adjustment_amount,
             "decision_reason": line.decision_reason,
             "requested_documents": list(line.requested_documents),
             "reviewer_type": line.reviewer_type,
@@ -368,6 +409,51 @@ def apply_phase3_insurer_line_adjudications(
     return deltas
 
 
+def _is_line_terminal_phase3(line) -> bool:
+    """Check if a delivered line has reached terminal state in Phase 3."""
+    if not getattr(line, "delivered", False):
+        return True  # non-delivered lines are terminal (nothing to claim)
+
+    adj_status = getattr(line, "adjudication_status", None)
+    if adj_status is None:
+        # Not yet adjudicated - need to submit claim first
+        return False
+    status = str(adj_status).lower()
+
+    if status == "approved":
+        return True
+
+    if status == "modified":
+        if getattr(line, "accepted_modification", False):
+            return True
+        if getattr(line, "abandoned", False):
+            return True
+        if int(getattr(line, "current_review_level", 0)) >= 2:
+            return True
+        return False
+
+    if status == "denied":
+        if getattr(line, "abandoned", False):
+            return True
+        if int(getattr(line, "current_review_level", 0)) >= 2:
+            return True
+        return False
+
+    # pending_info or no status yet
+    return False
+
+
+def _all_lines_terminal_phase3(state) -> bool:
+    """Check if all delivered lines have reached terminal state."""
+    lines = state.service_lines
+    if lines is None:
+        raise ValueError("state.service_lines is None")
+    delivered_lines = [l for l in lines if getattr(l, "delivered", False)]
+    if not delivered_lines:
+        raise ValueError("No delivered lines found - cannot check Phase 3 terminal status")
+    return all(_is_line_terminal_phase3(l) for l in delivered_lines)
+
+
 def apply_phase3_provider_bundle_action(
     *,
     state,
@@ -379,62 +465,81 @@ def apply_phase3_provider_bundle_action(
         raise ValueError("provider_action missing action")
 
     action = str(provider_action["action"]).upper()
-    lines = provider_action.get("lines") or []
-    if not isinstance(lines, list):
-        raise ValueError("provider_action.lines must be a list")
 
-    if action == "ABANDON":
-        mode = str(provider_action.get("abandon_mode", "WRITE_OFF")).upper()
+    # =========================================================================
+    # LINE_ACTIONS: Per-line actions (Phase 3 uses same model as Phase 2)
+    # =========================================================================
+    if action == "LINE_ACTIONS":
+        if "line_actions" not in provider_action:
+            raise ValueError("LINE_ACTIONS requires line_actions field")
+        line_actions = provider_action["line_actions"]
+        if not isinstance(line_actions, list):
+            raise ValueError("LINE_ACTIONS requires line_actions array")
+        if not line_actions:
+            raise ValueError("LINE_ACTIONS requires at least one line action")
 
-        deltas.append({"kind": "phase3_provider_abandon", "mode": mode})
-        return deltas, True, f"ABANDON_{mode}"
+        for la in line_actions:
+            if not isinstance(la, dict):
+                raise ValueError(f"line_action must be dict: {la}")
+            if "line_number" not in la or "action" not in la:
+                raise ValueError(f"line_action needs line_number and action: {la}")
 
-    if action == "CONTINUE":
-        for ins in lines:
-            if "line_number" not in ins or "intent" not in ins:
-                raise ValueError(f"CONTINUE needs line_number + intent: {ins}")
-
-            ln = int(ins["line_number"])
-            intent = str(ins["intent"]).upper()
+            ln = int(la["line_number"])
+            line_action = str(la["action"]).upper()
             line = _find_line(state, ln)
 
-            if intent == "ACCEPT_MODIFY":
-                if (line.adjudication_status or "").lower() != "modified":
-                    raise ValueError("ACCEPT_MODIFY requires current adjudication_status == modified")
+            if not getattr(line, "delivered", False):
+                raise ValueError(f"Line {ln} was not delivered - cannot take action in Phase 3")
+
+            if line.adjudication_status is None:
+                raise ValueError(f"line {ln} has no adjudication_status - cannot process action")
+            status = str(line.adjudication_status).lower()
+
+            if status == "approved":
+                raise ValueError(f"Line {ln} is approved - no action needed, omit from line_actions")
+
+            if line_action == "ACCEPT_MODIFY":
+                if status != "modified":
+                    raise ValueError(f"ACCEPT_MODIFY only valid for modified lines, line {ln} is {status}")
                 line.accepted_modification = True
                 deltas.append({"kind": "phase3_accept_modify", "line_number": ln})
-                continue
 
-            deltas.append({"kind": "phase3_provider_continue", "line_number": ln, "intent": intent})
+            elif line_action == "PROVIDE_DOCS":
+                if status != "pending_info":
+                    raise ValueError(f"PROVIDE_DOCS only valid for pending_info lines, line {ln} is {status}")
+                deltas.append({"kind": "phase3_provide_docs", "line_number": ln})
 
-        return deltas, False, None
+            elif line_action == "APPEAL":
+                if status not in {"denied", "modified"}:
+                    raise ValueError(f"APPEAL only valid for denied/modified lines, line {ln} is {status}")
+                if "to_level" not in la:
+                    raise ValueError(f"APPEAL requires to_level for line {ln}")
+                to_level = int(la["to_level"])
+                if to_level not in (1, 2):
+                    raise ValueError(f"to_level must be 1 or 2, got {to_level}")
+                cur = int(line.current_review_level)
+                if to_level != cur + 1:
+                    raise ValueError(f"appeal must advance by +1: line={ln} cur={cur} to={to_level}")
+                line.current_review_level = to_level
+                line.pend_round = 0
+                deltas.append({"kind": "phase3_appeal_advanced", "line_number": ln, "from_level": cur, "to_level": to_level})
 
-    if action == "APPEAL":
-        for ins in lines:
-            if "line_number" not in ins or "to_level" not in ins:
-                raise ValueError(f"APPEAL needs line_number + to_level: {ins}")
+            elif line_action == "ABANDON":
+                if status not in {"denied", "modified", "pending_info"}:
+                    raise ValueError(f"ABANDON only valid for denied/modified/pending_info lines, line {ln} is {status}")
+                if "mode" not in la:
+                    raise ValueError(f"ABANDON requires mode (WRITE_OFF) for line {ln}")
+                mode = str(la["mode"]).upper()
+                if mode != "WRITE_OFF":
+                    raise ValueError(f"Phase 3 ABANDON mode must be WRITE_OFF, got {mode}")
+                line.abandoned = True
+                deltas.append({"kind": "phase3_abandon_write_off", "line_number": ln})
 
-            ln = int(ins["line_number"])
-            to_level = int(ins["to_level"])
-            if to_level not in (1, 2):
-                raise ValueError(f"to_level must be 1 or 2, got {to_level}")
+            else:
+                raise ValueError(f"Unknown line action: {line_action}")
 
-            line = _find_line(state, ln)
-            status = (line.adjudication_status or "").lower()
+        # Check if all delivered lines are now terminal
+        all_terminal = _all_lines_terminal_phase3(state)
+        return deltas, all_terminal, "ALL_TERMINAL" if all_terminal else None
 
-            if status not in {"denied", "modified"}:
-                raise ValueError(
-                    f"line {ln} has adjudication_status={status}; only denied/modified can be appealed"
-                )
-
-            cur = int(line.current_review_level)
-            if to_level != cur + 1:
-                raise ValueError(f"appeal must advance by +1: line={ln} cur={cur} to={to_level}")
-
-            line.current_review_level = to_level
-            line.pend_round = 0
-            deltas.append({"kind": "phase3_appeal_advanced", "line_number": ln, "from_level": cur, "to_level": to_level})
-
-        return deltas, False, None
-
-    raise ValueError(f"unknown provider bundle action: {action}")
+    raise ValueError(f"unknown provider action: {action}. Must be LINE_ACTIONS in Phase 3")

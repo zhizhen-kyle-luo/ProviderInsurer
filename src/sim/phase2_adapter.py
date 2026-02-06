@@ -22,14 +22,22 @@ def _provider_params(state, adapter_params: Optional[Dict[str, Any]]) -> Dict[st
     if adapter_params is not None:
         return adapter_params
     sp = getattr(state, "provider_params", None)
-    return sp if isinstance(sp, dict) else {}
+    if sp is None:
+        return {}
+    if not isinstance(sp, dict):
+        raise ValueError(f"state.provider_params must be dict, got {type(sp)}")
+    return sp
 
 
 def _payor_params(state, adapter_params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if adapter_params is not None:
         return adapter_params
     sp = getattr(state, "payor_params", None)
-    return sp if isinstance(sp, dict) else {}
+    if sp is None:
+        return {}
+    if not isinstance(sp, dict):
+        raise ValueError(f"state.payor_params must be dict, got {type(sp)}")
+    return sp
 
 
 def _invoke(llm, system_text: str, user_text: str) -> str:
@@ -47,67 +55,215 @@ def _parse_obj(text: str) -> Dict[str, Any]:
 def _pvd_dict(state) -> Dict[str, Any]:
     pv = getattr(state, "patient_visible_data", None)
     if pv is None:
-        return {}
+        raise ValueError("state.patient_visible_data is None")
     if isinstance(pv, dict):
         return pv
     if hasattr(pv, "model_dump"):
         return pv.model_dump()
-    return {}
+    raise ValueError(f"state.patient_visible_data must be dict or have model_dump(), got {type(pv)}")
 
 
 def _current_level(state) -> int:
-    lines = getattr(state, "service_lines", []) or []
+    lines = state.service_lines
+    if lines is None:
+        raise ValueError("state.service_lines is None")
     if not lines:
-        return 0
-    return max(int(getattr(l, "current_review_level", 0)) for l in lines)
+        return 0  # No lines yet means we're at initial level
+    return max(int(l.current_review_level) for l in lines)
 
 
 def _pend_count_at_level(state, level: int) -> int:
     n = 0
-    for resp in getattr(state, "phase2_responses", []) or []:
-        if not isinstance(resp, dict) or int(resp.get("level", -1)) != level:
+    responses = state.phase2_responses
+    if responses is None:
+        return 0  # No responses yet means no pends
+    for resp in responses:
+        if not isinstance(resp, dict):
+            raise ValueError(f"phase2_responses entry must be dict, got {type(resp)}")
+        resp_level = resp.get("level")
+        if resp_level is None:
+            raise ValueError(f"phase2_responses entry missing level: {resp}")
+        if int(resp_level) != level:
             continue
         pay = resp.get("payor_response")
         if not isinstance(pay, dict):
-            continue
+            raise ValueError(f"phase2_responses entry missing payor_response dict: {resp}")
         line_adjs = pay.get("line_adjudications")
         if not isinstance(line_adjs, list):
-            continue
+            raise ValueError(f"payor_response missing line_adjudications list: {pay}")
         for adj in line_adjs:
             if not isinstance(adj, dict):
-                continue
-            st = (adj.get("authorization_status") or adj.get("adjudication_status") or "").lower()
-            if st == "pending_info":
+                raise ValueError(f"line_adjudications entry must be dict, got {type(adj)}")
+            st = adj.get("authorization_status")
+            if st is None:
+                raise ValueError(f"line_adjudications entry missing authorization_status: {adj}")
+            if str(st).lower() == "pending_info":
                 n += 1
                 break
     return n
 
 
-def _prior_round_summaries(state) -> List[Dict[str, Any]]:
-    summaries: List[Dict[str, Any]] = []
-    submissions = getattr(state, "phase2_submissions", []) or []
-    responses = getattr(state, "phase2_responses", []) or []
+def _payor_encounter_history(state) -> List[Dict[str, Any]]:
+    """
+    Build encounter history for payor LLM context.
+    Payor sees what was previously submitted and how they responded.
+    This enables realistic adjudication that accounts for prior interactions.
+    """
+    history: List[Dict[str, Any]] = []
+    submissions = state.phase2_submissions if state.phase2_submissions is not None else []
+    responses = state.phase2_responses if state.phase2_responses is not None else []
+
     for sub, resp in zip(submissions, responses):
-        if not isinstance(sub, dict) or not isinstance(resp, dict):
-            continue
-        lvl = int(sub.get("level", resp.get("level", 0)) or 0)
-        pay = resp.get("payor_response") if isinstance(resp.get("payor_response"), dict) else {}
-        line_adjs = pay.get("line_adjudications") if isinstance(pay, dict) else None
-        # summarize all line statuses
-        line_status_counts: Dict[str, int] = {}
-        if isinstance(line_adjs, list):
-            for adj in line_adjs:
-                if isinstance(adj, dict):
-                    st = str(adj.get("authorization_status") or adj.get("adjudication_status") or "unknown")
-                    line_status_counts[st] = line_status_counts.get(st, 0) + 1
-        payor_decision = ", ".join(f"{k}:{v}" for k, v in line_status_counts.items()) if line_status_counts else ""
-        summaries.append(
-            {
-                "level": lvl,
-                "payor_decision": payor_decision,
-                "payor_decision_reason": str(pay.get("decision_reason") or ""),
-            }
-        )
+        if not isinstance(sub, dict):
+            raise ValueError(f"phase2_submissions entry must be dict, got {type(sub)}")
+        if not isinstance(resp, dict):
+            raise ValueError(f"phase2_responses entry must be dict, got {type(resp)}")
+
+        lvl = sub.get("level")
+        if lvl is None:
+            lvl = resp.get("level")
+        if lvl is None:
+            raise ValueError(f"neither submission nor response has level: sub={sub}, resp={resp}")
+        lvl = int(lvl)
+
+        # What provider submitted
+        insurer_req = sub.get("insurer_request")
+        if insurer_req is None:
+            raise ValueError(f"phase2_submission missing insurer_request: {sub}")
+        if not isinstance(insurer_req, dict):
+            raise ValueError(f"insurer_request must be dict, got {type(insurer_req)}")
+
+        submitted_services = []
+        requested_services = insurer_req.get("requested_services")
+        if requested_services is None:
+            raise ValueError(f"insurer_request missing requested_services: {insurer_req}")
+        if not isinstance(requested_services, list):
+            raise ValueError(f"requested_services must be list, got {type(requested_services)}")
+        for svc in requested_services:
+            if not isinstance(svc, dict):
+                raise ValueError(f"requested_services entry must be dict, got {type(svc)}")
+            clinical_evidence = svc.get("clinical_evidence", "")
+            submitted_services.append({
+                "line_number": svc.get("line_number"),
+                "procedure_code": svc.get("procedure_code"),
+                "service_name": svc.get("service_name"),
+                "clinical_evidence": clinical_evidence[:200] if clinical_evidence else "",
+            })
+
+        # How payor responded
+        pay = resp.get("payor_response")
+        if pay is None:
+            raise ValueError(f"phase2_response missing payor_response: {resp}")
+        if not isinstance(pay, dict):
+            raise ValueError(f"payor_response must be dict, got {type(pay)}")
+
+        line_adjs = pay.get("line_adjudications")
+        if line_adjs is None:
+            raise ValueError(f"payor_response missing line_adjudications: {pay}")
+        if not isinstance(line_adjs, list):
+            raise ValueError(f"line_adjudications must be list, got {type(line_adjs)}")
+
+        my_decisions = []
+        for adj in line_adjs:
+            if not isinstance(adj, dict):
+                raise ValueError(f"line_adjudications entry must be dict, got {type(adj)}")
+            my_decisions.append({
+                "line_number": adj.get("line_number"),
+                "status": adj.get("authorization_status"),
+                "decision_reason": adj.get("decision_reason"),
+                "requested_documents": adj.get("requested_documents"),
+            })
+
+        history.append({
+            "round": len(history) + 1,
+            "level": lvl,
+            "provider_submission": submitted_services,
+            "my_prior_decision": my_decisions,
+        })
+
+    return history
+
+
+def _prior_round_summaries(state) -> List[Dict[str, Any]]:
+    """
+    Build detailed summaries of prior rounds for provider LLM context.
+    Includes service line details so provider remembers what was requested and why it was denied/pended.
+    """
+    summaries: List[Dict[str, Any]] = []
+    submissions = state.phase2_submissions if state.phase2_submissions is not None else []
+    responses = state.phase2_responses if state.phase2_responses is not None else []
+
+    for sub, resp in zip(submissions, responses):
+        if not isinstance(sub, dict):
+            raise ValueError(f"phase2_submissions entry must be dict, got {type(sub)}")
+        if not isinstance(resp, dict):
+            raise ValueError(f"phase2_responses entry must be dict, got {type(resp)}")
+
+        lvl = sub.get("level")
+        if lvl is None:
+            lvl = resp.get("level")
+        if lvl is None:
+            raise ValueError(f"neither submission nor response has level: sub={sub}, resp={resp}")
+        lvl = int(lvl)
+
+        # Extract what was requested
+        insurer_req = sub.get("insurer_request")
+        if insurer_req is None:
+            raise ValueError(f"phase2_submission missing insurer_request: {sub}")
+        if not isinstance(insurer_req, dict):
+            raise ValueError(f"insurer_request must be dict, got {type(insurer_req)}")
+
+        req_svcs = insurer_req.get("requested_services")
+        if req_svcs is None:
+            raise ValueError(f"insurer_request missing requested_services: {insurer_req}")
+        if not isinstance(req_svcs, list):
+            raise ValueError(f"requested_services must be list, got {type(req_svcs)}")
+
+        requested_services = []
+        for svc in req_svcs:
+            if not isinstance(svc, dict):
+                raise ValueError(f"requested_services entry must be dict, got {type(svc)}")
+            requested_services.append({
+                "line_number": svc.get("line_number"),
+                "procedure_code": svc.get("procedure_code"),
+                "service_name": svc.get("service_name"),
+                "code_type": svc.get("code_type"),
+            })
+
+        # Extract payor response details
+        pay = resp.get("payor_response")
+        if pay is None:
+            raise ValueError(f"phase2_response missing payor_response: {resp}")
+        if not isinstance(pay, dict):
+            raise ValueError(f"payor_response must be dict, got {type(pay)}")
+
+        line_adjs = pay.get("line_adjudications")
+        if line_adjs is None:
+            raise ValueError(f"payor_response missing line_adjudications: {pay}")
+        if not isinstance(line_adjs, list):
+            raise ValueError(f"line_adjudications must be list, got {type(line_adjs)}")
+
+        line_outcomes = []
+        for adj in line_adjs:
+            if not isinstance(adj, dict):
+                raise ValueError(f"line_adjudications entry must be dict, got {type(adj)}")
+            status = adj.get("authorization_status")
+            if status is None:
+                raise ValueError(f"line_adjudications entry missing authorization_status: {adj}")
+            line_outcomes.append({
+                "line_number": adj.get("line_number"),
+                "status": status,
+                "decision_reason": adj.get("decision_reason"),
+                "requested_documents": adj.get("requested_documents"),
+                "modification_type": adj.get("modification_type"),
+            })
+
+        summaries.append({
+            "level": lvl,
+            "requested_services": requested_services,
+            "line_outcomes": line_outcomes,
+        })
+
     return summaries
 
 
@@ -138,19 +294,8 @@ class Phase2Adapter:
                 pass
 
     def is_terminal(self, state) -> bool:
-        lines = getattr(state, "service_lines", []) or []
-        if not lines:
-            return False
-        for l in lines:
-            st = (l.authorization_status or "").lower()
-            if st in {"approved"}:
-                continue
-            if st == "modified" and getattr(l, "accepted_modification", False):
-                continue
-            if st in {"denied", "modified"} and int(l.current_review_level) >= 2:
-                continue
-            return False
-        return True
+        from src.sim.transitions import _all_lines_terminal_phase2
+        return _all_lines_terminal_phase2(state)
 
     def append_submission(self, state, submission: Dict[str, Any]) -> None:
         if not hasattr(state, "phase2_submissions"):
@@ -169,7 +314,7 @@ class Phase2Adapter:
         params = _provider_params(state, self.provider_params)
         sys_txt = create_phase2_provider_system_prompt(params)
         user_txt = create_phase2_provider_user_prompt(
-            state, turn=state.turn + 1, level=level, prior_rounds=prior_rounds
+            state, turn=state.turn, level=level, prior_rounds=prior_rounds
         )
 
         draft = _invoke(self.provider_llm, sys_txt, user_txt)
@@ -193,7 +338,7 @@ class Phase2Adapter:
                     "current_review_level": l.current_review_level,
                     "requested_documents": list(l.requested_documents) if l.requested_documents else [],
                 }
-                for l in (getattr(state, "service_lines", []) or [])
+                for l in state.service_lines
             ],
         }
 
@@ -209,11 +354,13 @@ class Phase2Adapter:
         insurer_req = submission["insurer_request"]
         level = int(submission.get("level", 0))
         pend_count = _pend_count_at_level(state, level)
+        encounter_history = _payor_encounter_history(state)
 
         params = _payor_params(state, self.payor_params)
         sys_txt = create_phase2_payor_system_prompt(params)
         user_txt = create_phase2_payor_user_prompt(
-            state, insurer_req, turn=state.turn + 1, level=level, pend_count_at_level=pend_count
+            state, insurer_req, turn=state.turn, level=level,
+            pend_count_at_level=pend_count, encounter_history=encounter_history
         )
 
         draft = _invoke(self.payor_llm, sys_txt, user_txt)
@@ -298,50 +445,108 @@ class Phase2Adapter:
 
         return deltas
 
-    def choose_provider_action(self, state, submission: Dict[str, Any], response: Dict[str, Any]) -> Dict[str, Any]:
-        lines = getattr(state, "service_lines", []) or []
-        appeal = []
-        accept_modify = []
-        pending = []
-        terminal_bad = []
+    def choose_provider_action(self, state, _submission: Dict[str, Any], _response: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        LLM-based provider action decision.
+        Provider sees payor response and decides per-line actions or RESUBMIT.
+        Note: _submission and _response kept for API compatibility.
+        """
+        from src.utils.prompts.schema_definitions import PROVIDER_ACTION_SCHEMA, PROVIDER_ACTION_JSON
 
+        lines = state.service_lines
+        if lines is None:
+            raise ValueError("state.service_lines is None")
+        level = _current_level(state)
+
+        # Build line status summary for LLM - include valid actions per line
+        line_statuses = []
         for l in lines:
-            st = (l.authorization_status or "").lower()
-            if st == "pending_info":
-                pending.append(l)
-            elif st == "modified" and int(l.current_review_level) < 2:
-                mod_type = (l.modification_type or "").lower()
-                if mod_type == "quantity_reduction" and l.approved_quantity and l.approved_quantity >= (l.requested_quantity or 0) * 0.5:
-                    accept_modify.append(l)
+            if l.authorization_status is None:
+                raise ValueError(f"line {l.line_number} has no authorization_status")
+            status = str(l.authorization_status).lower()
+            line_level = int(l.current_review_level)
+            valid_actions = []
+            if status == "approved":
+                valid_actions = ["(no action needed - already terminal)"]
+            elif status == "modified":
+                if line_level >= 2:
+                    valid_actions = ["ACCEPT_MODIFY", "ABANDON (mode required)"]
                 else:
-                    appeal.append(l)
-            elif st == "denied" and int(l.current_review_level) < 2:
-                appeal.append(l)
-            elif st in {"denied", "modified"} and int(l.current_review_level) >= 2:
-                terminal_bad.append(l)
+                    valid_actions = ["ACCEPT_MODIFY", "APPEAL (to_level required)", "ABANDON (mode required)"]
+            elif status == "pending_info":
+                valid_actions = ["PROVIDE_DOCS", "ABANDON (mode required)"]
+            elif status == "denied":
+                if line_level >= 2:
+                    valid_actions = ["ABANDON (mode required) - level 2 is final, cannot appeal further"]
+                else:
+                    valid_actions = ["APPEAL (to_level required)", "ABANDON (mode required)"]
 
-        if appeal:
-            return {
-                "action": "APPEAL",
-                "lines": [{"line_number": l.line_number, "to_level": l.current_review_level + 1} for l in appeal],
-            }
+            line_statuses.append({
+                "line_number": l.line_number,
+                "procedure_code": l.procedure_code,
+                "service_name": l.service_name,
+                "authorization_status": l.authorization_status,
+                "decision_reason": l.decision_reason,
+                "current_review_level": l.current_review_level,
+                "requested_documents": list(l.requested_documents) if l.requested_documents else [],
+                "modification_type": l.modification_type,
+                "approved_quantity": l.approved_quantity,
+                "requested_quantity": l.requested_quantity,
+                "valid_actions": valid_actions,
+            })
 
-        if accept_modify:
-            return {
-                "action": "CONTINUE",
-                "lines": [{"line_number": l.line_number, "intent": "ACCEPT_MODIFY"} for l in accept_modify],
-            }
+        params = _provider_params(state, self.provider_params)
+        strategy = params.get("strategy", "")
+        strategy_block = ""
+        if strategy:
+            from src.utils.prompts.config import PROVIDER_STRATEGY_GUIDANCE
+            if strategy in PROVIDER_STRATEGY_GUIDANCE:
+                strategy_block = f"\nSTRATEGY GUIDANCE:\n{PROVIDER_STRATEGY_GUIDANCE[strategy]}\n"
 
-        if pending:
-            return {
-                "action": "CONTINUE",
-                "lines": [{"line_number": l.line_number, "intent": "PROVIDE_REQUESTED_DOCS"} for l in pending],
-            }
+        system_prompt = (
+            "PHASE 2 PROVIDER ACTION DECISION\n"
+            "You are a hospital provider team deciding how to respond to the insurer's authorization decision.\n"
+            f"{strategy_block}"
+            f"{PROVIDER_ACTION_SCHEMA}\n"
+            "Respond only with valid JSON matching the schema."
+        )
 
-        if terminal_bad:
-            return {"action": "ABANDON", "abandon_mode": "NO_TREAT", "treat_anyway_lines": [], "lines": []}
+        import json
+        user_prompt = (
+            f"Current Review Level: {level}\n"
+            f"Max Appeal Level: 2 (IRE - final)\n\n"
+            "CURRENT LINE STATUSES AFTER PAYOR RESPONSE:\n"
+            f"{json.dumps(line_statuses, indent=2)}\n\n"
+            "DECISION:\n"
+            "Choose ONE of:\n\n"
+            "1. RESUBMIT (bundle-level) - if YOUR submission had errors causing denials\n"
+            "   Withdraws entire PA, starts fresh at level 0\n\n"
+            "2. LINE_ACTIONS (per-line) - specify action for each non-approved line:\n"
+            "   - approved lines: omit (already terminal)\n"
+            "   - modified lines: ACCEPT_MODIFY | APPEAL | ABANDON\n"
+            "   - pending_info lines: PROVIDE_DOCS | ABANDON\n"
+            "   - denied lines: APPEAL | ABANDON\n\n"
+            "ABANDON modes: NO_TREAT (patient doesn't get service) or TREAT_ANYWAY (deliver, absorb cost)\n"
+            "APPEAL requires to_level (must be current_level + 1, max 2)\n\n"
+            f"Return only valid JSON:\n{PROVIDER_ACTION_JSON}"
+        )
 
-        return {"action": "CONTINUE", "lines": []}
+        raw = _invoke(self.provider_llm, system_prompt, user_prompt)
+        parsed = _parse_obj(raw)
+
+        if self.audit_logger:
+            self.audit_logger.log(
+                phase="phase_2_utilization_review",
+                turn=int(getattr(state, "turn", 0)),
+                kind="provider_action_llm_call",
+                payload={
+                    "prompts": {"system_prompt": system_prompt, "user_prompt": user_prompt},
+                    "raw_response": raw,
+                    "parsed": parsed,
+                },
+            )
+
+        return parsed
 
     def apply_provider_action(self, state, provider_action: Dict[str, Any]) -> Tuple[List[Delta], bool, Optional[str]]:
         return apply_phase2_provider_bundle_action(state=state, provider_action=provider_action)
