@@ -78,6 +78,9 @@ class Environment:
                 continue
             proc = str(proc)
 
+            service_name = getattr(line, "service_name", None) or ""
+            service_description = getattr(line, "service_description", None) or ""
+
             # If we already have ground-truth (or previously synthesized) results for this procedure,
             # skip when all expected labs are already present in the current patient-visible data.
             existing_payload = results_by_code.get(proc)
@@ -98,31 +101,36 @@ class Environment:
 
                 pv_json = json.dumps(pv, ensure_ascii=False, indent=2)
                 ht_json = json.dumps(ht, ensure_ascii=False, indent=2)
-                existing_labs_json = json.dumps(sorted(pv["lab_results"].keys()), ensure_ascii=False)
 
-                prompt = f"""You are simulating a diagnostic test result in a clinical environment.
-Use the CURRENT patient-visible data and environment hidden data for context.
+                prompt = f"""Generate simulated result for: {service_name}
+Description: {service_description}
 
-CURRENT PATIENT_VISIBLE_DATA (JSON):
+Patient context:
 {pv_json}
 
-ENVIRONMENT_HIDDEN_DATA (JSON):
+Clinical context:
 {ht_json}
 
-Return ONLY valid JSON:
+Return ONLY valid JSON. Use EXACTLY one of these two formats:
+
+For quantitative results (labs with numbers):
 {{
   "lab_results_delta": {{
-    "<lab_name>": {{"value": <number>, "units": "<units>"}}
-    OR
-    "<lab_name>": {{"result": "<qualitative result>"}}
+    "<snake_case_key>": {{"value": <number>, "units": "<string>"}}
   }}
 }}
 
-Constraints:
-- procedure_code={proc!r}
-- at most {self.max_labs_per_test} entries
-- ONLY new keys (do not overwrite existing labs)
-- existing_lab_result_keys={existing_labs_json}
+For qualitative results (positive/negative, or imaging findings):
+{{
+  "lab_results_delta": {{
+    "<snake_case_key>": {{"result": "<string under 50 chars>"}}
+  }}
+}}
+
+Rules:
+- Key must be snake_case derived from service_name
+- Return exactly one key-value pair
+- No narratives or extra text outside the JSON
 """
                 from langchain_core.messages import SystemMessage, HumanMessage
                 resp = self.synthesis_llm.invoke([

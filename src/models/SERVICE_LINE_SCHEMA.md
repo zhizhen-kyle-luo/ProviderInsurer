@@ -2,6 +2,8 @@
 
 This schema defines service line requests and decisions used in Phase 2 (prior authorization) and Phase 3 (claims). Aligned with X12 278/837/835 transaction sets.
 
+> **Note:** Financial amount fields (`charge_amount`, `allowed_amount`, `paid_amount`, `adjustment_amount`) are defined in this schema for future implementation but are **not currently active** in the simulation. They are commented out in the codebase and do not appear in LLM prompts or audit logs.
+
 ---
 
 ## Design Principles
@@ -20,12 +22,12 @@ This schema defines service line requests and decisions used in Phase 2 (prior a
 | `procedure_code` | SV1-01/SV2-02 | SV1-01 | SVC-01 |
 | `code_type` | SV1 qualifier | SV1 qualifier | SVC qualifier |
 | `requested_quantity` | HSD-01 | SV1-04 | - |
-| `charge_amount` | - | SV1-02 | - |
+| `charge_amount` *(not implemented)* | - | SV1-02 | - |
 | `authorization_status` | HCR-01 | - | - |
 | `authorization_number` | REF-02 | REF*9F | - |
 | `adjudication_status` | - | - | CLP-02 |
-| `allowed_amount` | - | - | SVC-02 |
-| `paid_amount` | - | - | SVC-03 |
+| `allowed_amount` *(not implemented)* | - | - | SVC-02 |
+| `paid_amount` *(not implemented)* | - | - | SVC-03 |
 | `adjustment_group_code` | - | - | CAS-01 |
 
 ---
@@ -49,7 +51,7 @@ This schema defines service line requests and decisions used in Phase 2 (prior a
 | `service_description` | string | No | Detailed description of the service being requested. |
 | `requested_quantity` | int | Yes | Number of units requested (infusions, days, visits, etc.). |
 | `quantity_unit` | string | No | Unit type. One of: `"days"`, `"visits"`, `"units"`, `"infusions"`. |
-| `charge_amount` | float | No | Billed amount in USD. Optional in 278, required in 837. |
+| `charge_amount` | float | No | *(Not implemented)* Billed amount in USD. Optional in 278, required in 837. |
 
 ### Clinical Justification
 
@@ -95,10 +97,10 @@ This schema defines service line requests and decisions used in Phase 2 (prior a
 | Field | Type | Values | Description |
 |-------|------|--------|-------------|
 | `adjudication_status` | string | `"approved"`, `"modified"`, `"denied"`, `"pending_info"` | Payor's claims decision. Maps to X12 835 CLP-02. |
-| `allowed_amount` | float | - | Contractual allowed amount in USD. |
-| `paid_amount` | float | - | Actual payment amount in USD. |
+| `allowed_amount` | float | - | *(Not implemented)* Contractual allowed amount in USD. |
+| `paid_amount` | float | - | *(Not implemented)* Actual payment amount in USD. |
 | `adjustment_group_code` | string | `"CO"`, `"PR"`, `"OA"` | Who is responsible for adjustment. CO=Contractual, PR=Patient, OA=Other. |
-| `adjustment_amount` | float | - | Amount adjusted (difference between billed and allowed). |
+| `adjustment_amount` | float | - | *(Not implemented)* Amount adjusted (difference between billed and allowed). |
 
 ---
 
@@ -122,36 +124,61 @@ This schema defines service line requests and decisions used in Phase 2 (prior a
 ## Provider Action Schema
 
 Provider decides action AFTER seeing payor's response. This is the strategic choice point.
+The action is determined by an LLM call (3rd LLM call per turn, after provider submission and payor response).
 
+### Two Action Types
+
+**1. RESUBMIT (bundle-level)** - Withdraw entire PA, start fresh at level 0
 ```json
 {
-  "action": "CONTINUE | APPEAL | ABANDON",
-  "lines": [
-    {
-      "line_number": 1,
-      "intent": "PROVIDE_REQUESTED_DOCS | ACCEPT_MODIFY",
-      "to_level": 1
-    }
-  ],
-  "abandon_mode": "NO_TREAT | TREAT_ANYWAY | WRITE_OFF",
-  "reasoning": "Brief explanation of decision"
+  "action": "RESUBMIT",
+  "resubmit_reason": "<explanation of what you're correcting>",
+  "reasoning": "<brief explanation>"
 }
 ```
 
-### Action Types
+**2. LINE_ACTIONS (per-line)** - Specify action for each non-approved line
+```json
+{
+  "action": "LINE_ACTIONS",
+  "line_actions": [
+    {"line_number": 1, "action": "ACCEPT_MODIFY"},
+    {"line_number": 2, "action": "PROVIDE_DOCS"},
+    {"line_number": 3, "action": "APPEAL", "to_level": 1},
+    {"line_number": 4, "action": "ABANDON", "mode": "NO_TREAT"}
+  ],
+  "reasoning": "<brief explanation>"
+}
+```
 
-| Action | When to Use | Required Fields |
-|--------|-------------|-----------------|
-| `CONTINUE` | Proceeding without appeal | `lines` with intents |
-| `APPEAL` | Escalating denied/modified lines | `lines` with `to_level` |
-| `ABANDON` | Stopping pursuit | `abandon_mode` |
+### Per-Line Actions (within LINE_ACTIONS)
 
-### Intent Types (for CONTINUE)
+| Line Status | Valid Actions | Required Fields |
+|-------------|---------------|-----------------|
+| `approved` | *(omit - already terminal)* | - |
+| `modified` | `ACCEPT_MODIFY`, `APPEAL`, `ABANDON` | APPEAL: `to_level`; ABANDON: `mode` |
+| `pending_info` | `PROVIDE_DOCS`, `ABANDON` | ABANDON: `mode` |
+| `denied` | `APPEAL`, `ABANDON` | APPEAL: `to_level`; ABANDON: `mode` |
 
-| Intent | Applies When | Description |
-|--------|--------------|-------------|
-| `PROVIDE_REQUESTED_DOCS` | status=`pending_info` | Supplying requested documentation |
-| `ACCEPT_MODIFY` | status=`modified` | Accepting payor's modified approval |
+### Per-Line Action Definitions
+
+- **ACCEPT_MODIFY**: Accept payor's modification. Line becomes terminal, service will be delivered.
+- **PROVIDE_DOCS**: Will provide requested documents in next submission's `clinical_evidence`.
+- **APPEAL**: Escalate to next review level. `to_level` must be `current_review_level + 1` (max 2).
+- **ABANDON**: Give up on this line. Requires `mode`.
+
+### RESUBMIT vs APPEAL - Critical Distinction
+
+| Scenario | Action | Rationale |
+|----------|--------|-----------|
+| Denial due to **YOUR ERROR** (wrong codes, missing diagnoses, insufficient documentation) | `RESUBMIT` | Fix errors and try again at level 0 |
+| Denial due to **PAYOR'S INCORRECT DECISION** (your submission was complete and accurate) | `APPEAL` | Dispute their decision at higher review level |
+| Want to request **DIFFERENT services** than originally submitted | `RESUBMIT` | Starts fresh with new request |
+
+Real-world context:
+- RESUBMIT is a strategic alternative to formal appeal when errors caused the denial
+- ~83% of appeals succeed, but take 15-45 days and consume staff resources
+- RESUBMIT avoids burning an appeal level on fixable errors
 
 ### Abandon Modes
 

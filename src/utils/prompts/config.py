@@ -6,22 +6,29 @@ from typing import Any, Dict, Literal, Set
 RequestType = Literal["diagnostic_test", "treatment", "level_of_care"]
 PayorLineStatus = Literal["approved", "modified", "denied", "pending_info"]
 
-ProviderBundleAction = Literal["CONTINUE", "APPEAL", "RESUBMIT", "ABANDON"]
-ProviderContinueIntent = Literal["PROVIDE_DOCS", "ACCEPT_MODIFY"]
-AbandonMode = Literal["NO_TREAT", "TREAT_ANYWAY"]
+# Provider action types (top-level)
+ProviderActionType = Literal["RESUBMIT", "LINE_ACTIONS"]
+
+# Per-line actions (within LINE_ACTIONS)
+ProviderLineAction = Literal["ACCEPT_MODIFY", "PROVIDE_DOCS", "APPEAL", "ABANDON"]
+
+# ABANDON modes by phase
+AbandonModePhase2 = Literal["NO_TREAT", "TREAT_ANYWAY"]
+AbandonModePhase3 = Literal["WRITE_OFF"]
 
 
 VALID_REQUEST_TYPES: Set[str] = {"diagnostic_test", "treatment", "level_of_care"}
 VALID_PAYOR_LINE_STATUSES: Set[str] = {"approved", "modified", "denied", "pending_info"}
 
-VALID_PROVIDER_BUNDLE_ACTIONS: Set[str] = {"CONTINUE", "APPEAL", "RESUBMIT", "ABANDON"}
-VALID_PROVIDER_CONTINUE_INTENTS: Set[str] = {"PROVIDE_DOCS", "ACCEPT_MODIFY"}
-VALID_ABANDON_MODES: Set[str] = {"NO_TREAT", "TREAT_ANYWAY"}
+VALID_PROVIDER_ACTION_TYPES: Set[str] = {"RESUBMIT", "LINE_ACTIONS"}
+VALID_PROVIDER_LINE_ACTIONS: Set[str] = {"ACCEPT_MODIFY", "PROVIDE_DOCS", "APPEAL", "ABANDON"}
+VALID_ABANDON_MODES_PHASE2: Set[str] = {"NO_TREAT", "TREAT_ANYWAY"}
+VALID_ABANDON_MODES_PHASE3: Set[str] = {"WRITE_OFF"}
 
 
 # simulation caps: code should raise if violated (no silent defaults)
-MAX_ITERATIONS: int = 3
-MAX_REQUEST_INFO_PER_LEVEL: int = 5 #was set to 2 for realism, now 5 to observe behavior
+MAX_TURNS_SAFETY_LIMIT: int = 15  # fallback to avoid infinite loops; agents don't know about this
+MAX_REQUEST_INFO_PER_LEVEL: int = 5  # was set to 2 for realism, now 5 to observe behavior; avoid inf loop as well
 
 # optional experiment knob; you said you'd comment it out if not used
 NOISE_PROBABILITY: float = 0.0
@@ -38,7 +45,6 @@ LEVEL_NAME_MAP: Dict[int, str] = {k: str(v["name"]) for k, v in WORKFLOW_LEVELS.
 
 
 # strategy modes for game-theoretic experiment
-StrategyMode = Literal["cooperate", "defect"]
 VALID_STRATEGY_MODES: Set[str] = {"cooperate", "defect"}
 
 PROVIDER_STRATEGY_GUIDANCE: Dict[str, str] = {
@@ -46,7 +52,7 @@ PROVIDER_STRATEGY_GUIDANCE: Dict[str, str] = {
         "In ambiguous/gray-zone situations, choose the minimum clinically defensible "
         "set of requested services and the lowest reasonable intensity/level-of-care "
         "that still supports timely, appropriate treatment. Avoid adding extra line items "
-        "or upgrading level-of-care unless clearly required by the case facts and policy."
+        "or upgrading level-of-care unless clearly required by the case facts and policyor for better patient outcome ."
     ),
     "defect": (
         "In ambiguous/gray-zone situations, choose the maximum plausibly defensible "

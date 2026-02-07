@@ -27,6 +27,7 @@ export function groupEventsByTurn(events: AuditEvent[]): GroupedTurn[] {
     if (e.kind === 'submission_built') group.submission = e;
     else if (e.kind === 'response_built') group.response = e;
     else if (e.kind === 'provider_action_chosen') group.providerAction = e;
+    else if (e.kind === 'provider_action_llm_call') group.providerActionLLMCall = e;
     else if (e.kind.includes('env_') || e.kind === 'patient_visible_update') group.envUpdates.push(e);
     else if (e.kind.includes('line_adjudicated')) group.lineAdjudications.push(e);
     else if (e.kind.includes('provider_continue')) group.providerContinues.push(e);

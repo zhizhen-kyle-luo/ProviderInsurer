@@ -71,6 +71,7 @@ export interface GroupedTurn {
   submission?: AuditEvent;
   response?: AuditEvent;
   providerAction?: AuditEvent;
+  providerActionLLMCall?: AuditEvent;
   envUpdates: AuditEvent[];
   lineAdjudications: AuditEvent[];
   providerContinues: AuditEvent[];

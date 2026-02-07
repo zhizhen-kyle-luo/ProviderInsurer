@@ -1,7 +1,21 @@
 """administrative friction metrics tracking"""
 from __future__ import annotations
 
+from typing import Any, Dict, Optional
 from pydantic import BaseModel
+
+
+class PolicyReference(BaseModel):
+    """Reference to a policy used in the simulation."""
+    policy_id: str
+    issuer: str
+    source: Optional[Dict[str, Any]] = None
+
+
+class EnvironmentConfig(BaseModel):
+    """Environment configuration for the simulation."""
+    allow_synthesis: bool = True
+    synthesis_model: Optional[str] = None
 
 
 class FrictionMetrics(BaseModel):
@@ -22,9 +36,13 @@ class FrictionMetrics(BaseModel):
     phase3_turns: int = 0
     phase3_appeals: int = 0
     phase3_pends: int = 0
-
-    # phase 3: line outcomes
     lines_delivered: int = 0
     lines_paid_phase3: int = 0
     lines_denied_phase3: int = 0
 
+    # policy references
+    provider_policy: Optional[PolicyReference] = None
+    payor_policy: Optional[PolicyReference] = None
+
+    # environment
+    environment_config: Optional[EnvironmentConfig] = None
