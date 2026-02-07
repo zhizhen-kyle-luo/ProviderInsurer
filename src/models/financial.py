@@ -52,7 +52,6 @@ class ServiceLineRequest(BaseModel):
     frequency: Optional[str] = None
     duration: Optional[str] = None
     visit_count: Optional[int] = None
-    site_of_service: Optional[str] = None
 
     # Phase 2 decision fields (X12 278 HCR response)
     authorization_status: Optional[str] = None  # "approved" | "modified" | "denied" | "pending_info"

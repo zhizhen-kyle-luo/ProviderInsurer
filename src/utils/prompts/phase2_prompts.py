@@ -308,6 +308,106 @@ def create_phase2_provider_user_prompt(
 # PHASE 2 PAYOR PROMPTS
 # =============================================================================
 
+def create_phase2_provider_action_prompt(
+    state: object,
+    payor_response: Dict[str, Any],
+    *,
+    provider_params: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, str]:
+    """
+    Provider prompt for deciding action AFTER seeing payor's response.
+    Returns (system_prompt, user_prompt).
+
+    This is where the strategic choice happens:
+    - Cooperate provider: accept modifications, provide docs promptly
+    - Defect provider: appeal aggressively, push back on denials/modifications
+    """
+    params = provider_params or {}
+
+    # System prompt with strategy
+    strategy_block = ""
+    strategy = params.get("strategy")
+    if strategy and strategy in PROVIDER_STRATEGY_GUIDANCE:
+        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PROVIDER_STRATEGY_GUIDANCE[strategy]}\n"
+
+    system_prompt = (
+        "PHASE 2 PROVIDER ACTION DECISION\n"
+        "You are the provider team deciding how to respond to the payor's decision.\n"
+        f"{strategy_block}"
+        "Respond only with valid JSON matching the schema.\n"
+        f"{WORKFLOW_ACTION_DEFINITIONS}"
+    )
+
+    # Render current line statuses after payor response was applied
+    lines = getattr(state, "service_lines", []) or []
+    line_status_parts = ["CURRENT LINE STATUSES (after payor decision):"]
+    for l in lines:
+        ln = getattr(l, "line_number", "?")
+        code = getattr(l, "procedure_code", "")
+        name = getattr(l, "service_name", "")
+        status = getattr(l, "authorization_status", None) or "not_reviewed"
+        level = getattr(l, "current_review_level", 0)
+        docs = getattr(l, "requested_documents", []) or []
+        reason = getattr(l, "decision_reason", "") or ""
+        accepted = getattr(l, "accepted_modification", False)
+        superseded = getattr(l, "superseded_by_line", None)
+
+        line_str = f"- line {ln}: {code} {name} | status={status} | level={level}"
+        if status == "modified":
+            line_str += f" | accepted={accepted}"
+        if status == "pending_info" and docs:
+            line_str += f" | requested_docs={docs}"
+        if reason:
+            line_str += f" | reason={reason[:80]}"
+        if superseded:
+            line_str += f" | superseded_by={superseded}"
+        line_status_parts.append(line_str)
+
+    line_status_block = "\n".join(line_status_parts)
+
+    # Include payor's response summary
+    payor_adjs = payor_response.get("line_adjudications", [])
+    payor_summary_parts = ["PAYOR'S DECISION THIS TURN:"]
+    for adj in payor_adjs:
+        if isinstance(adj, dict):
+            ln = adj.get("line_number", "?")
+            st = adj.get("authorization_status", "?")
+            reason = adj.get("decision_reason", "")[:80] if adj.get("decision_reason") else ""
+            payor_summary_parts.append(f"- line {ln}: {st} | {reason}")
+    payor_summary_block = "\n".join(payor_summary_parts)
+
+    user_prompt = (
+        f"PHASE 2 PROVIDER ACTION PROMPT\n\n"
+        f"{line_status_block}\n\n"
+        f"{payor_summary_block}\n\n"
+        "TASK: Choose ONE action and provide per-line details where required.\n\n"
+        "ACTION OPTIONS:\n"
+        "1. CONTINUE - proceed without escalating review level\n"
+        "   REQUIRED: For each non-approved line, include in 'lines' array:\n"
+        "   - pending_info lines: {\"line_number\": X, \"intent\": \"PROVIDE_DOCS\"}\n"
+        "   - modified lines you accept: {\"line_number\": X, \"intent\": \"ACCEPT_MODIFY\"}\n"
+        "   (approved lines need no entry)\n\n"
+        "2. APPEAL - escalate denied/modified lines to next review level\n"
+        "   REQUIRED: For each line you appeal, include in 'lines' array:\n"
+        "   - {\"line_number\": X, \"to_level\": <current_level + 1>}\n"
+        "   Use when you DISAGREE with the coverage decision.\n\n"
+        "3. RESUBMIT - withdraw PA entirely, submit new/corrected request\n"
+        "   REQUIRED: Provide resubmit_reason explaining why.\n"
+        "   Use for: wrong codes, missing diagnoses, want different services.\n"
+        "   NOT a formal appeal - resets to level 0.\n\n"
+        "4. ABANDON - stop pursuit entirely\n"
+        "   REQUIRED: Set abandon_mode to NO_TREAT or TREAT_ANYWAY.\n\n"
+        "INTENT VALUES (only 2 options, use exactly as shown):\n"
+        "- \"PROVIDE_DOCS\" - for pending_info lines\n"
+        "- \"ACCEPT_MODIFY\" - for modified lines\n\n"
+        f"{PROVIDER_ACTION_SCHEMA}\n"
+        "Return only valid JSON:\n"
+        f"{PROVIDER_ACTION_JSON}\n"
+    )
+
+    return system_prompt, user_prompt
+
+
 def create_phase2_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = None) -> str:
     """
     System prompt: WHO you are, HOW you behave (stable across turns)

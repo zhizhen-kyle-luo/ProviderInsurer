@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-Shared definitions of action vocab and workflow semantics.
+Shared workflow definitions for LLM prompts.
 Imported by phase2_prompts and phase3_prompts.
 
 Uses validation sets from config.py as source of truth.

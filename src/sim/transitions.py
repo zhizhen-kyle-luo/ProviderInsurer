@@ -338,7 +338,7 @@ def apply_phase3_insurer_line_adjudications(
             "decision_reason": line.decision_reason,
             "requested_documents": list(line.requested_documents),
             "reviewer_type": line.reviewer_type,
-            "current_review_level": line.current_review_level,
+            "claims_review_level": line.claims_review_level,
             "pend_round": line.pend_round,
             "pend_total": line.pend_total,
         }
@@ -359,7 +359,7 @@ def apply_phase3_insurer_line_adjudications(
 
             if line.pend_round >= MAX_REQUEST_INFO_PER_LEVEL:
                 raise ValueError(
-                    f"line {ln} already pended {line.pend_round} times at level {line.current_review_level}; "
+                    f"line {ln} already pended {line.pend_round} times at level {line.claims_review_level}; "
                     f"max={MAX_REQUEST_INFO_PER_LEVEL}"
                 )
 
@@ -399,7 +399,7 @@ def apply_phase3_insurer_line_adjudications(
             "decision_reason": line.decision_reason,
             "requested_documents": list(line.requested_documents),
             "reviewer_type": line.reviewer_type,
-            "current_review_level": line.current_review_level,
+            "claims_review_level": line.claims_review_level,
             "pend_round": line.pend_round,
             "pend_total": line.pend_total,
         }

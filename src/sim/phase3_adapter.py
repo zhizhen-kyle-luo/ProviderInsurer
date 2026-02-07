@@ -10,6 +10,7 @@ from src.utils.prompts.phase3_prompts import (
     create_phase3_payor_user_prompt,
     create_phase3_provider_system_prompt,
     create_phase3_provider_user_prompt,
+    create_phase3_provider_action_prompt,
 )
 from src.sim.transitions import apply_phase3_insurer_line_adjudications, apply_phase3_provider_bundle_action
 from src.utils.json_parsing import extract_json_from_text

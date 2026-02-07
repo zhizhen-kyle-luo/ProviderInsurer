@@ -19,7 +19,7 @@ User prompt structure:
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .workflow_prompts import (
     WORKFLOW_ACTION_DEFINITIONS_PROVIDER,
@@ -155,6 +155,7 @@ def create_phase3_provider_user_prompt(
             adj_summary.append({
                 "line_number": l.line_number,
                 "adjudication_status": getattr(l, "adjudication_status", None),
+                "claims_review_level": getattr(l, "claims_review_level", 0),
                 "decision_reason": getattr(l, "decision_reason", None),
             })
         current_state_lines.append(f"Current line statuses: {json.dumps(adj_summary, ensure_ascii=False)}")
@@ -211,6 +212,94 @@ def create_phase3_provider_user_prompt(
     )
 
     return "".join(parts)
+
+
+def create_phase3_provider_action_prompt(
+    state: object,
+    payor_response: Dict[str, Any],
+    *,
+    provider_params: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, str]:
+    """
+    Provider prompt for deciding action AFTER seeing payor's response in Phase 3.
+    Returns (system_prompt, user_prompt).
+    """
+    params = provider_params or {}
+
+    # System prompt with strategy
+    strategy_block = ""
+    strategy = params.get("strategy")
+    if strategy and strategy in PROVIDER_STRATEGY_GUIDANCE:
+        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PROVIDER_STRATEGY_GUIDANCE[strategy]}\n"
+
+    system_prompt = (
+        "PHASE 3 PROVIDER ACTION DECISION\n"
+        "You are the provider team deciding how to respond to the payor's claim adjudication.\n"
+        f"{strategy_block}"
+        "Respond only with valid JSON matching the schema.\n"
+        f"{WORKFLOW_ACTION_DEFINITIONS}"
+    )
+
+    # Render current line statuses after payor response was applied
+    lines = getattr(state, "service_lines", []) or []
+    delivered_lines = [l for l in lines if getattr(l, "delivered", False)]
+
+    line_status_parts = ["CURRENT LINE STATUSES (after payor decision):"]
+    for l in delivered_lines:
+        ln = getattr(l, "line_number", "?")
+        code = getattr(l, "procedure_code", "")
+        name = getattr(l, "service_name", "")
+        status = getattr(l, "adjudication_status", None) or "not_reviewed"
+        level = getattr(l, "claims_review_level", 0)
+        reason = getattr(l, "decision_reason", "") or ""
+        accepted = getattr(l, "accepted_modification", False)
+
+        line_str = f"- line {ln}: {code} {name} | status={status} | level={level}"
+        if status == "modified":
+            line_str += f" | accepted={accepted}"
+        if reason:
+            line_str += f" | reason={reason[:80]}"
+        line_status_parts.append(line_str)
+
+    line_status_block = "\n".join(line_status_parts)
+
+    # Include payor's response summary
+    payor_adjs = payor_response.get("line_adjudications", [])
+    payor_summary_parts = ["PAYOR'S DECISION THIS TURN:"]
+    for adj in payor_adjs:
+        if isinstance(adj, dict):
+            ln = adj.get("line_number", "?")
+            st = adj.get("adjudication_status", "?")
+            reason = adj.get("decision_reason", "")[:80] if adj.get("decision_reason") else ""
+            payor_summary_parts.append(f"- line {ln}: {st} | {reason}")
+    payor_summary_block = "\n".join(payor_summary_parts)
+
+    user_prompt = (
+        f"PHASE 3 PROVIDER ACTION PROMPT\n\n"
+        f"{line_status_block}\n\n"
+        f"{payor_summary_block}\n\n"
+        "TASK: Choose ONE action and provide per-line details where required.\n\n"
+        "ACTION OPTIONS:\n"
+        "1. CONTINUE - proceed without escalating review level\n"
+        "   REQUIRED: For each non-approved line, include in 'lines' array:\n"
+        "   - pending_info lines: {\"line_number\": X, \"intent\": \"PROVIDE_DOCS\"}\n"
+        "   - modified lines you accept: {\"line_number\": X, \"intent\": \"ACCEPT_MODIFY\"}\n"
+        "   (approved lines need no entry)\n\n"
+        "2. APPEAL - escalate denied/modified lines to next review level\n"
+        "   REQUIRED: For each line you appeal, include in 'lines' array:\n"
+        "   - {\"line_number\": X, \"to_level\": <current_level + 1>}\n"
+        "   Use when you DISAGREE with the payment decision.\n\n"
+        "3. ABANDON - stop pursuit entirely\n"
+        "   REQUIRED: Set abandon_mode to WRITE_OFF.\n\n"
+        "INTENT VALUES (only 2 options, use exactly as shown):\n"
+        "- \"PROVIDE_DOCS\" - for pending_info lines\n"
+        "- \"ACCEPT_MODIFY\" - for modified lines\n\n"
+        f"{PROVIDER_ACTION_SCHEMA}\n"
+        "Return only valid JSON:\n"
+        f"{PROVIDER_ACTION_JSON}\n"
+    )
+
+    return system_prompt, user_prompt
 
 
 def create_phase3_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = None) -> str:
