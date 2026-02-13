@@ -45,7 +45,7 @@ LEVEL_NAME_MAP: Dict[int, str] = {k: str(v["name"]) for k, v in WORKFLOW_LEVELS.
 
 
 # strategy modes for game-theoretic experiment
-VALID_STRATEGY_MODES: Set[str] = {"cooperate", "defect"}
+VALID_STRATEGY_MODES: Set[str] = {"cooperate", "defect", "default"}
 
 PROVIDER_STRATEGY_GUIDANCE: Dict[str, str] = {
     "cooperate": (
@@ -61,6 +61,7 @@ PROVIDER_STRATEGY_GUIDANCE: Dict[str, str] = {
         "risk of denial. You may include additional supportive line items if they are "
         "remotely justifiable from provided facts; do not fabricate facts."
     ),
+    "default": "",
 }
 
 PAYOR_STRATEGY_GUIDANCE: Dict[str, str] = {
@@ -77,4 +78,5 @@ PAYOR_STRATEGY_GUIDANCE: Dict[str, str] = {
         "choose deny or modify/downgrade. When permitted, demand stricter documentation and interpret "
         "ambiguity against approval. Prefer modify/downgrade or deny over approve when evidence is borderline."
     ),
+    "default": "",
 }

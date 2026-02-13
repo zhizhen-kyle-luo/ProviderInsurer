@@ -1,20 +1,24 @@
 """
 experiment runner for MASH simulation
 
-2x2 game-theoretic experimental design:
-- CP_CI: provider cooperate, insurer cooperate
-- CP_DI: provider cooperate, insurer defect
-- DP_CI: provider defect, insurer cooperate
-- DP_DI: provider defect, insurer defect
+3x3 game-theoretic experimental design:
+  provider (rows): cooperate (C), defect (D), default (N)
+  insurer (cols):  cooperate (C), defect (D), default (N)
+
+conditions:
+  CP_CI  CP_DI  CP_NI
+  DP_CI  DP_DI  DP_NI
+  NP_CI  NP_DI  NP_NI
 
 strategy definitions:
 - cooperate: good-faith, access-preserving; minimum clinically defensible
 - defect: strict/aggressive; maximum plausibly defensible
+- default: no strategy guidance; LLM decides on its own
 
 usage:
   python examples/run_experiment.py --quick
   python examples/run_experiment.py --case infliximab_crohns_2015
-  python examples/run_experiment.py --conditions CP_CI DP_DI
+  python examples/run_experiment.py --conditions CP_CI DP_DI NP_NI
 """
 import sys
 import os
@@ -33,12 +37,17 @@ from src.utils.environment import Environment
 from src.data.case_registry import get_case, list_cases
 from src.data.policies.infliximab_policies import InfliximabCrohnsPolicies
 
-# 2x2 game-theoretic experiment configs
+# 3x3 game-theoretic experiment configs
 CONFIGS = {
     'CP_CI': {'name': 'Cooperate-Cooperate', 'provider_strategy': 'cooperate', 'payor_strategy': 'cooperate'},
     'CP_DI': {'name': 'Cooperate-Defect', 'provider_strategy': 'cooperate', 'payor_strategy': 'defect'},
+    'CP_NI': {'name': 'Cooperate-Default', 'provider_strategy': 'cooperate', 'payor_strategy': 'default'},
     'DP_CI': {'name': 'Defect-Cooperate', 'provider_strategy': 'defect', 'payor_strategy': 'cooperate'},
     'DP_DI': {'name': 'Defect-Defect', 'provider_strategy': 'defect', 'payor_strategy': 'defect'},
+    'DP_NI': {'name': 'Defect-Default', 'provider_strategy': 'defect', 'payor_strategy': 'default'},
+    'NP_CI': {'name': 'Default-Cooperate', 'provider_strategy': 'default', 'payor_strategy': 'cooperate'},
+    'NP_DI': {'name': 'Default-Defect', 'provider_strategy': 'default', 'payor_strategy': 'defect'},
+    'NP_NI': {'name': 'Default-Default', 'provider_strategy': 'default', 'payor_strategy': 'default'},
 }
 
 # infliximab case policies

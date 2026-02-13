@@ -84,11 +84,8 @@ def create_phase2_provider_system_prompt(provider_params: Optional[Dict[str, Any
     """
     params = provider_params or {}
 
-    # Strategy guidance (behavioral modifier)
-    strategy_block = ""
-    strategy = params.get("strategy")
-    if strategy and strategy in PROVIDER_STRATEGY_GUIDANCE:
-        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PROVIDER_STRATEGY_GUIDANCE[strategy]}\n"
+    guidance = PROVIDER_STRATEGY_GUIDANCE[params["strategy"]]
+    strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
 
     # Policy/clinical guidelines (domain knowledge)
     policy_block = ""
@@ -324,11 +321,8 @@ def create_phase2_provider_action_prompt(
     """
     params = provider_params or {}
 
-    # System prompt with strategy
-    strategy_block = ""
-    strategy = params.get("strategy")
-    if strategy and strategy in PROVIDER_STRATEGY_GUIDANCE:
-        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PROVIDER_STRATEGY_GUIDANCE[strategy]}\n"
+    guidance = PROVIDER_STRATEGY_GUIDANCE[params["strategy"]]
+    strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
 
     system_prompt = (
         "PHASE 2 PROVIDER ACTION DECISION\n"
@@ -419,11 +413,8 @@ def create_phase2_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = N
     """
     params = payor_params or {}
 
-    # Strategy guidance (behavioral modifier)
-    strategy_block = ""
-    strategy = params.get("strategy")
-    if strategy and strategy in PAYOR_STRATEGY_GUIDANCE:
-        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PAYOR_STRATEGY_GUIDANCE[strategy]}\n"
+    guidance = PAYOR_STRATEGY_GUIDANCE[params["strategy"]]
+    strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
 
     # Coverage policy (domain knowledge)
     policy_block = ""
