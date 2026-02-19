@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from src.models.state import EncounterState
 from src.models.metrics import FrictionMetrics, PolicyReference, EnvironmentConfig
 from src.utils.audit_logger import AuditLogger
@@ -19,7 +19,7 @@ def run_phase4(
     if audit_logger:
         audit_logger.log(phase=state.phase, turn=0, kind="phase_start", payload={})
 
-    metrics = _calculate_financial_metrics(state)
+    metrics = _calculate_metrics(state)
 
     # add policy references
     if provider_params and provider_params.get("policy"):

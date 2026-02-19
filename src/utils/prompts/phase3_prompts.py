@@ -48,10 +48,8 @@ def _normalize_patient_visible_data(pv: object) -> Dict[str, Any]:
 
 def create_phase3_provider_system_prompt(provider_params: Optional[Dict[str, Any]] = None) -> str:
     params = provider_params or {}
-    strategy_block = ""
-    strategy = params.get("strategy")
-    if strategy and strategy in PROVIDER_STRATEGY_GUIDANCE:
-        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PROVIDER_STRATEGY_GUIDANCE[strategy]}\n"
+    guidance = PROVIDER_STRATEGY_GUIDANCE[params["strategy"]]
+    strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
 
     return (
         "PHASE 3 PROVIDER SYSTEM PROMPT\n"
@@ -155,7 +153,7 @@ def create_phase3_provider_user_prompt(
             adj_summary.append({
                 "line_number": l.line_number,
                 "adjudication_status": getattr(l, "adjudication_status", None),
-                "claims_review_level": getattr(l, "claims_review_level", 0),
+                "claims_review_level": getattr(l, "current_review_level", 0),
                 "decision_reason": getattr(l, "decision_reason", None),
             })
         current_state_lines.append(f"Current line statuses: {json.dumps(adj_summary, ensure_ascii=False)}")
@@ -226,11 +224,8 @@ def create_phase3_provider_action_prompt(
     """
     params = provider_params or {}
 
-    # System prompt with strategy
-    strategy_block = ""
-    strategy = params.get("strategy")
-    if strategy and strategy in PROVIDER_STRATEGY_GUIDANCE:
-        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PROVIDER_STRATEGY_GUIDANCE[strategy]}\n"
+    guidance = PROVIDER_STRATEGY_GUIDANCE[params["strategy"]]
+    strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
 
     system_prompt = (
         "PHASE 3 PROVIDER ACTION DECISION\n"
@@ -250,7 +245,7 @@ def create_phase3_provider_action_prompt(
         code = getattr(l, "procedure_code", "")
         name = getattr(l, "service_name", "")
         status = getattr(l, "adjudication_status", None) or "not_reviewed"
-        level = getattr(l, "claims_review_level", 0)
+        level = getattr(l, "current_review_level", 0)
         reason = getattr(l, "decision_reason", "") or ""
         accepted = getattr(l, "accepted_modification", False)
 
@@ -304,10 +299,8 @@ def create_phase3_provider_action_prompt(
 
 def create_phase3_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = None) -> str:
     params = payor_params or {}
-    strategy_block = ""
-    strategy = params.get("strategy")
-    if strategy and strategy in PAYOR_STRATEGY_GUIDANCE:
-        strategy_block = f"\nSTRATEGY GUIDANCE:\n{PAYOR_STRATEGY_GUIDANCE[strategy]}\n"
+    guidance = PAYOR_STRATEGY_GUIDANCE[params["strategy"]]
+    strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
 
     return (
         "PHASE 3 PAYOR SYSTEM PROMPT\n"

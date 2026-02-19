@@ -497,12 +497,9 @@ class Phase2Adapter:
             })
 
         params = _provider_params(state, self.provider_params)
-        strategy = params.get("strategy", "")
-        strategy_block = ""
-        if strategy:
-            from src.utils.prompts.config import PROVIDER_STRATEGY_GUIDANCE
-            if strategy in PROVIDER_STRATEGY_GUIDANCE:
-                strategy_block = f"\nSTRATEGY GUIDANCE:\n{PROVIDER_STRATEGY_GUIDANCE[strategy]}\n"
+        from src.utils.prompts.config import PROVIDER_STRATEGY_GUIDANCE
+        guidance = PROVIDER_STRATEGY_GUIDANCE[params["strategy"]]
+        strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
 
         system_prompt = (
             "PHASE 2 PROVIDER ACTION DECISION\n"
