@@ -353,6 +353,7 @@ def apply_phase3_insurer_line_adjudications(
 
         line.adjudication_status = status
         line.decision_reason = adj.get("decision_reason")
+        line.awaiting_response_at_level = None  # insurer has responded
 
         if status == "pending_info":
             from src.utils.prompts.config import MAX_REQUEST_INFO_PER_LEVEL
@@ -414,9 +415,11 @@ def _is_line_terminal_phase3(line) -> bool:
     if not getattr(line, "delivered", False):
         return True  # non-delivered lines are terminal (nothing to claim)
 
+    if getattr(line, "awaiting_response_at_level", None) is not None:
+        return False
+
     adj_status = getattr(line, "adjudication_status", None)
     if adj_status is None:
-        # Not yet adjudicated - need to submit claim first
         return False
     status = str(adj_status).lower()
 
@@ -428,15 +431,13 @@ def _is_line_terminal_phase3(line) -> bool:
             return True
         if getattr(line, "abandoned", False):
             return True
-        if int(getattr(line, "current_review_level", 0)) >= 2:
-            return True
+        # provider must still choose (even at level 2)
         return False
 
     if status == "denied":
         if getattr(line, "abandoned", False):
             return True
-        if int(getattr(line, "current_review_level", 0)) >= 2:
-            return True
+        # provider must still choose WRITE_OFF (even at level 2)
         return False
 
     # pending_info or no status yet
@@ -465,6 +466,35 @@ def apply_phase3_provider_bundle_action(
         raise ValueError("provider_action missing action")
 
     action = str(provider_action["action"]).upper()
+
+    # =========================================================================
+    # RESUBMIT: Bundle-level action - withdraw all claims, start fresh
+    # =========================================================================
+    if action == "RESUBMIT":
+        resubmit_reason = provider_action.get("resubmit_reason", "")
+
+        withdrawn_lines = [
+            {
+                "line_number": l.line_number,
+                "procedure_code": l.procedure_code,
+                "service_name": l.service_name,
+                "adjudication_status": l.adjudication_status,
+                "decision_reason": l.decision_reason,
+            }
+            for l in state.service_lines
+            if getattr(l, "delivered", False)
+        ]
+
+        state.service_lines = []
+        state.current_level = 0
+
+        deltas.append({
+            "kind": "phase3_provider_resubmit",
+            "resubmit_reason": resubmit_reason,
+            "withdrawn_lines": withdrawn_lines,
+        })
+
+        return deltas, False, "RESUBMIT"
 
     # =========================================================================
     # LINE_ACTIONS: Per-line actions (Phase 3 uses same model as Phase 2)
@@ -522,6 +552,7 @@ def apply_phase3_provider_bundle_action(
                     raise ValueError(f"appeal must advance by +1: line={ln} cur={cur} to={to_level}")
                 line.current_review_level = to_level
                 line.pend_round = 0
+                line.awaiting_response_at_level = to_level
                 deltas.append({"kind": "phase3_appeal_advanced", "line_number": ln, "from_level": cur, "to_level": to_level})
 
             elif line_action == "ABANDON":
@@ -542,4 +573,4 @@ def apply_phase3_provider_bundle_action(
         all_terminal = _all_lines_terminal_phase3(state)
         return deltas, all_terminal, "ALL_TERMINAL" if all_terminal else None
 
-    raise ValueError(f"unknown provider action: {action}. Must be LINE_ACTIONS in Phase 3")
+    raise ValueError(f"unknown provider action: {action}. Must be RESUBMIT or LINE_ACTIONS")

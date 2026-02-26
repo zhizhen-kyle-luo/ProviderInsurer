@@ -19,7 +19,7 @@ User prompt structure:
 """
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from .workflow_prompts import (
     WORKFLOW_ACTION_DEFINITIONS_PROVIDER,
@@ -46,25 +46,58 @@ def _normalize_patient_visible_data(pv: object) -> Dict[str, Any]:
     return pv
 
 
+def _render_policy_data(data: Dict[str, Any], indent: int = 0) -> str:
+    lines = []
+    prefix = "  " * indent
+    for k, v in data.items():
+        if isinstance(v, dict):
+            lines.append(f"{prefix}{k}:")
+            lines.append(_render_policy_data(v, indent + 1))
+        elif isinstance(v, list):
+            lines.append(f"{prefix}{k}:")
+            for item in v:
+                if isinstance(item, dict):
+                    lines.append(_render_policy_data(item, indent + 1))
+                else:
+                    lines.append(f"{prefix}  - {item}")
+        else:
+            lines.append(f"{prefix}{k}: {v}")
+    return "\n".join(lines)
+
+
 def create_phase3_provider_system_prompt(provider_params: Optional[Dict[str, Any]] = None) -> str:
     params = provider_params or {}
     guidance = PROVIDER_STRATEGY_GUIDANCE[params["strategy"]]
     strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
 
+    policy_block = ""
+    if params.get("policy"):
+        policy = params["policy"]
+        policy_block = (
+            "\nCLINICAL GUIDELINES:\n"
+            f"Source: {policy.get('issuer', 'Unknown')}\n"
+        )
+        data = policy.get("content", {}).get("data", {})
+        if data:
+            policy_block += _render_policy_data(data) + "\n"
+
     return (
-        "PHASE 3 PROVIDER SYSTEM PROMPT\n"
-        "You are preparing a claim submission for services delivered.\n"
-        "Include only delivered service lines with authorization numbers when available.\n"
+        "You are a hospital provider team submitting claims for delivered services.\n"
+        "Your goal: get delivered services paid by matching claims to authorization and documentation.\n"
         "\nADMINISTRATIVE COST CONSIDERATION:\n"
         "Claim submission costs ~$6 (manual) to ~$3 (electronic) per claim (CAQH 2023). "
         "Fighting a denied claim costs ~$57 in staff time (Premier 2023). "
-        "Corrected claims must be filed within 60-120 days of denial.\n"
-        "Weigh expected recovery against these costs when deciding whether to appeal.\n"
+        "Corrected claims must be filed within 60-120 days of denial.\n\n"
+        "RESUBMIT only when:\n"
+        "- You made an error (wrong codes, incorrect authorization references)\n"
+        "- You CAN correct what caused the denial\n\n"
+        "APPEAL or ABANDON when:\n"
+        "- Payor misapplied policy or ignored documentation already provided\n"
+        "- Prior resubmission was denied for the same reason\n\n"
+        "If the underlying facts cannot change, resubmitting will fail again.\n"
         f"{strategy_block}"
-        "Respond only with valid JSON that matches the schema described.\n"
-        "Be precise and concise.\n"
-        f"{PHASE3_PROVIDER_CLAIM_SCHEMA}\n"
-        f"{WORKFLOW_ACTION_DEFINITIONS_PROVIDER}"
+        f"{policy_block}"
+        f"\n{WORKFLOW_ACTION_DEFINITIONS_PROVIDER}"
     )
 
 
@@ -167,9 +200,10 @@ def create_phase3_provider_user_prompt(
         )
     else:
         task_instruction = (
-            "TASK: Respond to payor's adjudication.\n"
-            "- For pending_info lines: resubmit with requested documentation\n"
-            "- For denied/modified lines: appeal or write off as appropriate\n"
+            "TASK: Resubmit the claim with lines that require action.\n"
+            "- For pending_info lines: include with documentation addressing requested items\n"
+            "- For denied lines: include only if appealing with corrected billing\n"
+            "- Do NOT include approved lines (already adjudicated)\n"
         )
 
     # Build prompt: TASK first, OUTPUT FORMAT last
@@ -212,111 +246,35 @@ def create_phase3_provider_user_prompt(
     return "".join(parts)
 
 
-def create_phase3_provider_action_prompt(
-    state: object,
-    payor_response: Dict[str, Any],
-    *,
-    provider_params: Optional[Dict[str, Any]] = None,
-) -> Tuple[str, str]:
-    """
-    Provider prompt for deciding action AFTER seeing payor's response in Phase 3.
-    Returns (system_prompt, user_prompt).
-    """
-    params = provider_params or {}
-
-    guidance = PROVIDER_STRATEGY_GUIDANCE[params["strategy"]]
-    strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
-
-    system_prompt = (
-        "PHASE 3 PROVIDER ACTION DECISION\n"
-        "You are the provider team deciding how to respond to the payor's claim adjudication.\n"
-        f"{strategy_block}"
-        "Respond only with valid JSON matching the schema.\n"
-        f"{WORKFLOW_ACTION_DEFINITIONS}"
-    )
-
-    # Render current line statuses after payor response was applied
-    lines = getattr(state, "service_lines", []) or []
-    delivered_lines = [l for l in lines if getattr(l, "delivered", False)]
-
-    line_status_parts = ["CURRENT LINE STATUSES (after payor decision):"]
-    for l in delivered_lines:
-        ln = getattr(l, "line_number", "?")
-        code = getattr(l, "procedure_code", "")
-        name = getattr(l, "service_name", "")
-        status = getattr(l, "adjudication_status", None) or "not_reviewed"
-        level = getattr(l, "current_review_level", 0)
-        reason = getattr(l, "decision_reason", "") or ""
-        accepted = getattr(l, "accepted_modification", False)
-
-        line_str = f"- line {ln}: {code} {name} | status={status} | level={level}"
-        if status == "modified":
-            line_str += f" | accepted={accepted}"
-        if reason:
-            line_str += f" | reason={reason[:80]}"
-        line_status_parts.append(line_str)
-
-    line_status_block = "\n".join(line_status_parts)
-
-    # Include payor's response summary
-    payor_adjs = payor_response.get("line_adjudications", [])
-    payor_summary_parts = ["PAYOR'S DECISION THIS TURN:"]
-    for adj in payor_adjs:
-        if isinstance(adj, dict):
-            ln = adj.get("line_number", "?")
-            st = adj.get("adjudication_status", "?")
-            reason = adj.get("decision_reason", "")[:80] if adj.get("decision_reason") else ""
-            payor_summary_parts.append(f"- line {ln}: {st} | {reason}")
-    payor_summary_block = "\n".join(payor_summary_parts)
-
-    user_prompt = (
-        f"PHASE 3 PROVIDER ACTION PROMPT\n\n"
-        f"{line_status_block}\n\n"
-        f"{payor_summary_block}\n\n"
-        "TASK: Choose ONE action and provide per-line details where required.\n\n"
-        "ACTION OPTIONS:\n"
-        "1. CONTINUE - proceed without escalating review level\n"
-        "   REQUIRED: For each non-approved line, include in 'lines' array:\n"
-        "   - pending_info lines: {\"line_number\": X, \"intent\": \"PROVIDE_DOCS\"}\n"
-        "   - modified lines you accept: {\"line_number\": X, \"intent\": \"ACCEPT_MODIFY\"}\n"
-        "   (approved lines need no entry)\n\n"
-        "2. APPEAL - escalate denied/modified lines to next review level\n"
-        "   REQUIRED: For each line you appeal, include in 'lines' array:\n"
-        "   - {\"line_number\": X, \"to_level\": <current_level + 1>}\n"
-        "   Use when you DISAGREE with the payment decision.\n\n"
-        "3. ABANDON - stop pursuit entirely\n"
-        "   REQUIRED: Set abandon_mode to WRITE_OFF.\n\n"
-        "INTENT VALUES (only 2 options, use exactly as shown):\n"
-        "- \"PROVIDE_DOCS\" - for pending_info lines\n"
-        "- \"ACCEPT_MODIFY\" - for modified lines\n\n"
-        f"{PROVIDER_ACTION_SCHEMA}\n"
-        "Return only valid JSON:\n"
-        f"{PROVIDER_ACTION_JSON}\n"
-    )
-
-    return system_prompt, user_prompt
-
-
 def create_phase3_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = None) -> str:
     params = payor_params or {}
     guidance = PAYOR_STRATEGY_GUIDANCE[params["strategy"]]
     strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
 
+    policy_block = ""
+    if params.get("policy"):
+        policy = params["policy"]
+        policy_block = (
+            "\nCOVERAGE POLICY:\n"
+            f"Source: {policy.get('issuer', 'Unknown')}\n"
+        )
+        data = policy.get("content", {}).get("data", {})
+        if data:
+            policy_block += _render_policy_data(data) + "\n"
+
     return (
-        "PHASE 3 PAYOR SYSTEM PROMPT\n"
-        "You are adjudicating a clinical claim.\n"
-        "Focus on match between billed services and documentation.\n"
+        "You are an insurance claims adjudication team processing a clinical claim.\n"
+        "Your goal: render payment decisions based on coverage policy, authorization status, and clinical documentation.\n"
         "\nADMINISTRATIVE COST CONSIDERATION:\n"
         "Claim processing costs ~$1 (manual) to ~$0.10 (electronic) per claim (CAQH 2023). "
         "Overturning a denial costs ~$40-50 per claim (Advisory Board). "
         "Apply reasonableness standard:\n"
         "- Do not request documentation already submitted\n"
         "- Avoid repeated pends for the same item\n"
+        "- If criteria cannot be met, deny clearly rather than pend indefinitely\n"
         f"{strategy_block}"
-        "Return only valid JSON matching the schema for claim response.\n"
-        "Be concise and criteria-based.\n"
-        f"{PHASE3_PAYOR_RESPONSE_SCHEMA}\n"
-        f"{WORKFLOW_ACTION_DEFINITIONS_PAYOR}"
+        f"{policy_block}"
+        f"\n{WORKFLOW_ACTION_DEFINITIONS_PAYOR}"
     )
 
 

@@ -7,9 +7,9 @@
     "age": 60,
     "sex": "F",
     "admission_source": "",
-    "chief_complaint": "10-day history of small intestinal stenosis/stricture with abdominal pain; Crohn's symptoms include watery diarrhea (~3-4/day)",
+    "chief_complaint": "10-day history of small intestinal stenosis/stricture with abdominal pain; current Crohn's symptoms include watery diarrhea (~2-3/day on mesalazine)",
     "medical_history": [
-      "Crohn's disease (diagnosed 2015)",
+      "Crohn's disease (diagnosed 2015; original presentation: abdominal pain and watery diarrhea 3-4/day)",
       "Small intestinal stenosis",
       "Colonoscopy attempted ~10 days before admission; colonoscope could not be advanced due to secondary intestinal stenosis",
       "Biopsy and three-dimensional CT of the small intestine confirmed Crohn's disease",

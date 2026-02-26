@@ -10,7 +10,6 @@ from src.utils.prompts.phase3_prompts import (
     create_phase3_payor_user_prompt,
     create_phase3_provider_system_prompt,
     create_phase3_provider_user_prompt,
-    create_phase3_provider_action_prompt,
 )
 from src.sim.transitions import apply_phase3_insurer_line_adjudications, apply_phase3_provider_bundle_action
 from src.utils.json_parsing import extract_json_from_text
@@ -260,6 +259,84 @@ def _prior_round_summaries(state) -> List[Dict[str, Any]]:
     return summaries
 
 
+def build_phase3_provider_action_prompts(
+    state, provider_params: Optional[Dict[str, Any]] = None
+) -> Dict[str, str]:
+    """Build system_prompt and user_prompt for Phase 3 provider action decision (for audit rewriter)."""
+    import json
+    from src.utils.prompts.schema_definitions import PROVIDER_ACTION_SCHEMA, PROVIDER_ACTION_JSON
+
+    lines = state.service_lines
+    if lines is None:
+        raise ValueError("state.service_lines is None")
+    level = _current_level(state)
+    params = _provider_params(state, provider_params)
+    from src.utils.prompts.config import PROVIDER_STRATEGY_GUIDANCE
+    guidance = PROVIDER_STRATEGY_GUIDANCE.get(params.get("strategy"), "") or ""
+    strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
+
+    abandon_action = "ABANDON (mode=WRITE_OFF)"
+    line_statuses = []
+    for l in lines:
+        if not getattr(l, "delivered", False):
+            continue
+        if getattr(l, "adjudication_status", None) is None:
+            raise ValueError(f"line {getattr(l, 'line_number')} has no adjudication_status")
+        status = str(l.adjudication_status).lower()
+        line_level = int(getattr(l, "current_review_level", 0))
+        valid_actions = []
+        if status == "approved":
+            valid_actions = ["(no action needed - already terminal)"]
+        elif status == "modified":
+            valid_actions = ["ACCEPT_MODIFY", abandon_action] if line_level >= 2 else ["ACCEPT_MODIFY", "APPEAL (to_level required)", abandon_action]
+        elif status == "pending_info":
+            valid_actions = ["PROVIDE_DOCS", abandon_action]
+        elif status == "denied":
+            valid_actions = [f"{abandon_action} - level 2 is final, cannot appeal further"] if line_level >= 2 else ["APPEAL (to_level required)", abandon_action]
+        else:
+            valid_actions = []
+        line_statuses.append({
+            "line_number": l.line_number,
+            "procedure_code": getattr(l, "procedure_code", ""),
+            "service_name": getattr(l, "service_name", ""),
+            "adjudication_status": l.adjudication_status,
+            "decision_reason": getattr(l, "decision_reason", None),
+            "current_review_level": line_level,
+            "requested_documents": list(getattr(l, "requested_documents", None) or []),
+            "valid_actions": valid_actions,
+        })
+
+    system_prompt = (
+        "PHASE 3 PROVIDER ACTION DECISION\n"
+        "You are a hospital provider team deciding how to respond to the claim adjudication.\n"
+        f"{strategy_block}"
+        f"{PROVIDER_ACTION_SCHEMA}\n"
+        "Phase 3 notes:\n"
+        "- ABANDON uses WRITE_OFF mode only (write off unpaid claim amount)\n"
+        "- RESUBMIT = corrected claim submission; withdraws current claim and resubmits at level 0\n"
+        "Respond only with valid JSON matching the schema."
+    )
+    user_prompt = (
+        f"Current Review Level: {level}\n"
+        f"Max Appeal Level: 2 (ALJ - final)\n\n"
+        "CURRENT CLAIM LINE STATUSES AFTER PAYOR RESPONSE:\n"
+        f"{json.dumps(line_statuses, indent=2)}\n\n"
+        "DECISION:\n"
+        "Choose ONE of:\n\n"
+        "1. RESUBMIT - submit a corrected claim if YOUR original had errors (wrong codes, incorrect auth refs)\n"
+        "   Withdraws current claim, resubmits corrected version at level 0\n\n"
+        "2. LINE_ACTIONS (per-line) - specify action for each non-approved delivered line:\n"
+        "   - approved lines: omit (already terminal)\n"
+        "   - modified lines: ACCEPT_MODIFY | APPEAL | ABANDON\n"
+        "   - pending_info lines: PROVIDE_DOCS | ABANDON\n"
+        "   - denied lines: APPEAL | ABANDON\n\n"
+        "ABANDON mode in Phase 3: WRITE_OFF (write off unpaid claim amount)\n"
+        "APPEAL requires to_level (must be current_level + 1, max 2)\n\n"
+        f"Return only valid JSON:\n{PROVIDER_ACTION_JSON}"
+    )
+    return {"system_prompt": system_prompt, "user_prompt": user_prompt}
+
+
 class Phase3Adapter:
     phase_name = "phase_3_claims"
 
@@ -433,15 +510,22 @@ class Phase3Adapter:
             if l.adjudication_status is None:
                 raise ValueError(f"line {l.line_number} has no adjudication_status")
             status = str(l.adjudication_status).lower()
+            line_level = int(l.current_review_level)
             valid_actions = []
             if status == "approved":
                 valid_actions = ["(no action needed - already terminal)"]
             elif status == "modified":
-                valid_actions = ["ACCEPT_MODIFY", "APPEAL (to_level required)", abandon_action]
+                if line_level >= 2:
+                    valid_actions = ["ACCEPT_MODIFY", abandon_action]
+                else:
+                    valid_actions = ["ACCEPT_MODIFY", "APPEAL (to_level required)", abandon_action]
             elif status == "pending_info":
                 valid_actions = ["PROVIDE_DOCS", abandon_action]
             elif status == "denied":
-                valid_actions = ["APPEAL (to_level required)", abandon_action]
+                if line_level >= 2:
+                    valid_actions = [f"{abandon_action} - level 2 is final, cannot appeal further"]
+                else:
+                    valid_actions = ["APPEAL (to_level required)", abandon_action]
 
             line_statuses.append({
                 "line_number": l.line_number,
@@ -466,7 +550,9 @@ class Phase3Adapter:
             "You are a hospital provider team deciding how to respond to the claim adjudication.\n"
             f"{strategy_block}"
             f"{PROVIDER_ACTION_SCHEMA}\n"
-            "Note: In Phase 3, ABANDON uses WRITE_OFF mode only.\n"
+            "Phase 3 notes:\n"
+            "- ABANDON uses WRITE_OFF mode only (write off unpaid claim amount)\n"
+            "- RESUBMIT = corrected claim submission; withdraws current claim and resubmits at level 0\n"
             "Respond only with valid JSON matching the schema."
         )
 
@@ -477,7 +563,10 @@ class Phase3Adapter:
             "CURRENT CLAIM LINE STATUSES AFTER PAYOR RESPONSE:\n"
             f"{json.dumps(line_statuses, indent=2)}\n\n"
             "DECISION:\n"
-            "Use LINE_ACTIONS to specify action for each non-approved delivered line:\n"
+            "Choose ONE of:\n\n"
+            "1. RESUBMIT - submit a corrected claim if YOUR original had errors (wrong codes, incorrect auth refs)\n"
+            "   Withdraws current claim, resubmits corrected version at level 0\n\n"
+            "2. LINE_ACTIONS (per-line) - specify action for each non-approved delivered line:\n"
             "   - approved lines: omit (already terminal)\n"
             "   - modified lines: ACCEPT_MODIFY | APPEAL | ABANDON\n"
             "   - pending_info lines: PROVIDE_DOCS | ABANDON\n"

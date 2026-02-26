@@ -39,8 +39,9 @@ PAYOR_DECISION_DEFINITIONS = (
 # Provider action definitions - only provider needs this
 PROVIDER_ACTION_DEFINITIONS = (
     "Provider action types:\n"
-    "- RESUBMIT (bundle-level): withdraw entire PA/claim, start fresh at level 0.\n"
-    "  Use for provider-side errors (wrong codes, missing diagnoses).\n"
+    "- RESUBMIT (bundle-level): withdraw and resubmit a corrected claim/PA at level 0.\n"
+    "  In claims (Phase 3) this is a corrected claim (frequency code 7); in PA (Phase 2) a new request.\n"
+    "  Use for provider-side errors (wrong codes, missing diagnoses, incorrect auth references).\n"
     "- LINE_ACTIONS (per-line): specify action for each non-approved line.\n\n"
     "Per-line actions (within LINE_ACTIONS):\n"
     "- ACCEPT_MODIFY: accept payor's modification (for modified lines)\n"

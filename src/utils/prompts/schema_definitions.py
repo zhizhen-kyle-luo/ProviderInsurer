@@ -93,12 +93,13 @@ Each non-approved line requires a decision. Approved lines are already terminal 
 
 TWO ACTION MODES:
 
-1. RESUBMIT (bundle-level) - Withdraw entire PA, start fresh at level 0
+1. RESUBMIT (bundle-level) - Withdraw and resubmit at level 0
+   In claims (Phase 3) this is a corrected claim (frequency code 7).
+   In PA (Phase 2) this is a new/corrected authorization request.
    Use when YOUR submission had errors that caused denials:
-   - Wrong procedure codes, missing diagnoses, insufficient documentation
-   - Want to request DIFFERENT services than originally submitted
+   - Wrong procedure codes, missing diagnoses, incorrect authorization references
    Required: resubmit_reason
-   NOT a formal appeal - payor treats it as a new request
+   NOT a formal appeal - does not consume an appeal level
    Strategic: Avoids burning appeal levels on fixable errors
 
 2. LINE_ACTIONS (per-line) - Specify action for each non-approved line
@@ -120,6 +121,9 @@ TWO ACTION MODES:
 ABANDON modes (Phase 2):
 - NO_TREAT: Patient does not receive service
 - TREAT_ANYWAY: Deliver service anyway, provider absorbs cost
+
+ABANDON modes (Phase 3):
+- WRITE_OFF: Write off unpaid claim amount
 
 APPEAL levels:
 - to_level must be current_level + 1
