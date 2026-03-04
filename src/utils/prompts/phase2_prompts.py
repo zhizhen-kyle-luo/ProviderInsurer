@@ -99,6 +99,18 @@ def create_phase2_provider_system_prompt(provider_params: Optional[Dict[str, Any
         if data:
             policy_block += _render_policy_data(data) + "\n"
 
+    # symmetric context: provider also sees payor's coverage policy
+    coverage_policy_block = ""
+    if params.get("coverage_policy"):
+        coverage_policy = params["coverage_policy"]
+        coverage_policy_block = (
+            "\nPAYER COVERAGE POLICY (for reference when constructing your request):\n"
+            f"Source: {coverage_policy.get('issuer', 'Unknown')}\n"
+        )
+        data = coverage_policy.get("content", {}).get("data", {})
+        if data:
+            coverage_policy_block += _render_policy_data(data) + "\n"
+
     return (
         # WHO you are
         "You are a hospital provider team preparing an authorization request for the insurer.\n"
@@ -117,6 +129,7 @@ def create_phase2_provider_system_prompt(provider_params: Optional[Dict[str, Any
         "If the underlying facts cannot change, resubmitting will fail again.\n"
         f"{strategy_block}"
         f"{policy_block}"
+        f"{coverage_policy_block}"
         # Domain knowledge (workflow definitions)
         f"\n{WORKFLOW_ACTION_DEFINITIONS_PROVIDER}"
     )
@@ -428,6 +441,18 @@ def create_phase2_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = N
         if data:
             policy_block += _render_policy_data(data) + "\n"
 
+    # symmetric context: payor also sees provider's clinical guideline
+    clinical_guideline_block = ""
+    if params.get("clinical_guideline"):
+        guideline = params["clinical_guideline"]
+        clinical_guideline_block = (
+            "\nPROVIDER CLINICAL GUIDELINE (for reference when evaluating clinical justification):\n"
+            f"Source: {guideline.get('issuer', 'Unknown')}\n"
+        )
+        data = guideline.get("content", {}).get("data", {})
+        if data:
+            clinical_guideline_block += _render_policy_data(data) + "\n"
+
     return (
         # WHO you are
         "You are an insurance utilization management team adjudicating a prior authorization request.\n"
@@ -441,6 +466,7 @@ def create_phase2_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = N
         "- If criteria cannot be met, deny clearly rather than pend indefinitely\n"
         f"{strategy_block}"
         f"{policy_block}"
+        f"{clinical_guideline_block}"
         # Domain knowledge (workflow definitions - payor only, no provider actions)
         f"\n{WORKFLOW_ACTION_DEFINITIONS_PAYOR}"
     )

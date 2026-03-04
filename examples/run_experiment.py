@@ -54,13 +54,15 @@ CONFIGS = {
 PROVIDER_POLICY = InfliximabCrohnsPolicies.PROVIDER_GUIDELINES["aga_2021"]
 PAYOR_POLICY = InfliximabCrohnsPolicies.PAYOR_POLICIES["cigna_ip0660_2026"] # "uhc_commercial_2025" | "cigna_ip0660_2026"
 
+# toggle: "symmetric" = both agents see both policies, "asymmetric" = each sees only their own
+CONTEXT_MODE = "symmetric"
+
 
 def run_single(case, case_id, condition, llms, output_dir):
     run_id = f"{case_id}_{condition}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     config = CONFIGS[condition]
 
-    # prepare policy metadata
     provider_policy_meta = {
         "policy_id": PROVIDER_POLICY.get("policy_id"),
         "issuer": PROVIDER_POLICY.get("issuer"),
@@ -71,8 +73,6 @@ def run_single(case, case_id, condition, llms, output_dir):
         "issuer": PAYOR_POLICY.get("issuer"),
         "source": PAYOR_POLICY.get("source"),
     }
-
-    # prepare environment config metadata
     environment_config = {
         "allow_synthesis": True,
         "synthesis_model": os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME") if llms.get("synthesis") else None,
@@ -87,14 +87,26 @@ def run_single(case, case_id, condition, llms, output_dir):
     )
     environment = Environment(synthesis_llm=llms["synthesis"], allow_synthesis=True)
 
-    provider_params: Dict[str, Any] = {
-        "policy": PROVIDER_POLICY,
-        "strategy": config["provider_strategy"],
-    }
-    payor_params: Dict[str, Any] = {
-        "policy": PAYOR_POLICY,
-        "strategy": config["payor_strategy"],
-    }
+    if CONTEXT_MODE == "symmetric":
+        provider_params: Dict[str, Any] = {
+            "policy": PROVIDER_POLICY,
+            "coverage_policy": PAYOR_POLICY,
+            "strategy": config["provider_strategy"],
+        }
+        payor_params: Dict[str, Any] = {
+            "policy": PAYOR_POLICY,
+            "clinical_guideline": PROVIDER_POLICY,
+            "strategy": config["payor_strategy"],
+        }
+    else:
+        provider_params: Dict[str, Any] = {
+            "policy": PROVIDER_POLICY,
+            "strategy": config["provider_strategy"],
+        }
+        payor_params: Dict[str, Any] = {
+            "policy": PAYOR_POLICY,
+            "strategy": config["payor_strategy"],
+        }
 
     print(f"  running: {run_id} ({config['name']})")
     print(f"    provider_strategy={config['provider_strategy']}, payor_strategy={config['payor_strategy']}")
@@ -112,9 +124,9 @@ def run_single(case, case_id, condition, llms, output_dir):
 
         metrics = state.friction_metrics.model_dump()
 
-        # add policy and environment info to metrics
         metrics_with_context = {
             **metrics,
+            "context_mode": CONTEXT_MODE,
             "provider_policy": provider_policy_meta,
             "payor_policy": payor_policy_meta,
             "environment_config": environment_config,
@@ -140,6 +152,7 @@ def run_single(case, case_id, condition, llms, output_dir):
             "config_name": config["name"],
             "success": True,
             "metrics": metrics,
+            "context_mode": CONTEXT_MODE,
             "provider_policy": provider_policy_meta,
             "payor_policy": payor_policy_meta,
             "environment_config": environment_config,
@@ -154,7 +167,7 @@ def run_single(case, case_id, condition, llms, output_dir):
         return {"run_id": run_id, "condition": condition, "success": False, "error": str(e)}
 
 
-def run_batch(case_ids=None, conditions=None, output_dir="outputs/experiments"):
+def run_batch(case_ids=None, conditions=None, output_dir="outputs/sym_experiments_1"):
     load_dotenv()
 
     # only infliximab case for now
@@ -203,11 +216,11 @@ if __name__ == "__main__":
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--case", type=str, default="infliximab_crohns_2015")
     parser.add_argument("--conditions", nargs="+")
-    parser.add_argument("--output", default="outputs/experiments")
+    parser.add_argument("--output", default="outputs/sym_experiments_1")
 
     args = parser.parse_args()
 
     if args.quick:
-        run_batch(case_ids=[args.case], conditions=["CP_CI"], output_dir="outputs/quick_test")
+        run_batch(case_ids=[args.case], conditions=["CP_CI"], output_dir="outputs/sym_quick_test")
     else:
         run_batch(case_ids=[args.case], conditions=args.conditions, output_dir=args.output)
