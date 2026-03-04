@@ -1,5 +1,6 @@
 .env
 .venv/
+.DS_Store
 
 # Python cache
 __pycache__/
