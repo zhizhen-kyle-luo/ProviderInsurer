@@ -1,8 +1,8 @@
 """administrative friction metrics tracking"""
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-from pydantic import BaseModel
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field
 
 
 class PolicyReference(BaseModel):
@@ -39,6 +39,17 @@ class FrictionMetrics(BaseModel):
     lines_delivered: int = 0
     lines_paid_phase3: int = 0
     lines_denied_phase3: int = 0
+
+    # payoff analysis (computed from cms_rates.py in phase 4)
+    total_service_value: float = 0.0      # S_I
+    total_reimbursement: float = 0.0      # R_P
+    total_admin_cost_provider: float = 0.0
+    total_admin_cost_insurer: float = 0.0
+    provider_utility: float = 0.0         # R_P - admin_cost_provider
+    insurer_utility: float = 0.0          # S_I - R_P - admin_cost_insurer
+    line_pricing: List[Dict[str, Any]] = Field(default_factory=list)
+    unpriced_codes: List[str] = Field(default_factory=list)
+    hallucination_warnings: List[str] = Field(default_factory=list)
 
     # policy references
     provider_policy: Optional[PolicyReference] = None

@@ -58,31 +58,27 @@ def run_phase4(
     return state
 
 
-def _count_pends_in_responses(responses: List[Dict[str, Any]]) -> int:
-    count = 0
-    for resp in responses:
-        if not isinstance(resp, dict):
-            continue
-        pay = resp.get("payor_response")
-        if not isinstance(pay, dict):
-            continue
-        line_adjs = pay.get("line_adjudications")
-        if not isinstance(line_adjs, list):
-            continue
-        for adj in line_adjs:
-            if not isinstance(adj, dict):
-                continue
-            st = (adj.get("authorization_status") or adj.get("adjudication_status") or "").lower()
-            if st == "pending_info":
-                count += 1
-    return count
-
 
 def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
+    from src.data.pricing.cms_rates import (
+        lookup_rate,
+        UnknownProcedureCodeError,
+        check_code_match,
+        get_description,
+        ADMIN_COST_PROVIDER_PER_TURN,
+        ADMIN_COST_INSURER_PER_TURN,
+    )
+
     metrics = FrictionMetrics()
     lines = getattr(state, "service_lines", []) or []
 
     metrics.total_lines_requested = len([l for l in lines if not l.superseded_by_line])
+
+    unpriced: List[str] = []
+    hallucination_warnings: List[str] = []
+    line_pricing: List[Dict[str, Any]] = []
+    total_service_value = 0.0
+    total_reimbursement = 0.0
 
     for line in lines:
         if line.superseded_by_line:
@@ -110,6 +106,43 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
             metrics.max_appeal_level_reached, int(line.current_review_level)
         )
 
+        code = line.procedure_code
+        qty = line.requested_quantity
+
+        try:
+            rate = lookup_rate(code)
+        except UnknownProcedureCodeError:
+            unpriced.append(code)
+            rate = None
+
+        is_consistent, warning = check_code_match(code, line.service_name)
+        if warning:
+            hallucination_warnings.append(warning)
+
+        sv = rate * qty if rate is not None and qty > 0 else 0.0
+        total_service_value += sv
+
+        paid_value = 0.0
+        if line.adjudication_status == "approved" and rate is not None:
+            paid_qty = line.approved_quantity if line.approved_quantity else qty
+            paid_value = rate * paid_qty
+
+        total_reimbursement += paid_value
+
+        line_pricing.append({
+            "line_number": line.line_number,
+            "procedure_code": code,
+            "service_name": line.service_name,
+            "official_description": get_description(code),
+            "is_consistent": is_consistent,
+            "hallucination_warning": warning,
+            "requested_quantity": qty,
+            "rate": rate,
+            "service_value": round(sv, 2),
+            "paid": line.adjudication_status == "approved",
+            "paid_value": round(paid_value, 2),
+        })
+
     phase2_submissions = getattr(state, "phase2_submissions", []) or []
     metrics.phase2_turns = len(phase2_submissions)
 
@@ -123,11 +156,24 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
     metrics.phase2_appeals, metrics.phase2_pends = _count_appeals_and_pends(phase2_responses)
     metrics.phase3_appeals, metrics.phase3_pends = _count_appeals_and_pends(phase3_responses)
 
+    # payoff calculations
+    admin_p = metrics.phase2_turns * ADMIN_COST_PROVIDER_PER_TURN
+    admin_i = metrics.phase2_turns * ADMIN_COST_INSURER_PER_TURN
+
+    metrics.total_service_value = round(total_service_value, 2)
+    metrics.total_reimbursement = round(total_reimbursement, 2)
+    metrics.total_admin_cost_provider = round(admin_p, 2)
+    metrics.total_admin_cost_insurer = round(admin_i, 2)
+    metrics.provider_utility = round(total_reimbursement - admin_p, 2)
+    metrics.insurer_utility = round(total_service_value - total_reimbursement - admin_i, 2)
+    metrics.line_pricing = line_pricing
+    metrics.unpriced_codes = sorted(set(unpriced))
+    metrics.hallucination_warnings = hallucination_warnings
+
     return metrics
 
 
 def _count_appeals_and_pends(responses: list) -> tuple:
-    """Count appeals and pending_info responses from a list of phase responses."""
     appeals = 0
     pends = 0
     prev_level = 0
