@@ -466,6 +466,8 @@ class Phase3Adapter:
 
             if level >= 2 and str(status).lower() == "pending_info":
                 raise ValueError(f"pending_info not allowed at level {level} (IRE/final review)")
+            if level >= 2 and str(status).lower() == "modified":
+                raise ValueError(f"modified not allowed at level {level} (IRE: binary approve/deny only)")
 
             mapped.append(
                 {

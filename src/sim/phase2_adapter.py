@@ -352,13 +352,23 @@ class Phase2Adapter:
         }
 
     def build_response(self, state, submission: Dict[str, Any]) -> Dict[str, Any]:
+        from src.data.policies.infliximab_policies import InfliximabCrohnsPolicies
+
         insurer_req = submission["insurer_request"]
         level = int(submission.get("level", 0))
         pend_count = _pend_count_at_level(state, level)
         encounter_history = _payor_encounter_history(state)
 
-        params = _payor_params(state, self.payor_params)
-        sys_txt = create_phase2_payor_system_prompt(params)
+        params = dict(_payor_params(state, self.payor_params))
+        if level >= 2:
+            # IRE uses Medicare LCD, not insurer's proprietary policy
+            params["policy"] = InfliximabCrohnsPolicies.PAYOR_POLICIES["cms_lcd_l35677"]
+            # suppress strategy (IRE is objective)
+            params["strategy"] = "default"
+            # suppress clinical guideline (IRE evaluates against LCD only)
+            params.pop("clinical_guideline", None)
+
+        sys_txt = create_phase2_payor_system_prompt(params, level=level)
         user_txt = create_phase2_payor_user_prompt(
             state, insurer_req, turn=state.turn, level=level,
             pend_count_at_level=pend_count, encounter_history=encounter_history
@@ -408,6 +418,8 @@ class Phase2Adapter:
 
             if level >= 2 and str(status).lower() == "pending_info":
                 raise ValueError(f"pending_info not allowed at level {level} (IRE/final review)")
+            if level >= 2 and str(status).lower() == "modified":
+                raise ValueError(f"modified not allowed at level {level} (IRE: binary approve/deny only)")
 
             mapped.append(
                 {

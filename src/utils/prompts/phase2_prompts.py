@@ -22,8 +22,14 @@ from typing import Any, Dict, List, Optional
 from .workflow_prompts import (
     WORKFLOW_ACTION_DEFINITIONS_PROVIDER,
     WORKFLOW_ACTION_DEFINITIONS_PAYOR,
+    WORKFLOW_ACTION_DEFINITIONS_PAYOR_L2,
 )
-from .config import PROVIDER_STRATEGY_GUIDANCE, PAYOR_STRATEGY_GUIDANCE
+from .config import (
+    PROVIDER_STRATEGY_GUIDANCE,
+    PAYOR_STRATEGY_GUIDANCE,
+    PAYOR_ROLE_FRAMING,
+    PAYOR_ADMIN_COST_TEXT,
+)
 from .schema_definitions import (
     PHASE2_PROVIDER_REQUEST_SCHEMA,
     PHASE2_PROVIDER_REQUEST_JSON,
@@ -415,35 +421,50 @@ def create_phase2_provider_action_prompt(
     return system_prompt, user_prompt
 
 
-def create_phase2_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = None) -> str:
+def create_phase2_payor_system_prompt(
+    payor_params: Optional[Dict[str, Any]] = None,
+    level: int = 0,
+) -> str:
     """
     System prompt: WHO you are, HOW you behave (stable across turns)
-    - Role and goal
-    - Behavioral guidelines
-    - Strategy (if any)
-    - Policy (if any)
-    - Workflow definitions (review levels, decision vocab - NO provider actions)
+    Level-conditional:
+    - L0: mechanical criteria-matching, throughput pressure, full strategy/policy
+    - L1: fresh MD reviewer, higher interpretive latitude, same policy, strategy kept
+    - L2: independent IRE reviewer, LCD policy, no strategy, binary decisions
     """
     params = payor_params or {}
 
-    guidance = PAYOR_STRATEGY_GUIDANCE[params["strategy"]]
-    strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
+    # role framing varies by level
+    role_block = PAYOR_ROLE_FRAMING[level] + "\n"
 
-    # Coverage policy (domain knowledge)
+    # admin cost text varies by level (empty at L2)
+    admin_text = PAYOR_ADMIN_COST_TEXT[level]
+    admin_block = f"\n{admin_text}\n" if admin_text else ""
+
+    # strategy suppressed at L2 (IRE is objective)
+    if level >= 2:
+        strategy_block = ""
+    else:
+        guidance = PAYOR_STRATEGY_GUIDANCE[params["strategy"]]
+        strategy_block = f"\nSTRATEGY GUIDANCE:\n{guidance}\n" if guidance else ""
+
+    # coverage policy (domain knowledge) — caller swaps policy at L2
     policy_block = ""
     if params.get("policy"):
         policy = params["policy"]
+        # L2 uses "MEDICARE COVERAGE RULES" header
+        header = "MEDICARE COVERAGE RULES" if level >= 2 else "COVERAGE POLICY"
         policy_block = (
-            "\nCOVERAGE POLICY:\n"
+            f"\n{header}:\n"
             f"Source: {policy.get('issuer', 'Unknown')}\n"
         )
         data = policy.get("content", {}).get("data", {})
         if data:
             policy_block += _render_policy_data(data) + "\n"
 
-    # symmetric context: payor also sees provider's clinical guideline
+    # clinical guideline suppressed at L2 (IRE uses LCD only)
     clinical_guideline_block = ""
-    if params.get("clinical_guideline"):
+    if level < 2 and params.get("clinical_guideline"):
         guideline = params["clinical_guideline"]
         clinical_guideline_block = (
             "\nPROVIDER CLINICAL GUIDELINE (for reference when evaluating clinical justification):\n"
@@ -453,22 +474,19 @@ def create_phase2_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = N
         if data:
             clinical_guideline_block += _render_policy_data(data) + "\n"
 
+    # workflow definitions: L2 gets restricted decision vocab
+    workflow_block = (
+        WORKFLOW_ACTION_DEFINITIONS_PAYOR_L2 if level >= 2
+        else WORKFLOW_ACTION_DEFINITIONS_PAYOR
+    )
+
     return (
-        # WHO you are
-        "You are an insurance utilization management team adjudicating a prior authorization request.\n"
-        "Your goal: render coverage decisions based on policy criteria and clinical documentation.\n"
-        # HOW you behave
-        "\nADMINISTRATIVE COST CONSIDERATION:\n"
-        "Each PA review costs ~$3.50 (manual) to ~$0.05 (electronic) in processing (CAQH 2023). "
-        "Apply reasonableness standard:\n"
-        "- Do not request documentation already submitted\n"
-        "- Do not pend repeatedly for the same item\n"
-        "- If criteria cannot be met, deny clearly rather than pend indefinitely\n"
+        f"{role_block}"
+        f"{admin_block}"
         f"{strategy_block}"
         f"{policy_block}"
         f"{clinical_guideline_block}"
-        # Domain knowledge (workflow definitions - payor only, no provider actions)
-        f"\n{WORKFLOW_ACTION_DEFINITIONS_PAYOR}"
+        f"\n{workflow_block}"
     )
 
 
@@ -494,10 +512,10 @@ def create_phase2_payor_user_prompt(
     pv = _normalize_patient_visible_data(state.patient_visible_data)
     request_json = json.dumps(insurer_request, ensure_ascii=False, indent=2)
 
-    # Level-specific rule
+    # level-specific rule
     pend_rule = ""
     if level >= 2:
-        pend_rule = "RULE: pending_info is NOT allowed at Level 2; you must approve, modify, or deny.\n"
+        pend_rule = "RULE: You must approve or deny. Modified and pending_info are not available at external review.\n"
 
     # 1. TASK
     task_instruction = (
@@ -509,7 +527,13 @@ def create_phase2_payor_user_prompt(
     # 4. Encounter history (if any)
     history_block = ""
     if encounter_history:
-        history_lines = ["ENCOUNTER HISTORY (your prior decisions for this case):"]
+        if level >= 2:
+            history_header = "CASE FILE (prior determinations and provider submissions):"
+        elif level == 1:
+            history_header = "PRIOR REVIEW HISTORY (decisions by other reviewers for this case):"
+        else:
+            history_header = "ENCOUNTER HISTORY (your prior decisions for this case):"
+        history_lines = [history_header]
         for entry in encounter_history:
             history_lines.append(f"\n--- Round {entry.get('round')} (Level {entry.get('level')}) ---")
 

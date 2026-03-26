@@ -4,8 +4,9 @@ This schema represents reference policy artifacts used by agents as their decisi
 
 - Provider policies: public clinical practice guidelines (e.g., AGA, GOLD)
 - Payer policies: public coverage / utilization-management policies (e.g., UHC, Cigna, InterQual)
+- Medicare coverage determinations: CMS NCDs/LCDs used by IRE reviewers at Level 2 external review (e.g., LCD L35677)
 
-These artifacts are nputs to the simulation.
+These artifacts are inputs to the simulation.
 
 ---
 
@@ -24,7 +25,7 @@ These artifacts are nputs to the simulation.
 ```json
 {
   "policy_id": "string",
-  "policy_type": "provider_guideline" | "payer_coverage_policy",
+  "policy_type": "provider_guideline" | "payer_coverage_policy" | "medicare_coverage_determination",
   "issuer": "string",
   "source": {
     "url": "string"
