@@ -167,7 +167,7 @@ def run_single(case, case_id, condition, llms, output_dir):
         return {"run_id": run_id, "condition": condition, "success": False, "error": str(e)}
 
 
-def run_batch(case_ids=None, conditions=None, output_dir="outputs/sym_experiments_1"):
+def run_batch(case_ids=None, conditions=None, output_dir=None):
     load_dotenv()
 
     # only infliximab case for now
@@ -175,6 +175,10 @@ def run_batch(case_ids=None, conditions=None, output_dir="outputs/sym_experiment
         case_ids = ["infliximab_crohns_2015"]
     if conditions is None:
         conditions = list(CONFIGS.keys())
+
+    if output_dir is None:
+        import random
+        output_dir = f"outputs/experiments_{random.randint(1000, 9999)}"
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -216,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--case", type=str, default="infliximab_crohns_2015")
     parser.add_argument("--conditions", nargs="+")
-    parser.add_argument("--output", default="outputs/sym_experiments_1")
+    parser.add_argument("--output", default=None)
 
     args = parser.parse_args()
 
