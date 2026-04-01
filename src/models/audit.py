@@ -37,3 +37,6 @@ class AuditLog(BaseModel):
 
     # environment configuration
     environment_config: Optional[Dict[str, Any]] = None
+
+    # experiment metadata
+    context_mode: Optional[str] = None

@@ -16,6 +16,7 @@ class AuditLogger:
         provider_policy: Optional[Dict[str, Any]] = None,
         payor_policy: Optional[Dict[str, Any]] = None,
         environment_config: Optional[Dict[str, Any]] = None,
+        context_mode: Optional[str] = None,
     ):
         self.audit_log = AuditLog(
             case_id=case_id,
@@ -25,6 +26,7 @@ class AuditLogger:
             provider_policy=provider_policy,
             payor_policy=payor_policy,
             environment_config=environment_config,
+            context_mode=context_mode,
         )
 
     def add(self, event: AuditEvent) -> None:

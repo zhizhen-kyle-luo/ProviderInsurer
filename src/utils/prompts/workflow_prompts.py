@@ -16,15 +16,18 @@ from .config import (
     VALID_REQUEST_TYPES,
 )
 
-# Review level definitions (maps to Medicare appeal levels)
+# Review level definitions (maps to Medicare Advantage appeal levels)
 REVIEW_LEVEL_DEFINITIONS = (
-    "Review levels:\n"
-    "- Level 0 (Initial Review): UM nurse/triage reviews against policy checklist. "
-    "(Medicare: Redetermination by MAC)\n"
-    "- Level 1 (Reconsideration): Medical Director peer-to-peer review. "
-    "(Medicare: QIC reconsideration)\n"
-    "- Level 2 (Independent Review): External IRE; final binding decision, no pending_info allowed. "
-    "(Medicare: ALJ hearing)\n"
+    "Review levels (Medicare Advantage appeal structure):\n"
+    "- Level 0 (Organization Determination): UM triage applies plan's coverage criteria "
+    "mechanically under throughput pressure. Low interpretive latitude.\n"
+    "- Level 1 (Plan Reconsideration): Fresh physician reviewer not involved in Level 0. "
+    "Deliberate clinical judgment with higher interpretive latitude. Full case file access. "
+    "65-day filing deadline. Unfavorable decisions are automatically forwarded to Level 2.\n"
+    "- Level 2 (Independent External Review via Maximus Federal IRE): Independent physician "
+    "reviewer not affiliated with the health plan. Evaluates against Medicare coverage rules "
+    "(NCDs/LCDs, not insurer's proprietary criteria). Binary approve/deny only. "
+    "Final binding decision.\n"
 )
 
 # Payor decision definitions - used by both provider (to interpret) and payor (to render)
@@ -34,6 +37,14 @@ PAYOR_DECISION_DEFINITIONS = (
     "- modified: approve with changes (e.g., quantity_reduction, site_change); set modification_type.\n"
     "- denied: does not meet criteria; explain which criteria failed.\n"
     "- pending_info: missing documentation; list requested_documents (not allowed at level 2).\n"
+)
+
+# L2-specific decision definitions (binary approve/deny only)
+PAYOR_DECISION_DEFINITIONS_L2 = (
+    "Reviewer decisions:\n"
+    "- approved: meets Medicare coverage criteria; authorize the service.\n"
+    "- denied: does not meet Medicare coverage criteria; explain which criteria are not met.\n"
+    "Note: modified and pending_info are not available at external review. You must approve or deny.\n"
 )
 
 # Provider action definitions - only provider needs this
@@ -62,5 +73,12 @@ WORKFLOW_ACTION_DEFINITIONS_PROVIDER = (
 WORKFLOW_ACTION_DEFINITIONS_PAYOR = (
     f"{REVIEW_LEVEL_DEFINITIONS}\n"
     f"{PAYOR_DECISION_DEFINITIONS}\n"
+    "Use these exact tokens (case-insensitive) in JSON responses."
+)
+
+# L2 definitions for IRE reviewer (restricted decision vocab)
+WORKFLOW_ACTION_DEFINITIONS_PAYOR_L2 = (
+    f"{REVIEW_LEVEL_DEFINITIONS}\n"
+    f"{PAYOR_DECISION_DEFINITIONS_L2}\n"
     "Use these exact tokens (case-insensitive) in JSON responses."
 )

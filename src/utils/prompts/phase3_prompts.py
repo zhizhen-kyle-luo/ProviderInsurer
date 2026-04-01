@@ -81,6 +81,17 @@ def create_phase3_provider_system_prompt(provider_params: Optional[Dict[str, Any
         if data:
             policy_block += _render_policy_data(data) + "\n"
 
+    coverage_policy_block = ""
+    if params.get("coverage_policy"):
+        coverage_policy = params["coverage_policy"]
+        coverage_policy_block = (
+            "\nPAYER COVERAGE POLICY (for reference):\n"
+            f"Source: {coverage_policy.get('issuer', 'Unknown')}\n"
+        )
+        data = coverage_policy.get("content", {}).get("data", {})
+        if data:
+            coverage_policy_block += _render_policy_data(data) + "\n"
+
     return (
         "You are a hospital provider team submitting claims for delivered services.\n"
         "Your goal: get delivered services paid by matching claims to authorization and documentation.\n"
@@ -97,6 +108,7 @@ def create_phase3_provider_system_prompt(provider_params: Optional[Dict[str, Any
         "If the underlying facts cannot change, resubmitting will fail again.\n"
         f"{strategy_block}"
         f"{policy_block}"
+        f"{coverage_policy_block}"
         f"\n{WORKFLOW_ACTION_DEFINITIONS_PROVIDER}"
     )
 
@@ -115,7 +127,7 @@ def create_phase3_provider_user_prompt(
     lines = state.service_lines
     if lines is None:
         raise ValueError("state.service_lines is None")
-    delivered_lines = [l for l in lines if getattr(l, "delivered", False)]
+    delivered_lines = [l for l in lines if getattr(l, "delivered", False) and not getattr(l, "treat_anyway", False)]
 
     lines_summary = []
     for l in delivered_lines:
@@ -262,6 +274,17 @@ def create_phase3_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = N
         if data:
             policy_block += _render_policy_data(data) + "\n"
 
+    clinical_guideline_block = ""
+    if params.get("clinical_guideline"):
+        guideline = params["clinical_guideline"]
+        clinical_guideline_block = (
+            "\nPROVIDER CLINICAL GUIDELINE (for reference when evaluating clinical justification):\n"
+            f"Source: {guideline.get('issuer', 'Unknown')}\n"
+        )
+        data = guideline.get("content", {}).get("data", {})
+        if data:
+            clinical_guideline_block += _render_policy_data(data) + "\n"
+
     return (
         "You are an insurance claims adjudication team processing a clinical claim.\n"
         "Your goal: render payment decisions based on coverage policy, authorization status, and clinical documentation.\n"
@@ -272,8 +295,16 @@ def create_phase3_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = N
         "- Do not request documentation already submitted\n"
         "- Avoid repeated pends for the same item\n"
         "- If criteria cannot be met, deny clearly rather than pend indefinitely\n"
+        "\nPRIOR AUTHORIZATION BINDING RULE (42 CFR 422.138(c)):\n"
+        "If a service line carries a valid prior authorization number from Phase 2 (PA approved at any "
+        "review level, including IRE), you MAY NOT deny that line on medical necessity grounds. "
+        "The only valid reasons to deny a PA-approved line are: (1) service was not rendered as authorized "
+        "(wrong codes, quantities, or dates of service differ from authorization), "
+        "(2) billing or coding error, or (3) reliable evidence of fraud or similar fault. "
+        "Re-litigating medical necessity on a line that already has a PA approval is not permitted.\n"
         f"{strategy_block}"
         f"{policy_block}"
+        f"{clinical_guideline_block}"
         f"\n{WORKFLOW_ACTION_DEFINITIONS_PAYOR}"
     )
 

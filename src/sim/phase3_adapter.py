@@ -280,6 +280,8 @@ def build_phase3_provider_action_prompts(
     for l in lines:
         if not getattr(l, "delivered", False):
             continue
+        if getattr(l, "treat_anyway", False):
+            continue  # provider-absorbed, not claimed
         if getattr(l, "adjudication_status", None) is None:
             raise ValueError(f"line {getattr(l, 'line_number')} has no adjudication_status")
         status = str(l.adjudication_status).lower()
@@ -318,7 +320,11 @@ def build_phase3_provider_action_prompts(
     )
     user_prompt = (
         f"Current Review Level: {level}\n"
-        f"Max Appeal Level: 2 (ALJ - final)\n\n"
+        f"Max Appeal Level: 2 (IRE - final for claims)\n"
+        f"NOTE: This is Phase 3 (Claims). The appeal levels here are INDEPENDENT of Phase 2 (PA). "
+        f"Even if you exhausted all Phase 2 PA appeals, Phase 3 claims have their own fresh appeal chain: "
+        f"Level 0 (initial claim), Level 1 (plan reconsideration), Level 2 (IRE). "
+        f"A Phase 3 Level 0 denial means you still have Levels 1 and 2 available here.\n\n"
         "CURRENT CLAIM LINE STATUSES AFTER PAYOR RESPONSE:\n"
         f"{json.dumps(line_statuses, indent=2)}\n\n"
         "DECISION:\n"
@@ -466,6 +472,8 @@ class Phase3Adapter:
 
             if level >= 2 and str(status).lower() == "pending_info":
                 raise ValueError(f"pending_info not allowed at level {level} (IRE/final review)")
+            if level >= 2 and str(status).lower() == "modified":
+                raise ValueError(f"modified not allowed at level {level} (IRE: binary approve/deny only)")
 
             mapped.append(
                 {
@@ -506,6 +514,8 @@ class Phase3Adapter:
         for l in lines:
             if not getattr(l, "delivered", False):
                 continue
+            if getattr(l, "treat_anyway", False):
+                continue  # provider-absorbed, not claimed
 
             if l.adjudication_status is None:
                 raise ValueError(f"line {l.line_number} has no adjudication_status")
@@ -559,7 +569,11 @@ class Phase3Adapter:
         import json
         user_prompt = (
             f"Current Review Level: {level}\n"
-            f"Max Appeal Level: 2 (ALJ - final)\n\n"
+            f"Max Appeal Level: 2 (IRE - final for claims)\n"
+        f"NOTE: This is Phase 3 (Claims). The appeal levels here are INDEPENDENT of Phase 2 (PA). "
+        f"Even if you exhausted all Phase 2 PA appeals, Phase 3 claims have their own fresh appeal chain: "
+        f"Level 0 (initial claim), Level 1 (plan reconsideration), Level 2 (IRE). "
+        f"A Phase 3 Level 0 denial means you still have Levels 1 and 2 available here.\n\n"
             "CURRENT CLAIM LINE STATUSES AFTER PAYOR RESPONSE:\n"
             f"{json.dumps(line_statuses, indent=2)}\n\n"
             "DECISION:\n"

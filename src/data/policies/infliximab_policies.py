@@ -5,6 +5,8 @@ Sources:
   https://www.uhcprovider.com/content/dam/provider/docs/public/policies/comm-medical-drug/infliximab-remicade-inflectra.pdf
 - Cigna Drug Coverage Policy IP0660 (effective 2026-01-01):
   https://static.cigna.com/assets/chcp/pdf/coveragePolicies/pharmacy/ip_0660_coveragepositioncriteria_inflammatory_conditions_infliximab_intravenous_products_pa.pdf
+- CMS Local Coverage Determination (LCD) L35677 - Infliximab:
+  https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdId=35677
 """
 
 
@@ -176,6 +178,92 @@ class InfliximabCrohnsPolicies:
                 "(biosimilar does not count). Initial approval 6 months; continuation 1 year with documented response. "
                 "Dosing: initial up to 5 mg/kg (weeks 0, 2, 6, then q8wk); continuation up to 10 mg/kg q4wk max. "
                 "Preferred products per PSM005 policy."
+            ),
+        },
+        "cms_lcd_l35677": {
+            "policy_id": "cms_lcd_l35677_infliximab",
+            "policy_type": "medicare_coverage_determination",
+            "issuer": "CMS (Medicare Local Coverage Determination)",
+            "source": {
+                "url": "https://www.cms.gov/medicare-coverage-database/view/lcd.aspx?lcdId=35677"
+            },
+            "phase2": {
+                "requires_phase2": True,
+                "phase2_type": "PA"
+            },
+            "content": {
+                "format": "structured",
+                "data": {
+                    "policy_name": "CMS Local Coverage Determination (LCD) L35677 — Infliximab",
+                    "coverage_standard": (
+                        "Infliximab will be considered medically reasonable and necessary when used "
+                        "in accordance with FDA-approved indications and recognized standards of "
+                        "medical practice published by specialty societies."
+                    ),
+                    "crohns_disease_criteria": {
+                        "covered_indications": [
+                            "To reduce the signs and symptoms and induce and maintain clinical remission "
+                            "in adult and pediatric patients with moderately to severely active Crohn's disease "
+                            "in patients who have had an inadequate response to conventional therapy.",
+                            "To reduce the number of draining enterocutaneous and rectovaginal fistulas "
+                            "and maintaining fistula closure in patients with fistulizing Crohn's disease."
+                        ],
+                        "conventional_therapy_definition": (
+                            "Conventional therapy includes corticosteroids, aminosalicylates, and "
+                            "immunosuppressive agents. Inadequate response includes lack of efficacy, "
+                            "adverse effects prohibiting further use of the drug, or medical "
+                            "contraindications to these therapies."
+                        ),
+                        "trial_requirement": (
+                            "Documentation of inadequate response to a 3-month trial of appropriately "
+                            "dosed and disease-specific conventional (non-biologic) therapy, OR "
+                            "documentation that conventional therapy is contraindicated or not tolerated."
+                        ),
+                    },
+                    "documentation_requirements": [
+                        "Medical record documentation must substantiate the medical necessity for infliximab "
+                        "by clearly indicating the relevant clinical signs and symptoms.",
+                        "Documentation must include all prior treatment regimens and the patient's response "
+                        "to each therapy.",
+                        "Evaluation for latent tuberculosis infection (medical evaluation and TB test) with "
+                        "treatment initiated prior to infliximab therapy.",
+                        "Documentation of disease-specific relevant symptoms and signs which are both being "
+                        "treated and being followed to assess for response to treatment."
+                    ],
+                    "continuation_criteria": (
+                        "Subsequent treatments will be covered if the patient responds to the initial "
+                        "treatment as demonstrated by a reduction in signs and symptoms."
+                    ),
+                    "exclusions": [
+                        "Use in combination with other biologics (e.g., etanercept, adalimumab, "
+                        "certolizumab, golimumab, abatacept, rituximab, anakinra) or JAK inhibitors "
+                        "is considered not medically reasonable and necessary.",
+                        "Contraindicated in patients with Class III/IV heart failure or untreated "
+                        "tuberculosis."
+                    ],
+                    "dosing": {
+                        "induction": "Infusions at weeks 0, 2, and 6.",
+                        "maintenance": "Subsequent infusions per clinical judgment; consult literature for proper dosing.",
+                    },
+                    "decision_logic": (
+                        "LCD L35677: Approve if moderately to severely active Crohn's disease AND "
+                        "inadequate response to conventional therapy (corticosteroids, aminosalicylates, "
+                        "or immunosuppressive agents) — including lack of efficacy, adverse effects, or "
+                        "medical contraindication. A 3-month trial of conventional therapy is expected, "
+                        "OR documentation that conventional therapy is contraindicated/not tolerated. "
+                        "No rigid step-therapy checklist; clinical judgment applies. "
+                        "For fistulizing Crohn's: coverage for fistula reduction/closure. "
+                        "Documentation must include all prior regimens and patient response."
+                    ),
+                },
+                "text": ""
+            },
+            "notes_free_text": (
+                "LCD L35677 uses a broad 'inadequate response to conventional therapy' standard "
+                "rather than a rigid step-therapy checklist. Contraindication and intolerance count "
+                "as inadequate response. No mesalamine exclusion. References 'recognized standards' "
+                "from specialty societies. This is the evaluative standard used by IRE reviewers at "
+                "Level 2 external review."
             ),
         }
     }
