@@ -65,8 +65,13 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
         UnknownProcedureCodeError,
         check_code_match,
         get_description,
-        ADMIN_COST_PROVIDER_PER_TURN,
-        ADMIN_COST_INSURER_PER_TURN,
+        ADMIN_COST_PROVIDER_L0,
+        ADMIN_COST_INSURER_L0,
+        ADMIN_COST_PROVIDER_L12,
+        ADMIN_COST_INSURER_L12,
+        IRE_CASE_COST,
+        PROMPT_PAY_RATE,
+        REVIEW_DELAY_DAYS,
     )
 
     metrics = FrictionMetrics()
@@ -79,6 +84,7 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
     line_pricing: List[Dict[str, Any]] = []
     total_service_value = 0.0
     total_reimbursement = 0.0
+    insurer_exposure = 0.0  # S^I: value of lines submitted to insurer (excludes treat_anyway)
 
     for line in lines:
         if line.superseded_by_line:
@@ -122,6 +128,10 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
         sv = rate * qty if rate is not None and qty > 0 else 0.0
         total_service_value += sv
 
+        # insurer exposure excludes treat_anyway lines (provider-absorbed, not insurer liability)
+        if not getattr(line, "treat_anyway", False):
+            insurer_exposure += sv
+
         paid_value = 0.0
         if line.adjudication_status == "approved" and rate is not None:
             paid_qty = line.approved_quantity if line.approved_quantity else qty
@@ -156,16 +166,30 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
     metrics.phase2_appeals, metrics.phase2_pends = _count_appeals_and_pends(phase2_responses)
     metrics.phase3_appeals, metrics.phase3_pends = _count_appeals_and_pends(phase3_responses)
 
-    # payoff calculations
-    admin_p = metrics.phase2_turns * ADMIN_COST_PROVIDER_PER_TURN
-    admin_i = metrics.phase2_turns * ADMIN_COST_INSURER_PER_TURN
+    # level-differentiated admin costs (CAQH 2023): L0+Phase3 at electronic rate, L1-2 at manual rate
+    # count turns by level from phase2 responses
+    phase2_responses = getattr(state, "phase2_responses", []) or []
+    n_l0 = sum(1 for r in phase2_responses if isinstance(r, dict) and int(r.get("level", 0)) == 0)
+    n_l12 = sum(1 for r in phase2_responses if isinstance(r, dict) and int(r.get("level", 0)) > 0)
+    n_phase3 = metrics.phase3_turns  # phase3 claims adjudication at electronic rate
+
+    admin_p = (n_l0 + n_phase3) * ADMIN_COST_PROVIDER_L0 + n_l12 * ADMIN_COST_PROVIDER_L12
+    admin_i = (n_l0 + n_phase3) * ADMIN_COST_INSURER_L0 + n_l12 * ADMIN_COST_INSURER_L12
+
+    # IRE reversal costs: F_IRE if case reached L2; prompt-pay interest if IRE overturned denial
+    ire_cost = 0.0
+    if metrics.max_appeal_level_reached >= 2:
+        ire_cost += IRE_CASE_COST
+        # prompt-pay interest applies when IRE overturns and insurer must pay retroactively
+        if total_reimbursement > 0:
+            ire_cost += PROMPT_PAY_RATE * total_reimbursement * REVIEW_DELAY_DAYS / 365
 
     metrics.total_service_value = round(total_service_value, 2)
     metrics.total_reimbursement = round(total_reimbursement, 2)
     metrics.total_admin_cost_provider = round(admin_p, 2)
     metrics.total_admin_cost_insurer = round(admin_i, 2)
     metrics.provider_utility = round(total_reimbursement - admin_p, 2)
-    metrics.insurer_utility = round(total_service_value - total_reimbursement - admin_i, 2)
+    metrics.insurer_utility = round(insurer_exposure - total_reimbursement - admin_i - ire_cost, 2)
     metrics.line_pricing = line_pricing
     metrics.unpriced_codes = sorted(set(unpriced))
     metrics.hallucination_warnings = hallucination_warnings
