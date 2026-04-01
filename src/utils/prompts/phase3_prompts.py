@@ -127,7 +127,7 @@ def create_phase3_provider_user_prompt(
     lines = state.service_lines
     if lines is None:
         raise ValueError("state.service_lines is None")
-    delivered_lines = [l for l in lines if getattr(l, "delivered", False)]
+    delivered_lines = [l for l in lines if getattr(l, "delivered", False) and not getattr(l, "treat_anyway", False)]
 
     lines_summary = []
     for l in delivered_lines:
@@ -295,6 +295,13 @@ def create_phase3_payor_system_prompt(payor_params: Optional[Dict[str, Any]] = N
         "- Do not request documentation already submitted\n"
         "- Avoid repeated pends for the same item\n"
         "- If criteria cannot be met, deny clearly rather than pend indefinitely\n"
+        "\nPRIOR AUTHORIZATION BINDING RULE (42 CFR 422.138(c)):\n"
+        "If a service line carries a valid prior authorization number from Phase 2 (PA approved at any "
+        "review level, including IRE), you MAY NOT deny that line on medical necessity grounds. "
+        "The only valid reasons to deny a PA-approved line are: (1) service was not rendered as authorized "
+        "(wrong codes, quantities, or dates of service differ from authorization), "
+        "(2) billing or coding error, or (3) reliable evidence of fraud or similar fault. "
+        "Re-litigating medical necessity on a line that already has a PA approval is not permitted.\n"
         f"{strategy_block}"
         f"{policy_block}"
         f"{clinical_guideline_block}"

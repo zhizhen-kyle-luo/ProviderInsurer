@@ -63,6 +63,7 @@ export interface AuditLog {
   provider_policy?: PolicyMeta | null;
   payor_policy?: PolicyMeta | null;
   environment_config?: EnvironmentConfig | null;
+  context_mode?: string | null;
 }
 
 export interface GroupedTurn {

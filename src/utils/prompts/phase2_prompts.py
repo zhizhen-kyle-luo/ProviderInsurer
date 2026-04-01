@@ -211,10 +211,12 @@ def create_phase2_provider_user_prompt(
         )
     else:
         task_instruction = (
-            "TASK: Resubmit the insurer_request with lines that require action.\n"
+            "TASK: Resubmit the insurer_request with all lines that are not yet approved.\n"
             "- For pending_info lines: include with clinical_evidence addressing requested_documents\n"
-            "- For denied lines: include only if appealing with new evidence\n"
+            "- For denied/appealed lines: ALWAYS include — the reviewer needs to evaluate them.\n"
+            "  Add any additional clinical_evidence you have; if none, restate the original justification.\n"
             "- Do NOT include approved lines (already authorized)\n"
+            "- requested_services must be a non-empty list — every active line must appear.\n"
         )
 
     # 4. Prior history (if any)

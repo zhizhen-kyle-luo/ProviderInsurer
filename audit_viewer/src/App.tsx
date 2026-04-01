@@ -85,8 +85,8 @@ function App() {
               </div>
 
               {/* Policy and Environment Info */}
-              {(auditLog.provider_policy || auditLog.payor_policy || auditLog.environment_config) && (
-                <div className="mt-6 pt-4 border-t border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+              {(auditLog.provider_policy || auditLog.payor_policy || auditLog.environment_config || auditLog.context_mode) && (
+                <div className="mt-6 pt-4 border-t border-slate-200 grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
                   {auditLog.provider_policy && (
                     <div className="bg-blue-50 p-3 rounded-lg">
                       <div className="text-slate-600 mb-1 font-medium">Provider Policy</div>
@@ -114,6 +114,15 @@ function App() {
                       {auditLog.environment_config.synthesis_model && (
                         <div className="text-xs text-slate-600 mt-1">Model: {auditLog.environment_config.synthesis_model}</div>
                       )}
+                    </div>
+                  )}
+                  {auditLog.context_mode && (
+                    <div className="bg-amber-50 p-3 rounded-lg">
+                      <div className="text-slate-600 mb-1 font-medium">Context Mode</div>
+                      <div className="text-slate-900 font-semibold capitalize">{auditLog.context_mode}</div>
+                      <div className="text-xs text-slate-600 mt-1">
+                        {auditLog.context_mode === 'symmetric' ? 'Both agents see both policies' : 'Each agent sees own policy only'}
+                      </div>
                     </div>
                   )}
                 </div>
