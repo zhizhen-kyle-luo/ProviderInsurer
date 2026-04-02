@@ -69,9 +69,6 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
         ADMIN_COST_INSURER_L0,
         ADMIN_COST_PROVIDER_L12,
         ADMIN_COST_INSURER_L12,
-        IRE_CASE_COST,
-        PROMPT_PAY_RATE,
-        REVIEW_DELAY_DAYS,
     )
 
     metrics = FrictionMetrics()
@@ -161,23 +158,14 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
     metrics.phase2_appeals, metrics.phase2_pends = _count_appeals_and_pends(phase2_responses)
     metrics.phase3_appeals, metrics.phase3_pends = _count_appeals_and_pends(phase3_responses)
 
-    # level-differentiated admin costs (CAQH 2023): L0+Phase3 at electronic rate, L1-2 at manual rate
-    # count turns by level from phase2 responses
-    phase2_responses = getattr(state, "phase2_responses", []) or []
+    # level-differentiated admin costs (CAQH 2023): L0 electronic rate, L1-2 manual rate
     n_l0 = sum(1 for r in phase2_responses if isinstance(r, dict) and int(r.get("level", 0)) == 0)
     n_l12 = sum(1 for r in phase2_responses if isinstance(r, dict) and int(r.get("level", 0)) > 0)
-    n_phase3 = metrics.phase3_turns  # phase3 claims adjudication at electronic rate
+    n_p3_l0 = sum(1 for r in phase3_responses if isinstance(r, dict) and int(r.get("level", 0)) == 0)
+    n_p3_l12 = sum(1 for r in phase3_responses if isinstance(r, dict) and int(r.get("level", 0)) > 0)
 
-    admin_p = (n_l0 + n_phase3) * ADMIN_COST_PROVIDER_L0 + n_l12 * ADMIN_COST_PROVIDER_L12
-    admin_i = (n_l0 + n_phase3) * ADMIN_COST_INSURER_L0 + n_l12 * ADMIN_COST_INSURER_L12
-
-    # IRE reversal costs: F_IRE if case reached L2; prompt-pay interest if IRE overturned denial
-    ire_cost = 0.0
-    if metrics.max_appeal_level_reached >= 2:
-        ire_cost += IRE_CASE_COST
-        # prompt-pay interest applies when IRE overturns and insurer must pay retroactively
-        if total_reimbursement > 0:
-            ire_cost += PROMPT_PAY_RATE * total_reimbursement * REVIEW_DELAY_DAYS / 365
+    admin_p = (n_l0 + n_p3_l0) * ADMIN_COST_PROVIDER_L0 + (n_l12 + n_p3_l12) * ADMIN_COST_PROVIDER_L12
+    admin_i = (n_l0 + n_p3_l0) * ADMIN_COST_INSURER_L0 + (n_l12 + n_p3_l12) * ADMIN_COST_INSURER_L12
 
     metrics.total_service_value = round(total_service_value, 2)
     metrics.total_reimbursement = round(total_reimbursement, 2)
@@ -185,7 +173,7 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
     metrics.total_admin_cost_insurer = round(admin_i, 2)
     # alpha=1: admin costs weighted equally to financial outcomes (paper sensitivity parameter)
     metrics.provider_utility = round(total_reimbursement - admin_p, 2)
-    metrics.insurer_utility = round(insurer_exposure - total_reimbursement - admin_i - ire_cost, 2)
+    metrics.insurer_utility = round(insurer_exposure - total_reimbursement - admin_i, 2)
     metrics.line_pricing = line_pricing
     metrics.unpriced_codes = sorted(set(unpriced))
     metrics.hallucination_warnings = hallucination_warnings

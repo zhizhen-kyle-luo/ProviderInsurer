@@ -7,9 +7,8 @@ sources:
 - procedures/imaging: CMS PFS Look-Up Tool, 2026 national non-facility payment amounts
   (MAC locality 0000000, no modifier, non-QPP, CY2026 CF = $33.4009)
 - admin: CAQH 2023 Index (electronic and manual rates)
-- IRE: Sanjay personal communication ($500-$800 range); corroborated by Texas TDI IRO Tier 1 fee
-- prompt-pay interest: Bureau of Fiscal Service H1 2026 rate (4.125%), 42 CFR 422.520
-- review timeline: 67 days (7+30+30) per CMS-4208-F effective 2026-01-01
+- IRE: no per-case fee to plan (CMS pays Maximus under federal contract; see temp/sanjay_ire_question.md)
+- prompt-pay interest: pending clarification (only applies if plan misses 30-day effectuation deadline)
 
 drug rates are per infusion (30 units for 60kg patient at 5mg/kg).
 lab/procedure rates are per test/session.
@@ -62,11 +61,12 @@ ADMIN_COST_INSURER_L0: float = 0.05
 # levels 1-2 (manual, human physician review): CAQH 2023 Index
 ADMIN_COST_PROVIDER_L12: float = 10.97
 ADMIN_COST_INSURER_L12: float = 3.52
-# IRE reversal costs: Sanjay personal communication, corroborated by Texas TDI IRO Tier 1 fee
-IRE_CASE_COST: float = 650.00
-# prompt-payment interest: Bureau of Fiscal Service H1 2026, applied under 42 CFR 422.520
-PROMPT_PAY_RATE: float = 0.04125
-REVIEW_DELAY_DAYS: int = 67  # 7 (L0) + 30 (L1) + 30 (L2), per CMS-4208-F effective 2026-01-01
+# IRE reversal costs removed: CMS pays Maximus under federal contract, no per-case fee to plan.
+# prompt-pay interest removed: only applies if plan misses 30-day effectuation deadline (pending Sanjay clarification).
+# constants kept for reference but no longer used in phase4.py:
+IRE_CASE_COST: float = 650.00  # unused
+PROMPT_PAY_RATE: float = 0.04125  # unused
+REVIEW_DELAY_DAYS: int = 67  # unused
 
 # kept for backward compatibility — equals L0 electronic rate
 ADMIN_COST_PROVIDER_PER_TURN: float = ADMIN_COST_PROVIDER_L0
