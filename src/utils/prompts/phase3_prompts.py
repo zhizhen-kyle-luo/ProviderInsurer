@@ -127,7 +127,7 @@ def create_phase3_provider_user_prompt(
     lines = state.service_lines
     if lines is None:
         raise ValueError("state.service_lines is None")
-    delivered_lines = [l for l in lines if getattr(l, "delivered", False) and not getattr(l, "treat_anyway", False)]
+    delivered_lines = [l for l in lines if getattr(l, "delivered", False)]
 
     lines_summary = []
     for l in delivered_lines:

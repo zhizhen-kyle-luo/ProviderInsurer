@@ -325,11 +325,7 @@ def apply_phase3_insurer_line_adjudications(
         ln = int(adj["line_number"])
         line = _find_line(state, ln)
 
-        # treat_anyway lines are provider-absorbed: insurer cannot pay them
-        if getattr(line, "treat_anyway", False):
-            status = "denied"
-        else:
-            status = _normalize_status(str(adj["adjudication_status"]))
+        status = _normalize_status(str(adj["adjudication_status"]))
         if status not in VALID_STATUSES:
             raise ValueError(f"bad adjudication_status={status} for line_number={ln}")
 
@@ -418,10 +414,6 @@ def _is_line_terminal_phase3(line) -> bool:
     """Check if a delivered line has reached terminal state in Phase 3."""
     if not getattr(line, "delivered", False):
         return True  # non-delivered lines are terminal (nothing to claim)
-
-    # treat_anyway lines are provider-absorbed — no claim to adjudicate
-    if getattr(line, "treat_anyway", False):
-        return True
 
     if getattr(line, "awaiting_response_at_level", None) is not None:
         return False
