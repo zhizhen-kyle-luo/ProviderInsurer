@@ -365,8 +365,6 @@ def create_phase2_provider_action_prompt(
         docs = getattr(l, "requested_documents", []) or []
         reason = getattr(l, "decision_reason", "") or ""
         accepted = getattr(l, "accepted_modification", False)
-        superseded = getattr(l, "superseded_by_line", None)
-
         line_str = f"- line {ln}: {code} {name} | status={status} | level={level}"
         if status == "modified":
             line_str += f" | accepted={accepted}"
@@ -374,8 +372,6 @@ def create_phase2_provider_action_prompt(
             line_str += f" | requested_docs={docs}"
         if reason:
             line_str += f" | reason={reason[:80]}"
-        if superseded:
-            line_str += f" | superseded_by={superseded}"
         line_status_parts.append(line_str)
 
     line_status_block = "\n".join(line_status_parts)

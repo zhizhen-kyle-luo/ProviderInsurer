@@ -62,8 +62,6 @@ class Environment:
         deltas: List[Dict[str, Any]] = []
 
         for line in getattr(state, "service_lines", []) or []:
-            if getattr(line, "superseded_by_line", None) is not None:
-                continue
             if (getattr(line, "request_type", "") or "").lower() != "diagnostic_test":
                 continue
 

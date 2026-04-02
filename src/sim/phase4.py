@@ -77,19 +77,16 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
     metrics = FrictionMetrics()
     lines = getattr(state, "service_lines", []) or []
 
-    metrics.total_lines_requested = len([l for l in lines if not l.superseded_by_line])
+    metrics.total_lines_requested = len(lines)
 
     unpriced: List[str] = []
     hallucination_warnings: List[str] = []
     line_pricing: List[Dict[str, Any]] = []
     total_service_value = 0.0
     total_reimbursement = 0.0
-    insurer_exposure = 0.0  # S^I: value of lines submitted to insurer (excludes treat_anyway)
+    insurer_exposure = 0.0  # S^I: value of lines submitted to insurer
 
     for line in lines:
-        if line.superseded_by_line:
-            continue
-
         if line.authorization_status == "approved":
             metrics.lines_approved_phase2 += 1
         elif line.authorization_status == "denied":
@@ -128,9 +125,7 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
         sv = rate * qty if rate is not None and qty > 0 else 0.0
         total_service_value += sv
 
-        # insurer exposure excludes treat_anyway lines (provider-absorbed, not insurer liability)
-        if not getattr(line, "treat_anyway", False):
-            insurer_exposure += sv
+        insurer_exposure += sv
 
         paid_value = 0.0
         if line.adjudication_status == "approved" and rate is not None:
@@ -188,6 +183,7 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
     metrics.total_reimbursement = round(total_reimbursement, 2)
     metrics.total_admin_cost_provider = round(admin_p, 2)
     metrics.total_admin_cost_insurer = round(admin_i, 2)
+    # alpha=1: admin costs weighted equally to financial outcomes (paper sensitivity parameter)
     metrics.provider_utility = round(total_reimbursement - admin_p, 2)
     metrics.insurer_utility = round(insurer_exposure - total_reimbursement - admin_i - ire_cost, 2)
     metrics.line_pricing = line_pricing

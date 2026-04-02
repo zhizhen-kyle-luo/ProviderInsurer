@@ -75,7 +75,6 @@ class ServiceLineRequest(BaseModel):
     # workflow tracking (internal, not X12)
     current_review_level: int = 0  # initial=0, reconsideration=1, IRE=2
     reviewer_type: Optional[str] = None  # "UM Triage", "Medical Director", "IRE"
-    superseded_by_line: Optional[int] = None  # if resubmitted, points to new line_number
     treat_anyway: bool = False  # after abandon: whether provider treated despite non-approval
     accepted_modification: bool = False  # whether provider accepted modified terms
     abandoned: bool = False  # provider abandoned pursuit of this line (accepts denial/doesn't fight)
