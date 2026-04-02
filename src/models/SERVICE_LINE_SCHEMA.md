@@ -113,7 +113,6 @@ This schema defines service line requests and decisions used in Phase 2 (prior a
 | `reviewer_type` | string | - | Who reviewed (e.g., "UM Triage", "Medical Director", "IRE"). |
 | `pend_round` | int | 0 | Times pended at current level. |
 | `pend_total` | int | 0 | Total times pended across all levels. |
-| `superseded_by_line` | int | null | If resubmitted, points to new line_number. |
 | `accepted_modification` | bool | false | Whether provider accepted modified terms. |
 | `treat_anyway` | bool | false | Whether provider delivered service despite denial (absorbs cost). |
 | `delivered` | bool | false | Whether service was actually delivered (for Phase 3). |
