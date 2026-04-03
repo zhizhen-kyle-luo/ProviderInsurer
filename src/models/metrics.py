@@ -31,6 +31,7 @@ class FrictionMetrics(BaseModel):
     lines_denied_phase2: int = 0
     lines_modified_phase2: int = 0
     lines_modified_accepted: int = 0
+    lines_pending_phase2: int = 0
 
     # phase 3: claims workflow
     phase3_turns: int = 0

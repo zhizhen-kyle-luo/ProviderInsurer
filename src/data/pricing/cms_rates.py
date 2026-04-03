@@ -7,8 +7,6 @@ sources:
 - procedures/imaging: CMS PFS Look-Up Tool, 2026 national non-facility payment amounts
   (MAC locality 0000000, no modifier, non-QPP, CY2026 CF = $33.4009)
 - admin: CAQH 2023 Index (electronic and manual rates)
-- IRE: no per-case fee to plan (CMS pays Maximus under federal contract; see temp/sanjay_ire_question.md)
-- prompt-pay interest: pending clarification (only applies if plan misses 30-day effectuation deadline)
 
 drug rates are per infusion (30 units for 60kg patient at 5mg/kg).
 lab/procedure rates are per test/session.
@@ -44,6 +42,7 @@ LAB_CODES: Dict[str, CodeInfo] = {
     "86706": CodeInfo(9.67, "Hepatitis B surface antibody", ["hepatitis", "hbs", "anti-hb"]),
     "86803": CodeInfo(12.84, "Hepatitis C antibody", ["hepatitis", "hcv"]),
     "83993": CodeInfo(17.67, "Calprotectin, fecal", ["calprotectin"]),
+    "80076": CodeInfo(8.17, "Hepatic function panel", ["hepatic", "liver", "function panel"]),
 }
 
 PROCEDURE_CODES: Dict[str, CodeInfo] = {
@@ -61,16 +60,6 @@ ADMIN_COST_INSURER_L0: float = 0.05
 # levels 1-2 (manual, human physician review): CAQH 2023 Index
 ADMIN_COST_PROVIDER_L12: float = 10.97
 ADMIN_COST_INSURER_L12: float = 3.52
-# IRE reversal costs removed: CMS pays Maximus under federal contract, no per-case fee to plan.
-# prompt-pay interest removed: only applies if plan misses 30-day effectuation deadline (pending Sanjay clarification).
-# constants kept for reference but no longer used in phase4.py:
-IRE_CASE_COST: float = 650.00  # unused
-PROMPT_PAY_RATE: float = 0.04125  # unused
-REVIEW_DELAY_DAYS: int = 67  # unused
-
-# kept for backward compatibility — equals L0 electronic rate
-ADMIN_COST_PROVIDER_PER_TURN: float = ADMIN_COST_PROVIDER_L0
-ADMIN_COST_INSURER_PER_TURN: float = ADMIN_COST_INSURER_L0
 
 _ALL_CODES: Dict[str, CodeInfo] = {**DRUG_CODES, **LAB_CODES, **PROCEDURE_CODES}
 _ALL_RATES: Dict[str, float] = {code: info.rate for code, info in _ALL_CODES.items()}
@@ -97,10 +86,10 @@ def verify_against_appendix() -> List[str]:
             errors.append(f"{code}: missing from rate table (expected ${expected})")
         elif abs(actual - expected) > 0.005:
             errors.append(f"{code}: rate mismatch — got ${actual}, expected ${expected}")
-    if abs(ADMIN_COST_PROVIDER_PER_TURN - 5.79) > 0.005:
-        errors.append(f"admin_provider: got ${ADMIN_COST_PROVIDER_PER_TURN}, expected $5.79")
-    if abs(ADMIN_COST_INSURER_PER_TURN - 0.05) > 0.005:
-        errors.append(f"admin_insurer: got ${ADMIN_COST_INSURER_PER_TURN}, expected $0.05")
+    if abs(ADMIN_COST_PROVIDER_L0 - 5.79) > 0.005:
+        errors.append(f"admin_provider_l0: got ${ADMIN_COST_PROVIDER_L0}, expected $5.79")
+    if abs(ADMIN_COST_INSURER_L0 - 0.05) > 0.005:
+        errors.append(f"admin_insurer_l0: got ${ADMIN_COST_INSURER_L0}, expected $0.05")
     return errors
 
 

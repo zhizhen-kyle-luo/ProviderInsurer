@@ -67,7 +67,7 @@ def _current_level(state) -> int:
     if lines is None:
         raise ValueError("state.service_lines is None")
     if not lines:
-        return 0  # No lines yet means we're at initial level
+        return 0
     return max(int(l.current_review_level) for l in lines)
 
 

@@ -92,6 +92,8 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
             metrics.lines_modified_phase2 += 1
             if getattr(line, "accepted_modification", False):
                 metrics.lines_modified_accepted += 1
+        elif line.authorization_status == "pending_info":
+            metrics.lines_pending_phase2 += 1
 
         if line.delivered:
             metrics.lines_delivered += 1
@@ -161,11 +163,12 @@ def _calculate_metrics(state: EncounterState) -> FrictionMetrics:
     # level-differentiated admin costs (CAQH 2023): L0 electronic rate, L1-2 manual rate
     n_l0 = sum(1 for r in phase2_responses if isinstance(r, dict) and int(r.get("level", 0)) == 0)
     n_l12 = sum(1 for r in phase2_responses if isinstance(r, dict) and int(r.get("level", 0)) > 0)
-    n_p3_l0 = sum(1 for r in phase3_responses if isinstance(r, dict) and int(r.get("level", 0)) == 0)
-    n_p3_l12 = sum(1 for r in phase3_responses if isinstance(r, dict) and int(r.get("level", 0)) > 0)
+    # P3 always at L0: appeals are blocked (NotImplementedError in transitions.py),
+    # and the level field on P3 responses is inherited from P2, not a real P3 level
+    n_p3 = sum(1 for r in phase3_responses if isinstance(r, dict))
 
-    admin_p = (n_l0 + n_p3_l0) * ADMIN_COST_PROVIDER_L0 + (n_l12 + n_p3_l12) * ADMIN_COST_PROVIDER_L12
-    admin_i = (n_l0 + n_p3_l0) * ADMIN_COST_INSURER_L0 + (n_l12 + n_p3_l12) * ADMIN_COST_INSURER_L12
+    admin_p = (n_l0 + n_p3) * ADMIN_COST_PROVIDER_L0 + n_l12 * ADMIN_COST_PROVIDER_L12
+    admin_i = (n_l0 + n_p3) * ADMIN_COST_INSURER_L0 + n_l12 * ADMIN_COST_INSURER_L12
 
     metrics.total_service_value = round(total_service_value, 2)
     metrics.total_reimbursement = round(total_reimbursement, 2)

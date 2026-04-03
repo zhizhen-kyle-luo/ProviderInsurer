@@ -542,18 +542,10 @@ def apply_phase3_provider_bundle_action(
             elif line_action == "APPEAL":
                 if status not in {"denied", "modified"}:
                     raise ValueError(f"APPEAL only valid for denied/modified lines, line {ln} is {status}")
-                if "to_level" not in la:
-                    raise ValueError(f"APPEAL requires to_level for line {ln}")
-                to_level = int(la["to_level"])
-                if to_level not in (1, 2):
-                    raise ValueError(f"to_level must be 1 or 2, got {to_level}")
-                cur = int(line.current_review_level)
-                if to_level != cur + 1:
-                    raise ValueError(f"appeal must advance by +1: line={ln} cur={cur} to={to_level}")
-                line.current_review_level = to_level
-                line.pend_round = 0
-                line.awaiting_response_at_level = to_level
-                deltas.append({"kind": "phase3_appeal_advanced", "line_number": ln, "from_level": cur, "to_level": to_level})
+                raise NotImplementedError(
+                    f"P3 appeal on line {ln} not supported: level tracking shares state with P2. "
+                    "introduce a separate phase3_review_level field before enabling P3 appeals."
+                )
 
             elif line_action == "ABANDON":
                 if status not in {"denied", "modified", "pending_info"}:
